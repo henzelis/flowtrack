@@ -89,12 +89,18 @@ def templates_to_json(t):
         if isinstance(rec, V9TemplateRecord):
             out['v9'][str(tid)] = {'f': [[f.field_type, f.field_length] for f in rec.fields]}
         elif isinstance(rec, V9OptionsTemplateRecord):
-            out['v9'][str(tid)] = {'s': {str(k): v for k, v in rec.scope_fields.items()},
-                                   'o': {str(k): v for k, v in rec.option_fields.items()}}
+            # field ORDER defines where each value sits in the packet: keep it as an ordered list
+            out['v9'][str(tid)] = {'s': [[k, v] for k, v in rec.scope_fields.items()],
+                                   'o': [[k, v] for k, v in rec.option_fields.items()]}
     for tid, fields in t['ipfix'].items():
         if fields:
             out['ipfix'][str(tid)] = [list(f) for f in fields]
     return out
+
+
+def templates_file_text(by_exporter):
+    """The exact text written to templates.json — never sort keys: template field order is significant."""
+    return json.dumps({ip: templates_to_json(t) for ip, t in by_exporter.items()})
 
 
 def templates_from_json(d):
@@ -104,9 +110,11 @@ def templates_from_json(d):
         if 'f' in rec:
             fields = [V9TemplateField(int(a), int(b)) for a, b in rec['f']]
             t['netflow'][tid] = V9TemplateRecord(tid, len(fields), fields)
-        else:
-            t['netflow'][tid] = V9OptionsTemplateRecord(tid, {int(k): v for k, v in rec['s'].items()},
-                                                        {int(k): v for k, v in rec['o'].items()})
+        elif isinstance(rec.get('s'), list) and isinstance(rec.get('o'), list):
+            t['netflow'][tid] = V9OptionsTemplateRecord(tid, {int(k): int(v) for k, v in rec['s']},
+                                                        {int(k): int(v) for k, v in rec['o']})
+        # anything else (e.g. an options template saved as a sorted dict by an earlier version, whose field
+        # order is unreliable) is skipped: the exporter resends it within minutes
     for tid, fields in (d.get('ipfix') or {}).items():
         t['ipfix'][int(tid)] = [TemplateFieldEnterprise(*f) if len(f) == 3 else TemplateField(*f) for f in fields]
     return t
@@ -133,6 +141,7 @@ class Exporter:
     def configure(self, cfg):
         self.wan = set(cfg.get('wan_ifs', []))
         self.local_if = cfg.get('local_if')          # FortiOS: 0 = the firewall itself
+        self.self_ips = {norm_addr(str(x)) for x in cfg.get('public_ips', [])}   # the device's own public addresses
         self.cfg_sampling = parse_ratio(cfg.get('sampling', '1:1'))
         self.opt_sampling = getattr(self, 'opt_sampling', 0)   # learned from options records
 
@@ -215,7 +224,8 @@ class Collector:
         elif e.wan and in_if in e.wan and out_if not in e.wan:
             d, ii, ei = 'down', (dst, dport), (src, sport)
         else:
-            ps, pd = is_private(src), is_private(dst)
+            # no WAN interface matched: decide by address — the device's own public addresses count as inside
+            ps, pd = is_private(src) or src in e.self_ips, is_private(dst) or dst in e.self_ips
             if ps and not pd:
                 d, ii, ei = 'up', (src, sport), (dst, dport)
             elif pd and not ps:
@@ -333,8 +343,7 @@ class Collector:
             log(f'WARN stats insert failed: {str(ex)[:200]}')
 
     def save_templates(self):
-        data = {ip: templates_to_json(e.templates) for ip, e in self.exporters.items()}
-        text = json.dumps(data, sort_keys=True)
+        text = templates_file_text({ip: e.templates for ip, e in self.exporters.items()})
         if text == self._saved_templates:
             return
         try:

@@ -46,6 +46,15 @@ def exporters_mtime():
     return tuple(mt)
 
 
+def load_ui_exporter(ip):
+    """The UI-managed entry for one exporter (empty dict if none)."""
+    try:
+        with open(UI_EXPORTERS) as f:
+            return json.load(f).get(ip) or {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
 def save_ui_exporter(ip, cfg):
     """cfg=None deletes the device. Atomic write; readable by the service group only."""
     try:

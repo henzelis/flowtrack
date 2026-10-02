@@ -54,6 +54,7 @@ const keyColor = k => { if (!colorCache.has(k)) colorCache.set(k, PAL[colorCache
 const rangeSecs = () => ({'1h':3600, '6h':21600, '24h':86400, '7d':604800, '30d':2592000})[state.range];
 const rangeLabel = () => ({'1h':'остання година', '6h':'останні 6 годин', '24h':'останні 24 години', '7d':'останні 7 днів', '30d':'останні 30 днів'})[state.range];
 const devName = ip => (META.devices.find(d => d.ip === ip) || {}).name || ip;
+const ifLabel = (ip, idx) => { const d = META.devices.find(x => x.ip === ip) || {}, n = (d.if_names || {})[String(idx)] || (d.local_if === idx ? 'local' : ''); return n ? `${n} (${idx})` : String(idx); };
 const hostLabel = h => h.name ? `${esc(h.name)}` : esc(h.ip);
 
 // ===================== lifecycle =====================
@@ -511,7 +512,7 @@ function recTable(rows){
       <td>${f.country ? `<button class="link" data-f="country" data-v="${esc(f.country)}">${esc(f.country)}</button>` : '—'}</td><td class="num mono">${fmtB(f.bytes)}</td><td class="num mono">${fmtN(f.packets)}</td><td class="num mono">${Math.max(0, f.t - f.t0).toFixed(0)} с</td></tr>
       ${state.openFlow === i ? `<tr class="detail"><td colspan="11"><div class="kv"><div><span>Хост</span><b>${esc(f.name || '—')} · ${esc(f.int_ip)}</b></div><div><span>NAT (після трансляції)</span><b>${f.nat_ip ? esc(f.nat_ip) + ':' + f.nat_port : '—'}</b></div>
         <div><span>ASN</span><b>${f.asn ? 'AS' + f.asn + ' ' + esc(f.as_org) : '—'}</b></div><div><span>Місто</span><b>${esc([f.city, ccName(f.country)].filter(Boolean).join(', ') || '—')}</b></div>
-        <div><span>Інтерфейси</span><b>${f.in_if} → ${f.out_if}</b></div><div><span>Вибірка</span><b>${f.sampling > 1 ? '1:' + f.sampling + ' (обсяг перераховано)' : '1:1 (без вибірки)'}</b></div><div><span>L4</span><b>${({1:'ICMP', 6:'TCP', 17:'UDP', 50:'ESP', 47:'GRE'})[f.proto] || f.proto}</b></div></div></td></tr>` : ''}`).join('') || '<tr><td colspan="11"><div class="empty">Немає записів під цей фільтр</div></td></tr>'}
+        <div><span>Інтерфейси</span><b>${esc(ifLabel(f.exporter, f.in_if))} → ${esc(ifLabel(f.exporter, f.out_if))}</b></div><div><span>Вибірка</span><b>${f.sampling > 1 ? '1:' + f.sampling + ' (обсяг перераховано)' : '1:1 (без вибірки)'}</b></div><div><span>L4</span><b>${({1:'ICMP', 6:'TCP', 17:'UDP', 50:'ESP', 47:'GRE'})[f.proto] || f.proto}</b></div></div></td></tr>` : ''}`).join('') || '<tr><td colspan="11"><div class="empty">Немає записів під цей фільтр</div></td></tr>'}
     </tbody></table></div>`;
 }
 document.addEventListener('click', e => { const tr = e.target.closest && e.target.closest('tr[data-rec]'); if (!tr || e.target.closest('[data-f]')) return; const i = +tr.dataset.rec; state.openFlow = state.openFlow === i ? null : i; const box = document.getElementById('recBox'); if (box && window.__recs) { box.innerHTML = recTable(window.__recs); wireFilters(box); } });
@@ -681,12 +682,12 @@ const VENDORS = {
 function vDevices(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', 'Пристрої-експортери', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв', isAdmin() ? '<button class="btn primary" id="addDev">+ Підключити пристрій</button>' : '<span class="nat">додавати пристрої може адміністратор</span>')}<div id="dBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('ip', 'Інтерфейси', 'за INPUT/OUTPUT snmp-index за останню годину')}<div id="ifBox" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('ip', 'Інтерфейси', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download')}<div id="ifBox" class="loading"></div></section></div>`;
   if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
   section('dBox', async () => { const d = (await api('devices')).devices; window.__devs = d;
     setTimeout(() => {
-      const box = fill('ifBox', d.filter(x => x.interfaces.length).map(x => `<h4 class="mono" style="margin:4px 0 8px">${esc(x.name)}</h4><div class="tw"><table><thead><tr><th>Інтерфейс</th><th class="num">snmp-index</th><th>Роль</th><th class="num">Трафік за годину</th></tr></thead><tbody>${x.interfaces.map(i => `<tr><td class="ipl"><b>${esc(i.name)}</b></td><td class="num mono">${i.index}</td><td>${i.wan ? '<span class="pill warn">WAN</span>' : i.index === 0 ? '<span class="tag">сам пристрій</span>' : '<span class="tag">LAN</span>'}</td><td class="num mono">${fmtB(i.bytes)}</td></tr>`).join('')}</tbody></table></div>`).join('') || '<div class="empty">Немає даних</div>');
-      if (box) box.classList.remove('loading');
+      const box = fill('ifBox', d.filter(x => x.interfaces.length).map(ifaceEditor).join('') || '<div class="empty">Колектор ще не бачив інтерфейсів (за 24 год)</div>');
+      if (box) { box.classList.remove('loading'); wireIfaceEditors(box, d); }
       document.querySelectorAll('[data-edit]').forEach(b => b.onclick = e => { e.stopPropagation(); openDevice(d.find(x => x.ip === b.dataset.edit)); });
     });
     return `<div class="tw"><table><thead><tr><th>Стан</th><th>Пристрій</th><th>Виробник / модель</th><th>Протокол</th><th>Майданчик</th><th>IP експорту</th><th class="num">Записів/с</th><th class="num">Шаблони</th><th>Вибірка</th><th class="num">Втрати</th><th class="num">Без шаблону</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
@@ -696,6 +697,41 @@ function vDevices(){
           ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div><p class="note">Клік по рядку фільтрує весь інтерфейс за пристроєм.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
 }
 // generic centered dialog; returns {root, close}
+const ROLE_UI = {lan:'LAN', wan:'WAN (інтернет)', local:'Сам пристрій'};
+function ifaceEditor(x){
+  const admin = isAdmin(), total = x.interfaces.reduce((a, i) => a + i.bytes, 0) || 1;
+  // suggest the interface that clearly carries the most internet-facing traffic
+  const ranked = [...x.interfaces].filter(i => i.bytes > 0.02 * total).sort((a, b) => b.ext_share - a.ext_share);
+  const best = ranked[0] && ranked[0].ext_share >= 0.3 && ranked[0].ext_share >= 3 * ((ranked[1] || {}).ext_share || 0) ? ranked[0].index : null;
+  const rows = x.interfaces.map(i => {
+    const hint = i.index === best && i.role !== 'wan' ? `<span class="pill info" title="${Math.round(i.ext_share * 100)}% трафіку цього інтерфейсу — з/до публічних адрес; у решти значно менше">схоже на WAN</span>` : '';
+    const name = admin ? `<input class="ifname" data-idx="${i.index}" value="${esc(i.custom_name)}" placeholder="${esc(i.role === 'local' ? 'local' : 'if ' + i.index)}" maxlength="32" aria-label="Назва інтерфейсу ${i.index}">`
+                       : `<b class="ipl">${esc(i.name)}</b>`;
+    const role = admin ? `<select class="ifrole" data-idx="${i.index}" aria-label="Роль інтерфейсу ${i.index}">${Object.entries(ROLE_UI).map(([k, l]) => `<option value="${k}"${k === i.role ? ' selected' : ''}>${l}</option>`).join('')}</select>`
+                       : (i.role === 'wan' ? '<span class="pill warn">WAN</span>' : i.role === 'local' ? '<span class="tag">сам пристрій</span>' : '<span class="tag">LAN</span>');
+    const unseen = i.unseen ? ` <span class="pill warn" title="Індекс є в налаштуваннях, але в даних за 24 год не траплявся — можливо, його вказано помилково">не бачили за 24 год</span>` : '';
+    return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${role} ${hint}${unseen}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td></tr>`;
+  }).join('');
+  return `<div class="ifdev" data-dev="${esc(x.ip)}"><div class="ifdev-h"><h4 class="mono">${esc(x.name)} <span class="nat">${esc(x.ip)} · ${esc(x.vendor || '')}</span></h4>
+    ${admin ? `<span class="nat ifmsg"></span><button class="btn primary ifsave" disabled>Зберегти</button>` : ''}</div>
+    <div class="tw"><table class="compact"><thead><tr><th class="num">Індекс</th><th>Назва</th><th>Роль</th><th class="num">Трафік за 24 год</th><th class="num" title="Частка трафіку із зовнішніми адресами">Зовн.</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+function wireIfaceEditors(box, devices){
+  box.querySelectorAll('.ifdev').forEach(card => {
+    const save = card.querySelector('.ifsave'), msg = card.querySelector('.ifmsg'); if (!save) return;
+    const dirty = () => { save.disabled = false; msg.textContent = 'є незбережені зміни'; msg.style.color = 'var(--warn)'; };
+    card.querySelectorAll('input,select').forEach(el => el.addEventListener('input', dirty));
+    save.onclick = async () => {
+      const ip = card.dataset.dev, roles = [...card.querySelectorAll('.ifrole')];
+      if (roles.filter(r => r.value === 'local').length > 1) { msg.textContent = 'Роль «Сам пристрій» може мати лише один інтерфейс'; msg.style.color = 'var(--crit)'; return; }
+      const interfaces = roles.map(r => ({index:+r.dataset.idx, role:r.value, name:card.querySelector(`.ifname[data-idx="${r.dataset.idx}"]`).value.trim()}));
+      save.disabled = true; msg.textContent = 'Зберігаю…'; msg.style.color = '';
+      try { await apiPost('devices/interfaces', {ip, interfaces}); META = await fetch('api/meta').then(r => r.json());
+        msg.textContent = 'Збережено · колектор застосує ролі протягом хвилини'; msg.style.color = 'var(--ok)'; }
+      catch (e) { save.disabled = false; msg.textContent = e.message; msg.style.color = 'var(--crit)'; }
+    };
+  });
+}
 function openModal(title, sub, body, wide){
   const root = document.getElementById('drawerRoot');
   root.innerHTML = `<div class="scrim" id="scrim"></div><div class="modal glass${wide ? '' : ' narrow'}" role="dialog" aria-modal="true" aria-label="${esc(title)}">

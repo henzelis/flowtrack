@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
-from common import CHError, ch, exporters_mtime, is_private, load_exporters, load_json, save_ui_exporter  # noqa: E402
+from common import CHError, ch, exporters_mtime, is_private, load_exporters, load_json, load_ui_exporter, save_ui_exporter  # noqa: E402
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_WEB_PORT', '3030'))
@@ -146,6 +146,7 @@ def api_meta(q):
     for r in seen:
         c = exp.get(r['exporter'], {})
         devices.append({'ip': r['exporter'], 'name': c.get('name', r['exporter']), 'vendor': c.get('vendor', ''), 'model': c.get('model', ''),
+                        'if_names': c.get('if_names', {}), 'local_if': c.get('local_if'),
                         'city': c.get('city', ''), 'country': c.get('country', ''), 'lat': c.get('lat'), 'lon': c.get('lon'), 'last': r['last']})
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0,
@@ -314,16 +315,46 @@ def api_geo(q):
     return {'rows': rows}
 
 
+def iface(c, idx, nbytes, ext):
+    names = c.get('if_names', {})
+    role = 'wan' if idx in c.get('wan_ifs', []) else 'local' if c.get('local_if') == idx and c.get('local_if') is not None else 'lan'
+    custom = names.get(str(idx), '')
+    return {'index': idx, 'name': custom or ('local' if role == 'local' else f'if {idx}'), 'custom_name': custom,
+            'role': role, 'wan': role == 'wan', 'bytes': nbytes, 'ext_share': round(ext / nbytes, 3) if nbytes else 0}
+
+
+def interfaces_of(c, rows):
+    """Interfaces seen in the data, plus those only mentioned in the settings (so a WAN index that never
+    shows up in the data is visible and can be corrected)."""
+    out = [iface(c, int(r['i']), int(r['bytes']), int(r['ext'])) for r in rows]
+    seen = {i['index'] for i in out}
+    configured = set(c.get('wan_ifs', [])) | {int(k) for k in c.get('if_names', {}) if str(k).isdigit()}
+    if c.get('local_if') is not None:
+        configured.add(int(c['local_if']))
+    for idx in sorted(configured - seen):
+        out.append({**iface(c, idx, 0, 0), 'unseen': True})
+    return sorted(out, key=lambda i: i['index'])
+
+
 def api_devices(q):
     exp = exporters_cfg()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
             sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, max(sampling) AS sampling_n,
             toUnixTimestamp(max(ts)) AS last, dateDiff('second', min(ts), max(ts)) + 60 AS span
         FROM exporter_stats WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')
-    ifs = ch("""SELECT exporter, i, sum(b) AS bytes FROM (
-            SELECT exporter, in_if AS i, bytes AS b FROM flows WHERE ts >= now() - INTERVAL 1 HOUR
-            UNION ALL SELECT exporter, out_if AS i, bytes AS b FROM flows WHERE ts >= now() - INTERVAL 1 HOUR)
-        GROUP BY exporter, i ORDER BY exporter, bytes DESC""", fmt='JSON')
+    # every interface seen in 24 h. ext = bytes for which the far end on this interface is a public address:
+    # packets arriving FROM the internet (source public) or leaving TO it (destination public). The internet
+    # uplink scores near 100 %, LAN ports near 0 %. The devices' own public addresses do not count as public.
+    selfs = sorted({str(x) for c in exp.values() for x in c.get('public_ips', [])})
+    pub = ("(NOT (isIPAddressInRange({x}, '10.0.0.0/8') OR isIPAddressInRange({x}, '172.16.0.0/12') OR isIPAddressInRange({x}, '192.168.0.0/16')"
+           " OR isIPAddressInRange({x}, '100.64.0.0/10') OR isIPAddressInRange({x}, '127.0.0.0/8') OR isIPAddressInRange({x}, '169.254.0.0/16')"
+           " OR isIPAddressInRange({x}, 'fc00::/7') OR isIPAddressInRange({x}, 'fe80::/10') OR {x} = '::1' OR has({{selfs:Array(String)}}, {x})))")
+    src = "if(dir = 'down', ext_ip, int_ip)"     # who sent the packet
+    dst = "if(dir = 'down', int_ip, ext_ip)"     # who received it
+    ifs = ch(f"""SELECT exporter, i, sum(b) AS bytes, sum(e) AS ext FROM (
+            SELECT exporter, in_if AS i, bytes AS b, if({pub.format(x=src)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY
+            UNION ALL SELECT exporter, out_if AS i, bytes AS b, if({pub.format(x=dst)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY)
+        GROUP BY exporter, i ORDER BY exporter, i""", {'selfs': selfs}, fmt='JSON')
     out = []
     seen = {s['exporter'] for s in stats}
     for ip in exp:
@@ -341,8 +372,7 @@ def api_devices(q):
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
-                    'interfaces': [{'index': int(r['i']), 'name': names.get(str(r['i']), 'local' if r['i'] == 0 and c.get('local_if') == 0 else f"if {r['i']}"),
-                                    'wan': int(r['i']) in c.get('wan_ifs', []), 'bytes': int(r['bytes'])} for r in ifs if r['exporter'] == s['exporter']]})
+                    'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']])})
     return {'devices': out}
 
 
@@ -435,6 +465,45 @@ def post_device_save(body, user):
     save_ui_exporter(ip, cfg)
     NAMES.reload()
     return {'ok': True, 'ip': ip}
+
+
+def post_device_interfaces(body, user):
+    try:
+        ip = str(ipaddress.ip_address(str(body.get('ip', '')).strip()))
+    except ValueError:
+        raise BadRequest('Некоректна IP-адреса пристрою')
+    items = body.get('interfaces')
+    if not isinstance(items, list) or len(items) > 1024:
+        raise BadRequest('Очікується список інтерфейсів')
+    names, wan, local = {}, [], None
+    for it in items:
+        try:
+            idx = int(it.get('index'))
+        except (TypeError, ValueError, AttributeError):
+            raise BadRequest('Індекс інтерфейсу має бути числом')
+        if not 0 <= idx < 2**32:
+            raise BadRequest('Індекс інтерфейсу поза межами')
+        name = str(it.get('name') or '').strip()
+        if len(name) > 32 or any(ord(ch_) < 32 for ch_ in name):
+            raise BadRequest(f'Назва інтерфейсу {idx}: до 32 символів, без керівних символів')
+        if name:
+            names[str(idx)] = name
+        role = it.get('role', 'lan')
+        if role == 'wan':
+            wan.append(idx)
+        elif role == 'local':
+            if local is not None:
+                raise BadRequest('Роль «сам пристрій» може мати лише один інтерфейс')
+            local = idx
+        elif role != 'lan':
+            raise BadRequest('Роль: lan, wan або local')
+    merged = exporters_cfg().get(ip, {})
+    entry = load_ui_exporter(ip)
+    entry.update({'if_names': names, 'wan_ifs': sorted(set(wan)), 'local_if': local})
+    entry.setdefault('name', merged.get('name', ip))
+    save_ui_exporter(ip, entry)
+    NAMES.reload()
+    return {'ok': True}
 
 
 def post_device_delete(body, user):
@@ -568,6 +637,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/users/delete': lambda: AUTH.delete_user(user, body.get('name')),
                 '/api/devices/save': lambda: post_device_save(body, user),
                 '/api/devices/delete': lambda: post_device_delete(body, user),
+                '/api/devices/interfaces': lambda: post_device_interfaces(body, user),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})

@@ -330,3 +330,15 @@ table.compact .app-b{max-width:120px;overflow:hidden;text-overflow:ellipsis;whit
 .hero > .river,.hero > .chart{flex:1 1 auto;min-height:420px}
 .donut-wrap .dl{gap:8px 10px;font-size:12.5px}
 .tnum,#heroLbl,#winLbl{font-variant-numeric:tabular-nums}
+
+/* interface editor */
+.ifdev{display:grid;gap:8px;padding:12px 0;border-bottom:1px solid var(--hair)}
+.ifdev:last-child{border-bottom:0}
+.ifdev-h{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ifdev-h h4{margin:0;margin-right:auto}
+.ifname,.ifrole{border:1px solid var(--edge);border-radius:8px;padding:5px 9px;background:rgba(0,0,0,.3);color:var(--ink);font:12.5px var(--f-mono);outline:none;min-width:0}
+.ifname{width:min(220px,100%)}
+.ifname:focus,.ifrole:focus{border-color:var(--blue-hi)}
+.ifrole option{background:#0c1838}
+.btn:disabled{opacity:.45;cursor:default}
+tr.unseen td{opacity:.75}
