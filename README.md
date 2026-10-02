@@ -1,122 +1,223 @@
 # FlowTrack
 
-WAN traffic accounting for FortiGate firewalls — NetFlow v9 collector + web dashboard.
-
-FortiGate keeps only ~7 days of logs in RAM, so "how much internet did we consume this month?" has no built-in answer. FlowTrack solves it: the firewall exports **full-rate (unsampled) NetFlow v9**, a tiny Python collector stores per-minute aggregates in SQLite, and a zero-dependency web UI shows monthly/daily/hourly usage with per-host breakdowns.
-
-- Collector: ~300 lines of Python, one PyPI dep (`netflow`), < 50 MB RAM
-- Dashboard: stdlib `http.server` + Chart.js (bundled locally) — no Node, no build step
-- Storage: SQLite, a few KB per day; exact byte counts verified against controlled downloads
-
-## Architecture
+Self-hosted flow analytics for NetFlow v5/v9 and IPFIX: who talks to whom, how much, over which
+service and from where, with live views, a connection map and multi-vendor exporter support.
 
 ```
-FortiGate ── NetFlow v9 (UDP 2055, full rate) ──▶ collector.py ──▶ SQLite (data.db)
-                                                          ▲
-dashboard ◀── http (LAN only) ───────────── web.py ◀──────┘  usage_min: per-minute × host (+ __WAN__ total row)
+exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API + web UI ── browser :3030
+ FortiGate                 enrichment     raw flows 30 d
+ Cisco · MikroTik          (GeoIP, ASN,   hourly usage 3 y
+ Juniper · pmacct …         NAT, L7)      exporter health
 ```
 
-## FortiGate configuration
+> The current version lives in [`v2/`](v2). The original SQLite collector (v1) is kept in the
+> repository root for existing installs — see [Legacy v1](#legacy-v1).
 
-FortiOS exports NetFlow v9 only, full records, no sampling.
+## Features
+
+**Collection**
+- NetFlow v5, NetFlow v9 and IPFIX; templates are tracked per exporter.
+- Correct accounting of delta counters. FortiOS (like NetFlow v9/IPFIX in general) re-exports a long
+  session every `active-flow-timeout`, and each export covers only its own interval — the next export's
+  `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. Traffic is therefore the plain sum of records.
+- Inside/outside endpoint and direction from the exporter's WAN interfaces (leaves via WAN = upload,
+  arrives via WAN = download; FortiOS interface `0` = the firewall itself), or from RFC 1918 / CGNAT
+  ranges when no interfaces are configured.
+- Enrichment: country, city, coordinates and ASN of the outside address
+  ([DB-IP Lite](https://db-ip.com/db/lite.php), CC BY 4.0), L7 protocol from protocol + port,
+  service name from ASN or port, post-NAT address, inside host names from a names file and reverse DNS.
+- Exporter health: records/s, templates, packets lost (sequence gaps), records skipped while waiting
+  for a template.
+- Optional raw forwarding (`FT_FORWARD`) so another collector keeps receiving the same feed.
+
+**Web UI**
+- *Overview*: KPIs with trend against the previous period, live inside ↔ outside exchange, connection
+  map and 3D globe, top services, hosts, conversations, latest flows.
+- *Flows*: top-10 inside × top-10 outside exchange (ribbon width = bytes, packets or flows; colour =
+  direction), inspector for the selected host or conversation, protocols, raw flow records with NAT,
+  ASN and interfaces.
+- *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
+  (sustained upload, bursts, new countries, export loss), *Devices* (exporters and interfaces).
+- Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
+- Login with two roles: **admin** (users, devices) and **viewer** (read-only).
+
+## Requirements
+
+- Linux host reachable from the exporters (UDP 2055), Python 3.10+, Docker (for ClickHouse).
+- Disk: measured about 22 bytes per flow record after ClickHouse compression (~4.5×), i.e. roughly
+  25 MB per million records. A small office exporting ~5 records/s needs about 300 MB for the 30-day
+  raw retention.
+
+## Install
+
+Run from a checkout of this repository.
+
+```bash
+# 1. Service user and directories
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
+sudo mkdir -p /opt/flowtrack-v2/clickhouse /opt/flowtrack-v2/geoip /etc/flowtrack-v2
+
+# 2. ClickHouse, reachable from this host only
+PW=$(openssl rand -hex 16)
+docker run -d --name flowtrack-ch --restart unless-stopped -p 127.0.0.1:8123:8123 --memory 4g \
+  --ulimit nofile=262144:262144 -v /opt/flowtrack-v2/clickhouse:/var/lib/clickhouse \
+  -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD=$PW \
+  clickhouse/clickhouse-server:24
+
+# 3. GeoIP databases (monthly files, free, CC BY 4.0)
+M=$(date +%Y-%m)
+for f in city asn; do
+  curl -s https://download.db-ip.com/free/dbip-$f-lite-$M.mmdb.gz | gunzip | sudo tee /opt/flowtrack-v2/geoip/dbip-$f.mmdb >/dev/null
+done
+
+# 4. Code and Python environment
+sudo cp -r v2 /opt/flowtrack-v2/app
+sudo python3 -m venv /opt/flowtrack-v2/venv
+sudo /opt/flowtrack-v2/venv/bin/pip install netflow==0.12.2 maxminddb
+
+# 5. Configuration
+sudo cp v2/deploy/flowtrack-v2.env.example /etc/flowtrack-v2/env
+sudo sed -i "s/^FT_CH_PASSWORD=.*/FT_CH_PASSWORD=$PW/" /etc/flowtrack-v2/env
+sudo cp v2/deploy/exporters.json.example /etc/flowtrack-v2/exporters.json   # edit for your devices
+sudo cp v2/deploy/hosts.json.example /etc/flowtrack-v2/hosts.json           # optional host names
+sudo chown root:flowtrack /etc/flowtrack-v2/env && sudo chmod 640 /etc/flowtrack-v2/env
+
+# 6. Services
+sudo cp v2/deploy/flowtrack2-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now flowtrack2-collector flowtrack2-web
+```
+
+Open `http://<collector>:3030` and sign in as **admin / flowtrack**. The UI keeps reminding you until
+the password is changed (user menu → *Change password*). The schema is created by the collector on its
+first start.
+
+Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
+users, sessions and devices added from the UI are stored in `/var/lib/flowtrack-v2`.
+
+## Configuration
+
+`/etc/flowtrack-v2/env`:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FT_BIND`, `FT_PORT` | `0.0.0.0`, `2055` | NetFlow/IPFIX UDP listener |
+| `FT_EXPORTERS` | *(empty = any)* | allowed exporter IPs, comma-separated; devices added in the UI are allowed automatically |
+| `FT_FORWARD` | *(empty)* | `host:port,…` — copy every datagram unchanged to other collectors |
+| `FT_WEB_BIND`, `FT_WEB_PORT` | `0.0.0.0`, `3030` | web UI and API |
+| `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
+
+Devices can be described in `/etc/flowtrack-v2/exporters.json` or from the UI (*Devices → Connect
+device*, admins only; the collector picks changes up within a minute):
+
+```json
+{
+  "192.0.2.1": {
+    "name": "fw-main", "vendor": "Fortinet", "model": "FortiGate 40F",
+    "wan_ifs": [1], "local_if": 0, "public_ips": ["198.51.100.10"],
+    "city": "Kyiv", "country": "UA", "lat": 50.45, "lon": 30.52,
+    "if_names": {"1": "wan", "0": "local"}, "sampling": "1:1"
+  }
+}
+```
+
+`wan_ifs` are the exporter's interface indexes (`INPUT_SNMP`/`OUTPUT_SNMP`); `public_ips` mark traffic
+the device itself originates; coordinates place the site on the map.
+
+## Exporter configuration
+
+**FortiGate (FortiOS 7.x)** — NetFlow v9, full rate:
 
 ```
 config system netflow
-    set active-flow-timeout 60        # CRITICAL: default is 30 min — long-lived sessions
-                                      # would be exported too late / never while open
+    set active-flow-timeout 60
     config collectors
         edit 1
-            set collector-ip <COLLECTOR_IP>   # this box, LAN interface
-            set source-ip <FW_LAN_IP>         # e.g. the 'internal' interface IP
+            set collector-ip <COLLECTOR_IP>
+            set collector-port 2055
+            set source-ip <FW_LAN_IP>
         next
     end
 end
 config system interface
     edit "wan"
-        ...
         set netflow-sampler both
     next
 end
 ```
 
-Notes (verified on FortiOS 7.4):
+`active-flow-timeout` defaults to 30 minutes; at 60 s long sessions show up in near real time. The WAN
+interface index is shown by `show system interface wan | grep snmp-index`.
 
-- One record per session **direction**; `IN_BYTES` == `OUT_BYTES` = bytes of that direction.
-- Records are **deltas**, not cumulative: a long session is re-exported every `active-flow-timeout`, and each export covers only `[FIRST_SWITCHED, LAST_SWITCHED]` — the next export's `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. So the collector simply sums every record; no per-session state. (A short controlled download can't tell the two models apart — it fits in one export. Check a long-lived flow in a capture instead.)
-- Each record's bytes are spread over the minutes its `[FIRST, LAST]` interval covers, so charts show when traffic flowed, not when it was exported.
-- Direction comes from interfaces: `OUTPUT_SNMP` = WAN → **up**, `INPUT_SNMP` = WAN → **down**. Interface index `0` is the firewall itself (its VPN tunnels, syslog, management) → host `firewall`. Host = the inside endpoint as the firewall saw it (pre-NAT LAN IP).
-- Records appear in the DB ~60 s after the flow ends (timeout) — that's normal.
-- `INPUT_SNMP`/`OUTPUT_SNMP` carry the interface **snmp-index**; WAN filtering uses it (`FLOWTRACK_WAN_SNMP_INDEX`, check with `show system interface wan`).
+**Cisco IOS-XE**
 
-## Deploy
-
-### 1. Collector host (any Linux box reachable from the firewall)
-
-```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
-sudo mkdir -p /opt/flowtrack
-git clone https://github.com/henzelis/flowtrack /tmp/flowtrack-src
-sudo cp /tmp/flowtrack-src/{collector.py,web.py,chart.umd.min.js} /opt/flowtrack/
-
-# venv (system pip is PEP-668 locked on modern distros)
-sudo python3 -m venv /opt/flowtrack/venv
-sudo /opt/flowtrack/venv/bin/pip install netflow
-sudo chown -R flowtrack:flowtrack /opt/flowtrack   # services run as 'flowtrack', not root
-
-# config — copy and edit the values for YOUR network
-sudo cp deploy/flowtrack.env.example /etc/flowtrack.env
-sudo nano /etc/flowtrack.env
-
-# services
-sudo cp deploy/flowtrack.service deploy/flowtrack-web.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now flowtrack flowtrack-web
+```
+flow exporter FLOWTRACK
+ destination <COLLECTOR_IP>
+ transport udp 2055
+ template data timeout 60
+flow monitor FT-MON
+ exporter FLOWTRACK
+ record netflow ipv4 original-input
+interface GigabitEthernet0/0/0
+ ip flow monitor FT-MON input
+ ip flow monitor FT-MON output
 ```
 
-### 2. Verify
+**MikroTik RouterOS 7**
 
-```bash
-systemctl status flowtrack flowtrack-web
-ss -ulnp | grep 2055                       # collector listening
-sqlite3 /opt/flowtrack/data.db "SELECT * FROM usage_min ORDER BY ts DESC LIMIT 5;"
-# byte accuracy: controlled download through the WAN, compare with raw capture
-curl -o /dev/null 'https://speed.cloudflare.com/__down?bytes=10000000'   # exactly N bytes
+```
+/ip traffic-flow set enabled=yes interfaces=ether1 active-flow-timeout=1m
+/ip traffic-flow target add dst-address=<COLLECTOR_IP> port=2055 version=ipfix
 ```
 
-A 20 MB test gave `IN_BYTES ≈ 20.75 MB` — ~3–4 % overhead is TLS/retransmissions; byte counts are exact, no sampling.
+**Juniper**, **pmacct / Linux** and others: the *Connect device* dialog in the UI shows ready-made
+snippets.
 
-### Configuration (env vars)
+## Security notes
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `FLOWTRACK_BIND` | `0.0.0.0` | bind address for collector + web |
-| `FLOWTRACK_PORT` | `2055` | NetFlow UDP port |
-| `FLOWTRACK_DATA_DIR` | `/opt/flowtrack` | SQLite dir (collector) |
-| `FLOWTRACK_DB` | `/opt/flowtrack/data.db` | DB path (web) |
-| `FLOWTRACK_WEB_PORT` | `3020` | dashboard HTTP port — **LAN only, never publish via WAN** |
-| `FLOWTRACK_WAN_SNMP_INDEX` | `1` | snmp-index of the WAN interface on FortiGate |
-| `FLOWTRACK_EXPORTERS` | *(empty)* | exporter IPs allowed to send NetFlow, comma-separated; empty = anyone (set it!) |
-| `FLOWTRACK_TZ` | `Europe/Kyiv` | IANA time zone for day/month/hour buckets |
+- Passwords are stored as scrypt hashes with per-user salt; only SHA-256 digests of session tokens are
+  stored. Sessions use an `HttpOnly`, `SameSite=Strict` cookie and expire after 7 days of inactivity.
+- Five failed logins from one address within five minutes block further attempts for a while.
+- Roles are enforced by the API, not only hidden in the UI.
+- The built-in server speaks plain HTTP. Keep port 3030 on a trusted network, or put a TLS reverse
+  proxy (nginx, Caddy) in front of it; set `X-Forwarded-Proto: https` so the session cookie is marked
+  `Secure`.
+- ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.
 
-## Dashboard
+## API
 
-Open `http://<COLLECTOR_IP>:3020`:
+JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`, `6h`, `24h`, `7d`,
+`30d`) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip`, `dst`, `service`, `l7`,
+`country`, `city`, `port`, `device`, `asn`, `dir`, `proto`).
 
-- KPI cards: month total, today (both with down/up split), top host, flow-record count
-- Per-day stacked bars for the selected month (every month since data starts)
-- Last 48 h hourly line chart
-- Host table with down/up/total and % of WAN
+| Endpoint | Returns |
+|---|---|
+| `GET /api/summary` | totals for the period and the previous one |
+| `GET /api/series?by=` | time series, optionally split by `service`, `int_ip`, … |
+| `GET /api/top?dim=` | top-N by `int_ip`, `ext_ip`, `conv`, `service`, `l7`, `country`, `city`, `asn`, `ext_port`, `exporter` |
+| `GET /api/river` | top inside × top outside links (live 2-minute window or whole period) |
+| `GET /api/flows`, `GET /api/live?since=` | raw records; records newer than a timestamp |
+| `GET /api/geo`, `GET /api/host?ip=` | per-city aggregates; one host's details |
+| `GET /api/devices`, `GET /api/alerts`, `GET /api/meta` | exporters and interfaces; detections; metadata |
+| `POST /api/login`, `/api/logout`, `/api/me/password` | session and own password |
+| `GET/POST /api/users…`, `POST /api/devices/save`, `/api/devices/delete` | admin only |
 
-Bucketing uses `FLOWTRACK_TZ` via `zoneinfo`, DST included (Europe/Kyiv still switches EET ⇄ EEST); labels come from the server, so neither the host's nor the browser's TZ matters.
+## Roadmap
 
-## Known limitations (honest ones)
+sFlow; SNMP polling for interface names and counter cross-checks; notifications (Telegram, e-mail,
+webhook); host names from DHCP leases; template persistence across collector restarts (today the first
+minute after a restart is skipped until the exporter resends its templates).
 
-- No history before the collector started running; FortiGate RAM logs don't help there.
-- Collector restart loses nothing it already received (buckets are flushed on SIGTERM; at most 15 s on a crash). Right after start, packets arriving before the FortiGate re-sends its template are skipped (`no_template` in the stats log line).
-- LAN-to-LAN traffic doesn't traverse the firewall → not visible. For "internet consumption" that's fine.
+## Legacy v1
 
-## Roadmap ideas
+The root of the repository still holds v1: a FortiGate-only collector (`collector.py`) that stores
+per-minute usage in SQLite and a single-page dashboard (`web.py`), configured via `/etc/flowtrack.env`
+(see `deploy/`). It needs no database server and answers "how much internet did each host use this
+month", but has no per-flow storage, map or users. New installs should use v2. To run both on one host, give v2
+UDP 2055, move v1 to another port (`FLOWTRACK_PORT=2056`), allow the forwarded packets in v1
+(`FLOWTRACK_EXPORTERS=<exporter>,127.0.0.1`) and set `FT_FORWARD=127.0.0.1:2056` for v2.
 
-- SNMP polling of WAN counters as ground truth for cross-checks
-- Retention policy (`DELETE FROM usage_min WHERE ts < ...`) — currently unbounded (~KB/day)
-- IP→hostname enrichment (mDNS/ARP table) instead of raw IPs in the host table
+## License
+
+MIT — see [LICENSE](LICENSE). IP geolocation by [DB-IP](https://db-ip.com), licensed under CC BY 4.0.
