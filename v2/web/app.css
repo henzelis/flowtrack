@@ -3,7 +3,7 @@
 :root{
   color-scheme:dark;
   --bg0:#050A1A; --bg1:#081127; --bg2:#0B1736;
-  --panel:rgba(14,26,58,.52); --panel-2:rgba(22,38,82,.40); --edge:rgba(92,140,255,.22); --edge-hi:rgba(130,175,255,.45); --hair:rgba(120,160,255,.12);
+  --panel:rgba(14,26,58,.62); --panel-2:rgba(22,38,82,.50); --edge:rgba(92,140,255,.22); --edge-hi:rgba(130,175,255,.45); --hair:rgba(120,160,255,.12);
   --ink:#EAF0FF; --ink2:#A9B7D9; --ink3:#6E7FA6;
   --blue:#2F7BFF; --blue-hi:#4C93FF;
   --down:#27D3F5; --up:#FF9F43;          /* ribbons: direction */
@@ -18,14 +18,13 @@
 }
 *{box-sizing:border-box}
 html,body{height:100%}
-body{margin:0;color:var(--ink);font:14px/1.5 var(--f-body);overflow-x:hidden;
-  background:
-    radial-gradient(900px 500px at 12% 92%, rgba(255,140,60,.16), transparent 60%),
+body{margin:0;color:var(--ink);font:14px/1.5 var(--f-body);overflow-x:hidden;background:var(--bg1)}
+/* fixed backdrop as its own composited layer (cheaper than background-attachment:fixed) */
+body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(900px 500px at 12% 92%, rgba(255,140,60,.16), transparent 60%),
     radial-gradient(700px 520px at 6% 70%, rgba(139,92,255,.16), transparent 62%),
     radial-gradient(1000px 700px at 78% -10%, rgba(47,123,255,.22), transparent 60%),
     radial-gradient(800px 600px at 100% 100%, rgba(39,211,245,.08), transparent 60%),
-    linear-gradient(180deg,var(--bg0),var(--bg1) 50%,var(--bg2));
-  background-attachment:fixed}
+    linear-gradient(180deg,var(--bg0),var(--bg1) 50%,var(--bg2))}
 body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
   background-image:radial-gradient(rgba(180,210,255,.55) .7px,transparent 1px),radial-gradient(rgba(180,210,255,.35) .6px,transparent 1px);
   background-size:160px 160px,90px 90px;background-position:0 0,40px 70px;mask-image:linear-gradient(180deg,#000,transparent 70%)}
@@ -37,7 +36,6 @@ button,input,select{font:inherit;color:inherit}
 /* glass */
 .glass{position:relative;border-radius:var(--r);
   background:linear-gradient(160deg,var(--panel-2),var(--panel) 60%);
-  backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);
   border:1px solid var(--edge);
   box-shadow:inset 0 1px 0 rgba(170,200,255,.14),inset 0 0 30px rgba(60,110,255,.05),0 12px 40px rgba(0,4,20,.45)}
 .glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .25s;
@@ -140,7 +138,7 @@ main{min-width:0;padding:18px 22px 36px}
 .river canvas{position:absolute;inset:0;width:100%;height:100%}
 .rtip{position:absolute;pointer-events:none;z-index:5;padding:9px 12px;border-radius:12px;font-size:12px;white-space:nowrap;background:rgba(10,20,46,.92);border:1px solid var(--edge-hi);box-shadow:0 8px 24px rgba(0,0,0,.4)}
 .overlay{position:absolute;left:12px;right:12px;bottom:12px;display:flex;justify-content:space-between;gap:12px;align-items:flex-end;pointer-events:none;flex-wrap:wrap}
-.ovl{pointer-events:auto;display:flex;gap:18px;padding:10px 16px;border-radius:13px;background:rgba(8,16,40,.72);border:1px solid var(--edge);backdrop-filter:blur(10px);flex-wrap:wrap}
+.ovl{pointer-events:auto;display:flex;gap:18px;padding:10px 16px;border-radius:13px;background:rgba(8,16,40,.86);border:1px solid var(--edge);flex-wrap:wrap}
 .ovl div{display:grid;grid-template-columns:auto 1fr;gap:0 10px;align-items:center}
 .ovl .ico{width:30px;height:30px;border-radius:9px;grid-row:span 3}
 .ovl span{font-size:11.5px;color:var(--ink2)}
@@ -224,7 +222,7 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 @keyframes tin{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 
 /* drawer + form */
-.scrim{position:fixed;inset:0;background:rgba(2,6,16,.5);backdrop-filter:blur(3px);z-index:20}
+.scrim{position:fixed;inset:0;background:rgba(2,6,16,.6);z-index:20}
 .drawer{position:fixed;top:12px;right:12px;bottom:12px;width:min(580px,calc(100% - 24px));z-index:21;overflow-y:auto;padding:calc(20px + env(safe-area-inset-top,0px)) 22px calc(24px + env(safe-area-inset-bottom,0px));display:grid;gap:16px;align-content:start;background:linear-gradient(160deg,rgba(22,38,82,.92),rgba(10,20,46,.95))}
 .drawer header{display:flex;gap:12px;align-items:flex-start}
 .drawer header h3{margin:0;font-weight:800;font-size:19px}

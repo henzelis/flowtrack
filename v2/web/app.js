@@ -58,7 +58,7 @@ const charts = [];
 function mkChart(el){ const c = echarts.init(el, null, {renderer:'canvas'}); charts.push(c); onCleanup(() => { c.dispose(); const i = charts.indexOf(c); if (i >= 0) charts.splice(i, 1); }); return c; }
 window.addEventListener('resize', () => charts.forEach(c => c.resize()));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-function every(ms, fn){ const t = setInterval(fn, ms); onCleanup(() => clearInterval(t)); }
+function every(ms, fn){ const t = setInterval(() => { if (!document.hidden) fn(); }, ms); onCleanup(() => clearInterval(t)); }   // paused while the tab is hidden
 
 // ===================== chart helpers =====================
 const axisX = () => ({type:'time', axisLine:{lineStyle:{color:C.hair}}, axisTick:{show:false}, splitLine:{show:false},
@@ -109,6 +109,7 @@ function sparkSvg(vals, color, w = 200, h = 26){
 
 // ===================== river: inside <-> outside exchange =====================
 const metricFmt = v => state.metric === 'bytes' ? fmtB(v) : state.metric === 'packets' ? fmtN(v) + ' пак.' : fmtN(v) + ' flows';
+const RIVERS = new Set();   // kick() of every mounted river (scale toggles wake them up)
 function createRiver(host, opts){
   const {compact, onSelect, fetchData, refreshMs} = opts;
   host.innerHTML = '<canvas></canvas><div class="rtip" hidden></div>';
@@ -116,7 +117,10 @@ function createRiver(host, opts){
   let W = 0, H = 0, dpr = 1, raf = 0, hover = null, sticky = state.sel, data = null, first = true;
   const cur = new Map(), alphas = new Map(), pos = new Map(), flash = new Map(), lastT = new Map();
   let targets = new Map(), left = [], right = [], info = {L:new Map(), R:new Map()};
-  const ease = (m, k, target) => { const v = m.has(k) ? m.get(k) : target; const n = v + (target - v) * 0.1; m.set(k, n); return n; };
+  // render on demand: frame() keeps scheduling itself only while something is still moving
+  let moving = false;
+  const ease = (m, k, target) => { const v = m.has(k) ? m.get(k) : target; let n = v + (target - v) * 0.1; if (Math.abs(target - n) < 0.003) n = target; else moving = true; m.set(k, n); return n; };
+  const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
   async function load(){
     try { data = await fetchData(); } catch (e) { host.querySelector('.rtip').hidden = true; return; }
     left = data.left.map(h => h.ip).concat(data.more_left ? ['__other'] : []);
@@ -127,10 +131,11 @@ function createRiver(host, opts){
     for (const k of targets.keys()) if (!cur.has(k)) cur.set(k, {dn:0, up:0});
     if (first || reduceMotion) { for (const [k, v] of targets) cur.set(k, {...v}); first = false; }
     if (opts.onData) opts.onData(data);
+    kick();
   }
   load();
   if (refreshMs) every(refreshMs, load);
-  function size(){ const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; }
+  function size(){ kick(); const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; }
   const ro = new ResizeObserver(size); ro.observe(host); size(); onCleanup(() => ro.disconnect());
   const nodeLabel = (side, k) => {
     if (side === 'L') { if (k === '__other') return ['Інші внутрішні', 'решта адрес']; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? 'внутрішня' : 'публічна (self)')]; }
@@ -173,20 +178,25 @@ function createRiver(host, opts){
   const related = b => { const f = sticky; if (!f) return true; if (f.type === 'band') return f.key === b.key; return f.side === 'L' ? b.l === f.k : b.r === f.k; };
   function roundRect(x, y, w, h, r){ ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
   function frame(){
-    for (const [key, v] of cur) { const t = targets.get(key) || {dn:0, up:0}; v.dn += (t.dn - v.dn) * 0.07; v.up += (t.up - v.up) * 0.07; if (!targets.has(key) && v.dn + v.up < 1e-3) cur.delete(key); }
-    for (const [k, v] of flash) { const n = v * 0.965; if (n < 0.01) flash.delete(k); else flash.set(k, n); }
+    moving = false; raf = 0;
+    const near = (a, b) => Math.abs(a - b) <= Math.max(1e-6, 0.002 * Math.abs(b));
+    for (const [key, v] of cur) { const t = targets.get(key) || {dn:0, up:0};
+      v.dn = near(v.dn, t.dn) ? t.dn : v.dn + (t.dn - v.dn) * 0.07; v.up = near(v.up, t.up) ? t.up : v.up + (t.up - v.up) * 0.07;
+      if (v.dn !== t.dn || v.up !== t.up) moving = true;
+      if (!targets.has(key) && v.dn + v.up < 1e-3) cur.delete(key); }
+    for (const [k, v] of flash) { const n = v * 0.965; if (n < 0.01) flash.delete(k); else { flash.set(k, n); moving = true; } }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
-    if (!data) { raf = requestAnimationFrame(frame); return; }
+    if (!data) return;
     const L = layout();
     ctx.font = `600 ${compact ? 11.5 : 13}px Manrope, sans-serif`; ctx.fillStyle = C.ink2; ctx.textBaseline = 'middle';
     ctx.textAlign = 'left'; ctx.fillText('Внутрішні адреси', 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText('Зовнішні адреси', W - 2, L.headH / 2 - 2);
-    if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText('Немає трафіку під цей фільтр за вибраний період', W / 2, H / 2); raf = requestAnimationFrame(frame); return; }
+    if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText('Немає трафіку під цей фільтр за вибраний період', W / 2, H / 2); return; }
     ctx.globalCompositeOperation = 'lighter';
     for (const b of bands) {
       const col = b.dir === 'up' ? C.up : C.down, fl = flash.get(b.key) || 0, a = ease(alphas, b.key + b.dir, related(b) ? 1 : 0.13) * (1 + 0.55 * fl);
       const g = ctx.createLinearGradient(b.x0, 0, b.x1, 0), s = b.dir === 'up' ? [.30, .48, .66] : [.66, .48, .30];
       g.addColorStop(0, hexA(col, Math.min(1, s[0] * a))); g.addColorStop(.5, hexA(col, Math.min(1, s[1] * a))); g.addColorStop(1, hexA(col, Math.min(1, s[2] * a)));
-      b.path = bandPath(b); ctx.shadowColor = hexA(col, Math.min(1, .5 * a)); ctx.shadowBlur = 16 + 22 * fl; ctx.fillStyle = g; ctx.fill(b.path);
+      b.path = bandPath(b); ctx.fillStyle = g; ctx.fill(b.path);
     }
     ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'source-over';
     const f = sticky;
@@ -196,7 +206,7 @@ function createRiver(host, opts){
       ctx.globalAlpha = ease(alphas, 'card' + c.side + c.k, lit ? 1 : 0.45);
       roundRect(c.x + .5, c.y + .5, c.w - 1, c.h - 1, 10); ctx.fillStyle = 'rgba(14,26,58,.78)'; ctx.fill();
       ctx.strokeStyle = (hover && hover.type === 'card' && hover.side === c.side && hover.k === c.k) ? hexA(col, .9) : 'rgba(110,160,255,.28)'; ctx.lineWidth = 1; ctx.stroke();
-      ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = isOther ? 0 : 10; roundRect(c.x + 6, c.y + 7, 4, c.h - 14, 2); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fillStyle = col; roundRect(c.x + 6, c.y + 7, 4, c.h - 14, 2); ctx.fill();
       const [l1, l2] = nodeLabel(c.side, c.k), maxW = c.w - 34;
       const clip = (s, font) => { ctx.font = font; if (ctx.measureText(s).width <= maxW) return s; while (s.length > 2 && ctx.measureText(s + '…').width > maxW) s = s.slice(0, -1); return s + '…'; };
       const f1 = `600 ${compact ? 11.5 : 12.5}px "JetBrains Mono", monospace`, f2 = `500 ${compact ? 10.5 : 11.5}px Manrope, sans-serif`;
@@ -206,10 +216,10 @@ function createRiver(host, opts){
       ctx.fillStyle = C.ink3; ctx.font = '600 14px Manrope, sans-serif'; ctx.textAlign = 'right'; ctx.fillText('›', c.x + c.w - 10, c.y + c.h / 2);
       ctx.globalAlpha = 1;
     }
-    raf = requestAnimationFrame(frame);
+    if (moving) raf = requestAnimationFrame(frame);
   }
-  raf = requestAnimationFrame(frame);
-  onCleanup(() => cancelAnimationFrame(raf));
+  kick();
+  RIVERS.add(kick); onCleanup(() => { cancelAnimationFrame(raf); RIVERS.delete(kick); });
   function hit(e){
     const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
     for (const c of cards) if (x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) return {type:'card', side:c.side, k:c.k, x, y};
@@ -231,13 +241,14 @@ function createRiver(host, opts){
     tip.innerHTML = html; tip.hidden = false;
     tip.style.left = Math.min(W - tip.offsetWidth - 4, Math.max(4, h.x + 14)) + 'px'; tip.style.top = Math.min(H - tip.offsetHeight - 4, Math.max(4, h.y + 14)) + 'px';
   }
-  cv.addEventListener('mousemove', e => { hover = hit(e); cv.style.cursor = hover ? 'pointer' : 'default'; showTip(hover); });
-  cv.addEventListener('mouseleave', () => { hover = null; showTip(null); });
+  const same = (a, b) => a === b || (a && b && a.type === b.type && a.k === b.k && a.key === b.key && a.side === b.side);
+  cv.addEventListener('mousemove', e => { const h = hit(e); if (!same(h, hover)) { hover = h; kick(); } else hover = h; cv.style.cursor = hover ? 'pointer' : 'default'; showTip(hover); });
+  cv.addEventListener('mouseleave', () => { hover = null; showTip(null); kick(); });
   cv.addEventListener('click', e => {
     const h = hit(e);
     if (h && e.shiftKey && h.type === 'card' && h.k !== '__other') { addFilter(h.side === 'L' ? 'ip' : 'dst', h.k); return; }
     sticky = h && !(sticky && h.type === sticky.type && h.k === sticky.k && h.key === sticky.key) ? h : null;
-    state.sel = sticky; if (onSelect) onSelect(sticky);
+    state.sel = sticky; if (onSelect) onSelect(sticky); kick();
   });
 }
 
@@ -262,25 +273,27 @@ function flatMap(el, geo, onConn){
     series:[
       {id:'agg', type:'lines', coordinateSystem:'geo', silent:true, zlevel:1, lineStyle:{curveness:.28},
         data:rows.map(r => { const s = siteGeo(r.exporter); return s && {coords:[s, [r.lo, r.la]], lineStyle:{width:.6 + 3.4 * tot(r) / rmax, opacity:.22, color:r.up > r.dn ? C.up : C.down}}; }).filter(Boolean)},
-      {id:'live', type:'lines', coordinateSystem:'geo', zlevel:2, silent:true, effect:{show:true, period:2.2, trailLength:.45, symbol:'circle', symbolSize:4.5}, lineStyle:{width:1.4, opacity:.75, curveness:.28}, data:[]},
+      {id:'live', type:'lines', coordinateSystem:'geo', zlevel:2, silent:true, effect:{show:!reduceMotion, period:2.4, trailLength:0, symbol:'circle', symbolSize:5}, lineStyle:{width:1.4, opacity:.75, curveness:.28}, data:[]},
       {id:'remotes', type:'scatter', coordinateSystem:'geo', zlevel:3, symbolSize:d => 5 + 12 * Math.sqrt(d[2] / rmax), itemStyle:{color:C.ext, shadowBlur:12, shadowColor:C.ext},
         label:lbl('right', 12), labelLayout:{hideOverlap:true}, emphasis:{label:{show:true}},
         data:[...cities.values()].map(g => ({name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v}))},
-      {id:'sites', type:'effectScatter', coordinateSystem:'geo', zlevel:4, symbolSize:11, rippleEffect:{scale:3.2, brushType:'stroke'}, itemStyle:{color:C.int, shadowBlur:14, shadowColor:C.int}, label:lbl('left', 13), data:sites},
+      {id:'sites', type:'scatter', coordinateSystem:'geo', zlevel:4, symbolSize:12, itemStyle:{color:C.int, borderColor:'rgba(255,255,255,.85)', borderWidth:2, shadowBlur:10, shadowColor:C.int}, label:lbl('left', 13), data:sites},
     ]});
   // live arcs: poll new flows, then release them gradually so bursts from the exporter become a steady stream
   let since = Math.floor(Date.now() / 1000) - 120, queue = [], live = [];
   const poll = async () => { try { const r = await api('live', {since}); since = r.rows.length ? r.rows[r.rows.length - 1].t : since; queue.push(...r.rows); if (queue.length > 400) queue = queue.slice(-400); } catch (e) {} };
   const tick = () => {
-    const now = performance.now(); live = live.filter(e => now - e.born < 4200);
-    const n = Math.min(queue.length, Math.max(1, Math.ceil(queue.length / 12)));
+    const now = performance.now(); live = live.filter(e => now - e.born < 4500);
+    const n = Math.min(queue.length, Math.max(1, Math.ceil(queue.length / 4)), Math.max(0, 40 - live.length));
     for (const r of queue.splice(0, n)) {
       const s = siteGeo(r.exporter); if (!s || (s[0] === r.lon && s[1] === r.lat)) continue;
       const up = r.dir === 'up'; live.push({coords:up ? [s, [r.lon, r.lat]] : [[r.lon, r.lat], s], color:up ? C.up : C.down, born:now}); if (onConn) onConn(r);
     }
-    c.setOption({series:[{id:'live', data:live.map(e => ({coords:e.coords, lineStyle:{color:e.color}}))}]});
+    if (n || live.length !== lastLen) c.setOption({series:[{id:'live', data:live.map(e => ({coords:e.coords, lineStyle:{color:e.color}}))}]});
+    lastLen = live.length;
   };
-  poll(); every(4000, poll); every(reduceMotion ? 3000 : 350, tick);
+  let lastLen = -1;
+  poll(); every(4000, poll); every(reduceMotion ? 3000 : 1000, tick);
 }
 function globe(el, geo){
   if (!echarts.getMap('world') || !window['echarts-gl']) { el.innerHTML = '<div class="empty">3D-режим недоступний у цьому браузері</div>'; return; }
@@ -291,7 +304,7 @@ function globe(el, geo){
     const rows = geo.rows.slice(0, 80);
     const cities = new Map(); for (const r of geo.rows.slice(0, 10)) cities.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]});
     c.setOption({globe:{baseTexture:tex, shading:'lambert', environment:'none', globeRadius:100, light:{ambient:{intensity:.55}, main:{intensity:1.1, alpha:30, beta:40}},
-        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:4, distance:112, minDistance:60, maxDistance:260, targetCoord:[25, 45]}},
+        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:20, distance:112, minDistance:60, maxDistance:260, targetCoord:[25, 45]}},
       series:[
         {type:'lines3D', coordinateSystem:'globe', blendMode:'lighter', effect:{show:!reduceMotion, trailWidth:2.5, trailLength:.22, trailOpacity:1, constantSpeed:28}, lineStyle:{width:1.2, opacity:.35},
           data:rows.map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean)},
@@ -355,7 +368,7 @@ function mountHero(){
       + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>внутр.</span><span><i style="background:${C.ext}"></i>зовн.</span></span>`)}
     <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div>`);
   wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
-  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); const l = document.getElementById('heroLbl'); if (l) l.textContent = l.textContent.replace(/ · ширина ∝ √обсягу$/, '') + scaleNote(); });
+  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); const l = document.getElementById('heroLbl'); if (l) l.textContent = l.textContent.replace(/ · ширина ∝ √обсягу$/, '') + scaleNote(); });
   const hb = document.getElementById('heroBody'), myScope = heroScope;
   heroScope.run(() => {
     if (g) createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
@@ -456,7 +469,7 @@ function vFlows(){
       fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, win:120, metric:state.metric}), onData:d => { lastData = d; winLbl(d); }}));
   };
   mountRiver();
-  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); if (lastData) winLbl(lastData); });
+  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); if (lastData) winLbl(lastData); });
   wireSeg('metricSeg', m => { if (m === state.metric) return; state.metric = m; setPressed('metricSeg', m); mountRiver(); });
   wireSeg('liveSeg', m => { const live = m === 'live'; if (live === state.flowLive) return; state.flowLive = live; setPressed('liveSeg', m); mountRiver(); });
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
@@ -644,7 +657,8 @@ q.addEventListener('keydown', e => {
 });
 document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== q && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); } });
 document.getElementById('bell').onclick = () => { state.view = 'threats'; render(); };
-document.addEventListener('pointermove', e => { const el = e.target.closest && e.target.closest('.glass'); if (!el) return; const r = el.getBoundingClientRect(); el.style.setProperty('--mx', (e.clientX - r.left) + 'px'); el.style.setProperty('--my', (e.clientY - r.top) + 'px'); }, {passive:true});
+let sheenEv = null;
+document.addEventListener('pointermove', e => { if (!sheenEv) requestAnimationFrame(() => { const ev = sheenEv; sheenEv = null; const el = ev.target.closest && ev.target.closest('.glass'); if (!el) return; const r = el.getBoundingClientRect(); el.style.setProperty('--mx', (ev.clientX - r.left) + 'px'); el.style.setProperty('--my', (ev.clientY - r.top) + 'px'); }); sheenEv = e; }, {passive:true});
 
 // sidebar health: real collector ingest rate
 const ingHist = [];
