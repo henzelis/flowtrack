@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowTrack v2 collector (NetFlow/IPFIX -> ClickHouse)
+Description=FlowTrack collector (NetFlow/IPFIX -> ClickHouse)
 After=network-online.target docker.service
 Wants=network-online.target
 

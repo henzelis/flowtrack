@@ -1,4 +1,4 @@
-"""Shared FlowTrack v2 helpers: config, ClickHouse HTTP client, enrichment."""
+"""Shared FlowTrack helpers: config, ClickHouse HTTP client, enrichment."""
 import base64
 import ipaddress
 import json

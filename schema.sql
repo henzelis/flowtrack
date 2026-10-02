@@ -1,4 +1,4 @@
--- FlowTrack v2 ClickHouse schema. Applied idempotently by the collector on start.
+-- FlowTrack ClickHouse schema. Applied idempotently by the collector on start.
 -- All timestamps are UTC.
 
 -- One row per flow record (one direction of a session for FortiOS; whatever the exporter sends otherwise).

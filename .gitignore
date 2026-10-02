@@ -1,5 +1,3 @@
-data.db*
-*.pyc
 __pycache__/
-state.json
+*.pyc
 venv/

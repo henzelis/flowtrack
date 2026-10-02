@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowTrack v2 GeoIP database refresh
+Description=FlowTrack GeoIP database refresh
 After=network-online.target
 Wants=network-online.target
 

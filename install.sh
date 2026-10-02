@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
 #
-# Installs FlowTrack v2 (collector + ClickHouse + web UI) with its dependencies, asking a few
+# Installs FlowTrack (collector + ClickHouse + web UI) with its dependencies, asking a few
 # questions on the way. Re-run the same command to upgrade, reconfigure or uninstall.
 #
 # Options:  --yes          no questions: defaults, or values from FT_* variables below
@@ -291,19 +291,20 @@ step "$(t 'Creating service user and directories' 'Створення корис
   chown flowtrack:flowtrack '$STATE'; chmod 750 '$STATE'"
 
 fetch_code() {
-  local src tmp
-  src=""   # use the checkout next to this script only when it runs from a file, never via curl | bash
+  local src="" tmp d
+  # use the checkout next to this script only when it runs from a file, never via curl | bash
   if [ -f "${BASH_SOURCE[0]:-}" ]; then src=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); fi
-  tmp=$(mktemp -d)
-  if [ -n "$src" ] && [ -f "$src/v2/collector.py" ] && [ -z "${FT_FORCE_DOWNLOAD:-}" ]; then
-    cp -a "$src/v2" "$tmp/v2"
+  tmp=$(mktemp -d); mkdir "$tmp/app"
+  if [ -n "$src" ] && [ -f "$src/collector.py" ] && [ -f "$src/api.py" ] && [ -z "${FT_FORCE_DOWNLOAD:-}" ]; then
+    tar -C "$src" --exclude=.git --exclude=__pycache__ -cf - . | tar -C "$tmp/app" -xf -
   else
-    curl -fsSL "$FT_SOURCE" | tar -xz -C "$tmp"
-    local d; d=$(find "$tmp" -maxdepth 2 -type d -name v2 | head -1)
-    [ -n "$d" ] && [ -f "$d/collector.py" ] || { echo "v2/ not found in $FT_SOURCE"; return 1; }
-    mv "$d" "$tmp/v2"
+    mkdir "$tmp/src"; curl -fsSL "$FT_SOURCE" | tar -xz -C "$tmp/src"
+    d=$(dirname "$(find "$tmp/src" -maxdepth 2 -name api.py | head -1)")
+    [ -f "$d/collector.py" ] && [ -d "$d/web" ] || { echo "FlowTrack sources not found in $FT_SOURCE"; return 1; }
+    cp -a "$d/." "$tmp/app/"
   fi
-  rm -rf "$PREFIX/app.new"; mv "$tmp/v2" "$PREFIX/app.new"
+  rm -rf "$tmp/app/.git"
+  rm -rf "$PREFIX/app.new"; mv "$tmp/app" "$PREFIX/app.new"
   rm -rf "$PREFIX/app.old"; [ -d "$PREFIX/app" ] && mv "$PREFIX/app" "$PREFIX/app.old"
   mv "$PREFIX/app.new" "$PREFIX/app"; rm -rf "$PREFIX/app.old" "$tmp"
   find "$PREFIX/app" -name __pycache__ -prune -exec rm -rf {} +

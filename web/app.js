@@ -1,5 +1,5 @@
 'use strict';
-// FlowTrack v2 web UI — talks to /api/* (see api.py). No build step.
+// FlowTrack web UI — talks to /api/* (see api.py). No build step.
 
 // ===================== state, api =====================
 const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null};

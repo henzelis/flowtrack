@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FlowTrack v2 API + web UI server (stdlib HTTP server, ClickHouse over HTTP).
+"""FlowTrack API + web UI server (stdlib HTTP server, ClickHouse over HTTP).
 
 All user input reaches ClickHouse only as bound query parameters ({name:Type}),
 never by string interpolation; dimension names come from fixed whitelists.

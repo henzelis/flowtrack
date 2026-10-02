@@ -1,242 +1,291 @@
 #!/usr/bin/env python3
-"""flowtrack-collector: NetFlow v9 collector for FortiGate -> SQLite.
+"""FlowTrack collector: NetFlow v5/v9 and IPFIX -> enrichment -> ClickHouse.
 
-FortiOS NetFlow v9 semantics (verified on a live FortiOS 7.4 capture):
-- ONE record per direction of a session (src/dst swapped pairs).
-- IN_BYTES == OUT_BYTES in each record = bytes of that direction.
-- Records are DELTAS: a long session is re-exported every active-flow-timeout,
-  and each export covers only [FIRST_SWITCHED, LAST_SWITCHED] — the next
-  export's FIRST_SWITCHED equals the previous LAST_SWITCHED. So the correct
-  accounting is simply: sum every record. No per-session state is needed.
-- INPUT_SNMP/OUTPUT_SNMP carry interface snmp-index. Direction is taken from
-  them: leaving via WAN = up, entering via WAN = down. Index 0 = the firewall
-  itself (its own VPN tunnels, syslog, management traffic).
-
-Each record's bytes are spread across the minutes its [FIRST, LAST] interval
-covers, so charts reflect when traffic actually flowed, not when it was exported.
-
-Table:
-  usage_min(ts, host, down_bytes, up_bytes, pkts, flows) -- per minute x host,
-  plus a synthetic host '__WAN__' with the WAN totals. Powers all charts.
+- Every record is stored as received: FortiOS (and NetFlow v9/IPFIX in general) export
+  DELTA counters per active-timeout interval, so traffic = sum of records.
+- Inside/outside endpoint and direction come from the exporter's WAN interfaces when they
+  are configured (exporters.json), otherwise from RFC 1918 / CGNAT address ranges.
+- Optionally forwards every received datagram unchanged to other collectors (FT_FORWARD),
+  so an existing collector keeps working on the same exporter feed.
 """
-import ipaddress
+import json
 import os
 import signal
 import socket
-import sqlite3
+import sys
 import time
+from datetime import datetime, timezone
 
 from netflow import parse_packet
+from netflow.ipfix import IPFIXTemplateNotRecognized
 from netflow.v9 import V9TemplateNotRecognized
 
-# Configuration via environment variables (see README / deploy/flowtrack.env.example).
-BIND_HOST = os.environ.get('FLOWTRACK_BIND', '0.0.0.0')
-BIND_PORT = int(os.environ.get('FLOWTRACK_PORT', '2055'))
-DATA_DIR = os.environ.get('FLOWTRACK_DATA_DIR', '/opt/flowtrack')
-DB_PATH = os.path.join(DATA_DIR, 'data.db')
-# snmp-index of the WAN interface on FortiGate (check: show system interface wan)
-WAN_SNMP_INDEX = int(os.environ.get('FLOWTRACK_WAN_SNMP_INDEX', '1'))
-# Exporter IPs allowed to send NetFlow, comma-separated. Empty = accept any (not recommended).
-EXPORTERS = {ip.strip() for ip in os.environ.get('FLOWTRACK_EXPORTERS', '').split(',') if ip.strip()}
-FLUSH_EVERY = 15            # seconds between DB writes
-STATS_EVERY = 600           # seconds between stats log lines
-FW_HOST = 'firewall'        # host label for traffic the firewall itself originates/terminates
-LOCAL_SNMP_INDEX = 0
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import (CHError, Geo, apply_schema, ch, classify_l7, exporters_mtime, ipstr, is_private,  # noqa: E402
+                    load_exporters, service_name)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS usage_min (
-    ts INTEGER NOT NULL,
-    host TEXT NOT NULL,
-    down_bytes INTEGER NOT NULL DEFAULT 0,
-    up_bytes INTEGER NOT NULL DEFAULT 0,
-    pkts INTEGER NOT NULL DEFAULT 0,
-    flows INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (ts, host)
-);
-"""
+BIND = os.environ.get('FT_BIND', '0.0.0.0')
+PORT = int(os.environ.get('FT_PORT', '2055'))
+FORWARD = [(h, int(p)) for h, p in (x.strip().rsplit(':', 1) for x in os.environ.get('FT_FORWARD', '').split(',') if x.strip())]
+ALLOW = {x.strip() for x in os.environ.get('FT_EXPORTERS', '').split(',') if x.strip()}
+BATCH_SECONDS = 2.0
+BATCH_MAX = 20000
+BUFFER_MAX = 500000        # rows kept in memory while ClickHouse is down
+SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 
 def log(msg):
-    print(f'[flowtrack] {msg}', flush=True)
+    print(f'[flowtrack2] {msg}', flush=True)
 
 
-def ipstr(v):
-    """Normalize an IP field (int or str) to its canonical string, or None."""
-    if v is None:
-        return None
+def g(rec, *names, default=None):
+    for n in names:
+        v = rec.get(n)
+        if v is not None:
+            return v
+    return default
+
+
+def gi(rec, *names):
     try:
-        return str(ipaddress.ip_address(int(v) if isinstance(v, int) or str(v).isdigit() else str(v)))
-    except (ValueError, TypeError):
-        return None
-
-
-def intfield(rec, name):
-    try:
-        return int(rec.get(name) or 0)
+        return int(g(rec, *names, default=0) or 0)
     except (TypeError, ValueError):
         return 0
 
 
-def open_db():
-    db = sqlite3.connect(DB_PATH, timeout=10)
-    db.execute('PRAGMA journal_mode=WAL')
-    db.execute('PRAGMA synchronous=NORMAL')
-    db.executescript(SCHEMA)
-    cols = {r[1] for r in db.execute('PRAGMA table_info(usage_min)')}
-    if 'flows' not in cols:     # DB created by v1
-        db.execute('ALTER TABLE usage_min ADD COLUMN flows INTEGER NOT NULL DEFAULT 0')
-    db.commit()
-    return db
+def utc(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
-def classify(rec):
-    """Return (host, direction) for a WAN-crossing record, else None.
-    host = the inside endpoint (LAN IP before NAT, or 'firewall')."""
-    in_if, out_if = intfield(rec, 'INPUT_SNMP'), intfield(rec, 'OUTPUT_SNMP')
-    if out_if == WAN_SNMP_INDEX and in_if != WAN_SNMP_INDEX:
-        if in_if == LOCAL_SNMP_INDEX:
-            return FW_HOST, 'up'
-        host = ipstr(rec.get('IPV4_SRC_ADDR')) or ipstr(rec.get('IPV6_SRC_ADDR'))
-        return (host, 'up') if host else None
-    if in_if == WAN_SNMP_INDEX and out_if != WAN_SNMP_INDEX:
-        if out_if == LOCAL_SNMP_INDEX:
-            return FW_HOST, 'down'
-        host = ipstr(rec.get('IPV4_DST_ADDR')) or ipstr(rec.get('IPV6_DST_ADDR'))
-        return (host, 'down') if host else None
-    return None     # not WAN-crossing (LAN<->LAN, or WAN hairpin)
+def utc_ms(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
 
-def flow_interval(rec, header, now):
-    """Unix [start, end] of the record, from sysUptime-relative FIRST/LAST_SWITCHED."""
-    uptime, export_ts = header.uptime, header.timestamp
-    first, last = intfield(rec, 'FIRST_SWITCHED'), intfield(rec, 'LAST_SWITCHED')
-    if not export_ts or not last:
-        return now, now
-    # sysUptime is a 32-bit ms counter; handle wrap between switch time and export
-    age_last = (uptime - last) % 2**32 / 1000.0
-    age_first = (uptime - first) % 2**32 / 1000.0
-    end = export_ts - age_last
-    start = export_ts - age_first
-    if not (now - 86400 < start <= end <= now + 120):   # clock skew / garbage: fall back
-        return now, now
-    return start, end
+class Exporter:
+    def __init__(self, ip, cfg):
+        self.ip = ip
+        self.configure(cfg)
+        self.templates = {'netflow': {}, 'ipfix': {}}
+        self.last_seq = None
+        self.version = 0
+        self._last_count = 0
+        self.reset()
+
+    def configure(self, cfg):
+        self.wan = set(cfg.get('wan_ifs', []))
+        self.local_if = cfg.get('local_if')          # FortiOS: 0 = the firewall itself
+
+    def reset(self):
+        self.packets = self.records = self.lost = self.no_template = self.decode_errors = 0
 
 
 class Collector:
     def __init__(self):
-        self.db = open_db()
-        self.buckets = {}       # (minute_ts, host) -> [down, up, pkts, flows]
-        self.templates = {}     # exporter ip -> netflow template store
-        self.last_seq = {}      # exporter ip -> last v9 sequence number
-        self.stats = dict(records=0, wan_records=0, bytes=0, no_template=0,
-                          foreign=0, decode_errors=0, lost_packets=0)
+        self.geo = Geo()
+        self.cfg = load_exporters()
+        self.cfg_mtime = exporters_mtime()
+        self.exporters = {}
+        self.buf = []
+        self.dropped = 0
+        self.last_flush = self.last_stats = time.time()
 
-    def add(self, ts_min, host, down, up, pkts, flows):
-        b = self.buckets.setdefault((ts_min, host), [0, 0, 0, 0])
-        b[0] += down
-        b[1] += up
-        b[2] += pkts
-        b[3] += flows
+    def exporter(self, ip):
+        e = self.exporters.get(ip)
+        if e is None:
+            e = self.exporters[ip] = Exporter(ip, self.cfg.get(ip, {}))
+            log(f'new exporter {ip} (wan interfaces: {sorted(e.wan) or "not configured, using RFC1918"})')
+        return e
 
-    def handle_record(self, rec, header, now):
-        self.stats['records'] += 1
-        cls = classify(rec)
-        if cls is None:
+    # ------------------------------------------------------------ records
+    def flow_times(self, rec, version, hdr, now):
+        """Unix (start, end) of a record."""
+        if version == 10:
+            end = gi(rec, 'flowEndMilliseconds') / 1000 or gi(rec, 'flowEndSeconds')
+            start = gi(rec, 'flowStartMilliseconds') / 1000 or gi(rec, 'flowStartSeconds')
+            if not end:
+                export = getattr(hdr, 'export_uptime', 0) or now   # IPFIX header field = export time (unix s)
+                end = start = export
+            start = start or end
+        else:
+            uptime, export = getattr(hdr, 'uptime', 0), getattr(hdr, 'timestamp', 0)
+            first, last = gi(rec, 'FIRST_SWITCHED'), gi(rec, 'LAST_SWITCHED')
+            if not export or not last:
+                return now, now
+            end = export - ((uptime - last) % 2**32) / 1000.0
+            start = export - ((uptime - first) % 2**32) / 1000.0
+        if not (now - 86400 < start <= end <= now + 120):      # exporter clock skew: trust arrival time
+            return now, now
+        return start, end
+
+    def handle_record(self, e, rec, version, hdr, now):
+        src = ipstr(g(rec, 'IPV4_SRC_ADDR', 'IPV6_SRC_ADDR', 'sourceIPv4Address', 'sourceIPv6Address'))
+        dst = ipstr(g(rec, 'IPV4_DST_ADDR', 'IPV6_DST_ADDR', 'destinationIPv4Address', 'destinationIPv6Address'))
+        if not src or not dst:
             return
-        host, direction = cls
-        nbytes = max(intfield(rec, 'IN_BYTES'), intfield(rec, 'OUT_BYTES'))
-        npkts = max(intfield(rec, 'IN_PKTS'), intfield(rec, 'OUT_PKTS'))
+        nbytes = max(gi(rec, 'IN_BYTES', 'IN_OCTETS', 'octetDeltaCount'), gi(rec, 'OUT_BYTES', 'postOctetDeltaCount'))
+        npkts = max(gi(rec, 'IN_PKTS', 'IN_PACKETS', 'packetDeltaCount'), gi(rec, 'OUT_PKTS', 'postPacketDeltaCount'))
         if nbytes <= 0:
             return
-        self.stats['wan_records'] += 1
-        self.stats['bytes'] += nbytes
+        proto = gi(rec, 'PROTOCOL', 'PROTO', 'protocolIdentifier')
+        sport = gi(rec, 'L4_SRC_PORT', 'SRC_PORT', 'sourceTransportPort')
+        dport = gi(rec, 'L4_DST_PORT', 'DST_PORT', 'destinationTransportPort')
+        in_if = gi(rec, 'INPUT_SNMP', 'INPUT', 'ingressInterface')
+        out_if = gi(rec, 'OUTPUT_SNMP', 'OUTPUT', 'egressInterface')
 
-        start, end = flow_interval(rec, header, now)
-        # spread bytes/packets over the minutes the interval covers, proportionally
-        span = end - start
-        m0, m1 = int(start) // 60 * 60, int(end) // 60 * 60
-        if span <= 0 or m0 == m1:
-            parts = [(m1, nbytes, npkts)]
+        # inside / outside endpoint and direction
+        if e.wan and out_if in e.wan and in_if not in e.wan:
+            d, ii, ei = 'up', (src, sport), (dst, dport)
+        elif e.wan and in_if in e.wan and out_if not in e.wan:
+            d, ii, ei = 'down', (dst, dport), (src, sport)
         else:
-            parts, left_b, left_p = [], nbytes, npkts
-            m = m0
-            while m <= m1:
-                if m == m1:
-                    b, p = left_b, left_p
-                else:
-                    frac = (min(m + 60, end) - max(m, start)) / span
-                    b, p = int(nbytes * frac), int(npkts * frac)
-                    left_b -= b
-                    left_p -= p
-                parts.append((m, b, p))
-                m += 60
-        for i, (m, b, p) in enumerate(parts):
-            flows = 1 if i == len(parts) - 1 else 0
-            down, up = (b, 0) if direction == 'down' else (0, b)
-            self.add(m, host, down, up, p, flows)
-            self.add(m, '__WAN__', down, up, p, flows)
+            ps, pd = is_private(src), is_private(dst)
+            if ps and not pd:
+                d, ii, ei = 'up', (src, sport), (dst, dport)
+            elif pd and not ps:
+                d, ii, ei = 'down', (dst, dport), (src, sport)
+            elif ps and pd:
+                d, ii, ei = 'internal', (src, sport), (dst, dport)
+            else:
+                d, ii, ei = 'transit', (src, sport), (dst, dport)
+
+        if d == 'up':
+            nat_ip = ipstr(g(rec, 'NF_F_XLATE_SRC_ADDR_IPV4', 'postNATSourceIPv4Address', 'postNATSourceIPv6Address'))
+            nat_port = gi(rec, 'NF_F_XLATE_SRC_PORT', 'postNAPTSourceTransportPort')
+        elif d == 'down':
+            nat_ip = ipstr(g(rec, 'NF_F_XLATE_DST_ADDR_IPV4', 'postNATDestinationIPv4Address', 'postNATDestinationIPv6Address'))
+            nat_port = gi(rec, 'NF_F_XLATE_DST_PORT', 'postNAPTDestinationTransportPort')
+        else:
+            nat_ip, nat_port = '', 0
+        if nat_ip in ('0.0.0.0', '::'):
+            nat_ip, nat_port = '', 0
+
+        country, city, lat, lon, asn, as_org = self.geo.lookup(ei[0])
+        l7, port_service = classify_l7(proto, ei[1])
+        start, end = self.flow_times(rec, version, hdr, now)
+        app_tag = gi(rec, 'APPLICATION_TAG', 'applicationId')
+        self.buf.append({
+            'ts': utc(end), 'ts_start': utc_ms(start), 'exporter': e.ip, 'in_if': in_if, 'out_if': out_if, 'dir': d,
+            'int_ip': ii[0], 'int_port': ii[1], 'ext_ip': ei[0], 'ext_port': ei[1], 'proto': proto,
+            'nat_ip': nat_ip, 'nat_port': nat_port, 'bytes': nbytes, 'packets': npkts,
+            'l7': l7, 'service': service_name(port_service, asn, as_org, ei[0]),
+            'country': country, 'city': city, 'lat': lat, 'lon': lon, 'asn': asn, 'as_org': as_org,
+            'app_tag': app_tag if app_tag < 2**64 else 0,
+        })
+        e.records += 1
 
     def handle_packet(self, data, addr):
-        src = addr[0]
-        if EXPORTERS and src not in EXPORTERS:
-            self.stats['foreign'] += 1
+        for fwd in FORWARD:
+            try:
+                self.fwd_sock.sendto(data, fwd)
+            except OSError:
+                pass
+        ip = addr[0]
+        if ALLOW and ip not in ALLOW and ip not in self.cfg:     # allow-list = env + devices configured (incl. from the UI)
             return
-        tpl = self.templates.setdefault(src, {'netflow': {}, 'ipfix': {}})
+        e = self.exporter(ip)
+        e.packets += 1
         try:
-            pkt = parse_packet(data, tpl)
-        except V9TemplateNotRecognized:
-            self.stats['no_template'] += 1   # template arrives shortly; packet skipped
+            pkt = parse_packet(data, e.templates)
+        except (V9TemplateNotRecognized, IPFIXTemplateNotRecognized):
+            e.no_template += 1
             return
-        except Exception as e:
-            self.stats['decode_errors'] += 1
-            log(f'WARN decode error from {src}: {e}')
+        except Exception as ex:
+            e.decode_errors += 1
+            if e.decode_errors <= 5:
+                log(f'WARN decode error from {ip}: {ex}')
             return
         hdr = pkt.header
-        seq = getattr(hdr, 'sequence', None)
-        if seq is not None:
-            prev = self.last_seq.get(src)
-            # FortiOS increments the v9 sequence per export packet
-            if prev is not None and 0 < (seq - prev) % 2**32 < 10000:
-                self.stats['lost_packets'] += (seq - prev) % 2**32 - 1
-            self.last_seq[src] = seq
+        e.version = hdr.version
+        seq = getattr(hdr, 'sequence', getattr(hdr, 'sequence_number', None))
+        if seq is not None and hdr.version == 9:
+            # v9 counts export packets; IPFIX counts records (checked below), v5 counts flows
+            if e.last_seq is not None and 0 < (seq - e.last_seq) % 2**32 < 100000:
+                e.lost += (seq - e.last_seq) % 2**32 - 1
+            e.last_seq = seq
+        elif seq is not None and hdr.version in (5, 10):
+            if e.last_seq is not None and 0 < (seq - e.last_seq) % 2**32 < 1000000:
+                e.lost += (seq - e.last_seq) % 2**32 - e._last_count
+            e.last_seq = seq
         now = time.time()
-        for f in pkt.flows:
-            self.handle_record(f.data if hasattr(f, 'data') else dict(vars(f)), hdr, now)
+        flows = pkt.flows
+        e._last_count = len(flows)
+        for f in flows:
+            if hasattr(f, 'data') and isinstance(f.data, dict):
+                rec = f.data
+            elif hasattr(f, 'fields'):
+                rec = {k: getattr(f, k, None) for k in f.fields}
+            else:
+                rec = dict(vars(f))
+            self.handle_record(e, rec, hdr.version, hdr, now)
 
+    # ------------------------------------------------------------ output
     def flush(self):
-        if not self.buckets:
+        if not self.buf:
             return
-        rows = [(ts, h, d, u, p, n) for (ts, h), (d, u, p, n) in self.buckets.items()]
-        self.db.executemany(
-            'INSERT INTO usage_min (ts, host, down_bytes, up_bytes, pkts, flows)'
-            ' VALUES (?,?,?,?,?,?)'
-            ' ON CONFLICT(ts, host) DO UPDATE SET'
-            '   down_bytes = down_bytes + excluded.down_bytes,'
-            '   up_bytes = up_bytes + excluded.up_bytes,'
-            '   pkts = pkts + excluded.pkts,'
-            '   flows = flows + excluded.flows', rows)
-        self.db.commit()
-        self.buckets.clear()
+        batch = self.buf[:BATCH_MAX]
+        body = '\n'.join(json.dumps(r, separators=(',', ':')) for r in batch).encode()
+        try:
+            ch('INSERT INTO flows FORMAT JSONEachRow', data=body, timeout=20)
+            del self.buf[:len(batch)]
+        except (CHError, OSError) as ex:
+            log(f'WARN insert failed ({len(self.buf)} rows buffered): {str(ex)[:200]}')
+            if len(self.buf) > BUFFER_MAX:
+                drop = len(self.buf) - BUFFER_MAX
+                del self.buf[:drop]
+                self.dropped += drop
+
+    def write_stats(self):
+        now = utc(time.time())
+        rows = []
+        for e in self.exporters.values():
+            rows.append({'ts': now, 'exporter': e.ip, 'version': e.version, 'packets': e.packets, 'records': e.records,
+                         'lost': e.lost, 'no_template': e.no_template, 'decode_errors': e.decode_errors,
+                         'templates': len(e.templates['netflow']) + len(e.templates['ipfix'])})
+        if not rows:
+            return
+        try:
+            ch('INSERT INTO exporter_stats FORMAT JSONEachRow', data='\n'.join(json.dumps(r) for r in rows).encode())
+            for e in self.exporters.values():
+                e.reset()
+        except (CHError, OSError) as ex:
+            log(f'WARN stats insert failed: {str(ex)[:200]}')
+
+    def reload_config(self):
+        """Pick up devices added/edited in the UI without a restart."""
+        mt = exporters_mtime()
+        if mt == self.cfg_mtime:
+            return
+        self.cfg_mtime, self.cfg = mt, load_exporters()
+        for ip, e in self.exporters.items():
+            e.configure(self.cfg.get(ip, {}))
+        log(f'exporter config reloaded ({len(self.cfg)} configured)')
 
     def run(self):
+        for attempt in range(60):
+            try:
+                apply_schema(SCHEMA)
+                break
+            except (CHError, OSError) as ex:
+                log(f'waiting for ClickHouse ({ex.__class__.__name__}) ...')
+                time.sleep(2)
+        else:
+            log('ClickHouse not reachable, exiting')
+            sys.exit(1)
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-        sock.bind((BIND_HOST, BIND_PORT))
-        sock.settimeout(1.0)
-        log(f'listening on {BIND_HOST}:{BIND_PORT}, wan snmp-index={WAN_SNMP_INDEX}, '
-            f'exporters={",".join(sorted(EXPORTERS)) or "ANY"}')
-
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+        sock.bind((BIND, PORT))
+        sock.settimeout(0.5)
+        self.fwd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        log(f'listening on {BIND}:{PORT}; forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
         stop = False
 
         def on_signal(*_):
             nonlocal stop
             stop = True
-
         signal.signal(signal.SIGTERM, on_signal)
         signal.signal(signal.SIGINT, on_signal)
 
-        last_flush = last_stats = time.time()
         while not stop:
             try:
                 data, addr = sock.recvfrom(65535)
@@ -244,21 +293,17 @@ class Collector:
             except socket.timeout:
                 pass
             now = time.time()
-            if now - last_flush >= FLUSH_EVERY:
-                try:
-                    self.flush()
-                except sqlite3.Error as e:
-                    log(f'WARN flush failed (will retry): {e}')
-                last_flush = now
-            if now - last_stats >= STATS_EVERY:
-                log(' '.join(f'{k}={v}' for k, v in self.stats.items()))
-                last_stats = now
-
+            if now - self.last_flush >= BATCH_SECONDS or len(self.buf) >= BATCH_MAX:
+                self.flush()
+                self.last_flush = now
+            if now - self.last_stats >= 60:
+                self.write_stats()
+                self.last_stats = now
+                self.reload_config()
         self.flush()
-        self.db.close()
-        log('stopped. ' + ' '.join(f'{k}={v}' for k, v in self.stats.items()))
+        self.write_stats()
+        log('stopped')
 
 
 if __name__ == '__main__':
-    os.makedirs(DATA_DIR, exist_ok=True)
     Collector().run()

@@ -1,4 +1,4 @@
-"""FlowTrack v2 users and sessions (stdlib only).
+"""FlowTrack users and sessions (stdlib only).
 
 - Passwords: scrypt (n=2^14, r=8, p=1) with a per-user random salt; compared in constant time.
 - Sessions: random 256-bit tokens; only their SHA-256 is stored on disk, so a leaked

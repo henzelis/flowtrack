@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowTrack v2 web UI + API
+Description=FlowTrack web UI + API
 After=network-online.target docker.service
 Wants=network-online.target
 

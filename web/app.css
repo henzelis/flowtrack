@@ -259,7 +259,7 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
   .form .two{grid-template-columns:1fr}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-/* v2 additions */
+/* states: loading, errors, footer */
 .loading{position:relative;min-height:60px}
 .loading::after{content:"Завантаження…";position:absolute;inset:0;display:grid;place-items:center;color:var(--ink3);font-size:12.5px}
 .err{color:var(--crit);font-size:12.5px;padding:10px}

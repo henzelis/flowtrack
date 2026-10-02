@@ -1,5 +1,5 @@
 [Unit]
-Description=Monthly FlowTrack v2 GeoIP refresh
+Description=Monthly FlowTrack GeoIP refresh
 
 [Timer]
 OnCalendar=*-*-03 04:30:00

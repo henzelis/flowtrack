@@ -10,9 +10,6 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
  Juniper · pmacct …         NAT, L7)      exporter health
 ```
 
-> The current version lives in [`v2/`](v2). The original SQLite collector (v1) is kept in the
-> repository root for existing installs — see [Legacy v1](#legacy-v1).
-
 ## Features
 
 **Collection**
@@ -93,21 +90,21 @@ for f in city asn; do
 done
 
 # 4. Code and Python environment
-sudo cp -r v2 /opt/flowtrack-v2/app
+sudo mkdir -p /opt/flowtrack-v2/app && sudo cp -r *.py schema.sql web deploy /opt/flowtrack-v2/app/
 sudo python3 -m venv /opt/flowtrack-v2/venv
 sudo /opt/flowtrack-v2/venv/bin/pip install netflow==0.12.2 maxminddb
 
 # 5. Configuration
-sudo cp v2/deploy/flowtrack-v2.env.example /etc/flowtrack-v2/env
+sudo cp deploy/flowtrack.env.example /etc/flowtrack-v2/env
 sudo sed -i "s/^FT_CH_PASSWORD=.*/FT_CH_PASSWORD=$PW/" /etc/flowtrack-v2/env
-sudo cp v2/deploy/exporters.json.example /etc/flowtrack-v2/exporters.json   # edit for your devices
-sudo cp v2/deploy/hosts.json.example /etc/flowtrack-v2/hosts.json           # optional host names
+sudo cp deploy/exporters.json.example /etc/flowtrack-v2/exporters.json   # edit for your devices
+sudo cp deploy/hosts.json.example /etc/flowtrack-v2/hosts.json           # optional host names
 sudo chown root:flowtrack /etc/flowtrack-v2/env && sudo chmod 640 /etc/flowtrack-v2/env
 
 # 6. Services
-sudo cp v2/deploy/flowtrack2-*.service /etc/systemd/system/
+sudo cp deploy/flowtrack2-* /etc/systemd/system/ && sudo chmod +x /opt/flowtrack-v2/app/deploy/geoip-update.sh
 sudo systemctl daemon-reload
-sudo systemctl enable --now flowtrack2-collector flowtrack2-web
+sudo systemctl enable --now flowtrack2-collector flowtrack2-web flowtrack2-geoip.timer
 ```
 
 Open `http://<collector>:3030` and sign in as **admin / flowtrack**. The UI keeps reminding you until
@@ -231,14 +228,16 @@ sFlow; SNMP polling for interface names and counter cross-checks; notifications 
 webhook); host names from DHCP leases; template persistence across collector restarts (today the first
 minute after a restart is skipped until the exporter resends its templates).
 
-## Legacy v1
+## Repository layout
 
-The root of the repository still holds v1: a FortiGate-only collector (`collector.py`) that stores
-per-minute usage in SQLite and a single-page dashboard (`web.py`), configured via `/etc/flowtrack.env`
-(see `deploy/`). It needs no database server and answers "how much internet did each host use this
-month", but has no per-flow storage, map or users. New installs should use v2. To run both on one host, give v2
-UDP 2055, move v1 to another port (`FLOWTRACK_PORT=2056`), allow the forwarded packets in v1
-(`FLOWTRACK_EXPORTERS=<exporter>,127.0.0.1`) and set `FT_FORWARD=127.0.0.1:2056` for v2.
+| Path | What it is |
+|---|---|
+| `collector.py` | NetFlow v5/v9 + IPFIX listener, enrichment, batched inserts into ClickHouse |
+| `api.py`, `auth.py` | JSON API, users and sessions, static web server |
+| `common.py`, `schema.sql` | ClickHouse client, GeoIP/ASN/service enrichment; database schema |
+| `web/` | the web UI (plain HTML/CSS/JS, ECharts vendored — no build step) |
+| `deploy/` | systemd units, GeoIP refresh, configuration examples |
+| `install.sh` | the one-line installer |
 
 ## License
 
