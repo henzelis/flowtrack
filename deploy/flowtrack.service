@@ -1,0 +1,13 @@
+[Unit]
+Description=FlowTrack NetFlow v9 collector (FortiGate -> SQLite)
+After=network.target
+
+[Service]
+EnvironmentFile=-/etc/flowtrack.env
+ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/collector.py
+WorkingDirectory=/opt/flowtrack
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

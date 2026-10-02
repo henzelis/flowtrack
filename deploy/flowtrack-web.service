@@ -1,0 +1,13 @@
+[Unit]
+Description=FlowTrack web dashboard (NetFlow usage)
+After=network.target flowtrack.service
+
+[Service]
+EnvironmentFile=-/etc/flowtrack.env
+ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/web.py
+WorkingDirectory=/opt/flowtrack
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
