@@ -2,7 +2,7 @@
 // FlowTrack v2 web UI — talks to /api/* (see api.py). No build step.
 
 // ===================== state, api =====================
-const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'bytes', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null};
+const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'bytes', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null};
 let META = {devices:[]};
 const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto'];
 const FILTER_LABEL = {ip:'хост', dst:'зовн. IP', service:'сервіс', l7:'протокол', country:'країна', city:'місто', port:'порт', device:'пристрій', asn:'ASN', dir:'напрямок', proto:'L4'};
@@ -107,7 +107,8 @@ function createRiver(host, opts){
   host.innerHTML = '<canvas></canvas><div class="rtip" hidden></div>';
   const cv = host.querySelector('canvas'), tip = host.querySelector('.rtip'), ctx = cv.getContext('2d');
   let W = 0, H = 0, dpr = 1, raf = 0, hover = null, sticky = state.sel, data = null, first = true;
-  const cur = new Map(), alphas = new Map();
+  const cur = new Map(), alphas = new Map(), pos = new Map(), flash = new Map(), lastT = new Map();
+  const sz = v => v <= 0 ? 0 : state.scale === 'sqrt' ? Math.sqrt(v) : v;   // width transform; tooltips show real values
   let targets = new Map(), left = [], right = [], info = {L:new Map(), R:new Map()};
   const ease = (m, k, target) => { const v = m.has(k) ? m.get(k) : target; const n = v + (target - v) * 0.1; m.set(k, n); return n; };
   async function load(){
@@ -116,6 +117,7 @@ function createRiver(host, opts){
     right = data.right.map(r => r.ip).concat(data.more_right ? ['__other'] : []);
     info = {L:new Map(data.left.map(h => [h.ip, h])), R:new Map(data.right.map(r => [r.ip, r]))};
     targets = new Map(data.links.map(x => [x.l + '|' + x.r, {dn:x.dn, up:x.up}]));
+    for (const x of data.links) { const k = x.l + '|' + x.r; if (!first && x.t > (lastT.get(k) || 0)) flash.set(k, 1); lastT.set(k, x.t); }
     for (const k of targets.keys()) if (!cur.has(k)) cur.set(k, {dn:0, up:0});
     if (first || reduceMotion) { for (const [k, v] of targets) cur.set(k, {...v}); first = false; }
     if (opts.onData) opts.onData(data);
@@ -133,24 +135,29 @@ function createRiver(host, opts){
     const headH = compact ? 22 : 30, gap = compact ? 6 : 8, n = Math.max(left.length, right.length, 1);
     const cardH = Math.max(28, Math.min(compact ? 40 : 50, (H - headH - gap * (n - 1)) / n));
     const cardW = Math.min(compact ? 160 : 210, Math.max(118, W * (compact ? 0.21 : 0.18)));
-    const x0 = cardW + 6, x1 = W - cardW - 6, nodeTot = new Map();
-    for (const [k, v] of cur) { const [l, r] = k.split('|'); const s = v.dn + v.up; nodeTot.set('L' + l, (nodeTot.get('L' + l) || 0) + s); nodeTot.set('R' + r, (nodeTot.get('R' + r) || 0) + s); }
-    const scale = cardH * 0.84 / Math.max(1e-9, ...nodeTot.values());
-    const yOf = i => headH + i * (cardH + gap);
+    const x0 = cardW + 6, x1 = W - cardW - 6, nodeTot = new Map(), nodeReal = new Map(), MINW = 1.5;
+    for (const [k, v] of cur) { const [l, r] = k.split('|'); const s = sz(v.dn) + sz(v.up), real = v.dn + v.up;
+      for (const key of ['L' + l, 'R' + r]) { nodeTot.set(key, (nodeTot.get(key) || 0) + s); nodeReal.set(key, (nodeReal.get(key) || 0) + real); } }
+    const scale = cardH * 0.8 / Math.max(1e-9, ...nodeTot.values());
+    const w = v => v <= 0 ? 0 : Math.max(MINW, sz(v) * scale);
+    // cards glide to their slot; new cards fade in from transparent
+    const yOf = (side, k, i) => { const key = side + k, target = headH + i * (cardH + gap); if (!pos.has(key)) { pos.set(key, target); alphas.set('card' + key, 0); } const y = pos.get(key) + (target - pos.get(key)) * 0.12; pos.set(key, y); return y; };
     cards = [];
-    left.forEach((k, i) => cards.push({side:'L', k, x:0, y:yOf(i), w:cardW, h:cardH, val:nodeTot.get('L' + k) || 0}));
-    right.forEach((k, i) => cards.push({side:'R', k, x:W - cardW, y:yOf(i), w:cardW, h:cardH, val:nodeTot.get('R' + k) || 0}));
+    left.forEach((k, i) => cards.push({side:'L', k, x:0, y:yOf('L', k, i), w:cardW, h:cardH, val:nodeReal.get('L' + k) || 0}));
+    right.forEach((k, i) => cards.push({side:'R', k, x:W - cardW, y:yOf('R', k, i), w:cardW, h:cardH, val:nodeReal.get('R' + k) || 0}));
+    const cy = new Map(cards.map(c => [c.side + c.k, c.y]));
     const li = new Map(left.map((k, i) => [k, i])), rix = new Map(right.map((k, i) => [k, i]));
-    const links = [...cur.entries()].map(([k, v]) => { const [l, r] = k.split('|'); return {k, l, r, dn:v.dn, up:v.up}; }).filter(x => li.has(x.l) && rix.has(x.r) && (x.dn + x.up) * scale > 0.15);
-    const startY = (side, k, i) => yOf(i) + cardH / 2 - (nodeTot.get(side + k) || 0) * scale / 2;
+    const links = [...cur.entries()].map(([k, v]) => { const [l, r] = k.split('|'); return {k, l, r, dn:v.dn, up:v.up, wu:w(v.up), wd:w(v.dn)}; }).filter(x => li.has(x.l) && rix.has(x.r) && x.wu + x.wd > 0.3);
+    const stack = new Map(); for (const lk of links) { stack.set('L' + lk.l, (stack.get('L' + lk.l) || 0) + lk.wu + lk.wd); stack.set('R' + lk.r, (stack.get('R' + lk.r) || 0) + lk.wu + lk.wd); }
+    const startY = (side, k) => cy.get(side + k) + cardH / 2 - (stack.get(side + k) || 0) / 2;
     const offL = new Map(), offR = new Map();
-    for (const lk of [...links].sort((a, b) => li.get(a.l) - li.get(b.l) || rix.get(a.r) - rix.get(b.r))) { const y = offL.has(lk.l) ? offL.get(lk.l) : startY('L', lk.l, li.get(lk.l)); lk.ya = y; offL.set(lk.l, y + (lk.dn + lk.up) * scale); }
-    for (const lk of [...links].sort((a, b) => rix.get(a.r) - rix.get(b.r) || li.get(a.l) - li.get(b.l))) { const y = offR.has(lk.r) ? offR.get(lk.r) : startY('R', lk.r, rix.get(lk.r)); lk.yb = y; offR.set(lk.r, y + (lk.dn + lk.up) * scale); }
+    for (const lk of [...links].sort((a, b) => li.get(a.l) - li.get(b.l) || rix.get(a.r) - rix.get(b.r))) { const y = offL.has(lk.l) ? offL.get(lk.l) : startY('L', lk.l); lk.ya = y; offL.set(lk.l, y + lk.wu + lk.wd); }
+    for (const lk of [...links].sort((a, b) => rix.get(a.r) - rix.get(b.r) || li.get(a.l) - li.get(b.l))) { const y = offR.has(lk.r) ? offR.get(lk.r) : startY('R', lk.r); lk.yb = y; offR.set(lk.r, y + lk.wu + lk.wd); }
     bands = [];
     for (const lk of links) {
-      const tu = lk.up * scale, td = lk.dn * scale;
-      if (tu > 0.15) bands.push({key:lk.k, l:lk.l, r:lk.r, dir:'up', ya:lk.ya, yb:lk.yb, t:tu, x0, x1});
-      if (td > 0.15) bands.push({key:lk.k, l:lk.l, r:lk.r, dir:'dn', ya:lk.ya + tu, yb:lk.yb + tu, t:td, x0, x1});
+      const tu = lk.wu, td = lk.wd;
+      if (tu > 0) bands.push({key:lk.k, l:lk.l, r:lk.r, dir:'up', ya:lk.ya, yb:lk.yb, t:tu, x0, x1});
+      if (td > 0) bands.push({key:lk.k, l:lk.l, r:lk.r, dir:'dn', ya:lk.ya + tu, yb:lk.yb + tu, t:td, x0, x1});
     }
     return {headH};
   }
@@ -159,6 +166,7 @@ function createRiver(host, opts){
   function roundRect(x, y, w, h, r){ ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
   function frame(){
     for (const [key, v] of cur) { const t = targets.get(key) || {dn:0, up:0}; v.dn += (t.dn - v.dn) * 0.07; v.up += (t.up - v.up) * 0.07; if (!targets.has(key) && v.dn + v.up < 1e-3) cur.delete(key); }
+    for (const [k, v] of flash) { const n = v * 0.965; if (n < 0.01) flash.delete(k); else flash.set(k, n); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
     if (!data) { raf = requestAnimationFrame(frame); return; }
     const L = layout();
@@ -167,10 +175,10 @@ function createRiver(host, opts){
     if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText('Немає трафіку під цей фільтр за вибраний період', W / 2, H / 2); raf = requestAnimationFrame(frame); return; }
     ctx.globalCompositeOperation = 'lighter';
     for (const b of bands) {
-      const col = b.dir === 'up' ? C.up : C.down, a = ease(alphas, b.key + b.dir, related(b) ? 1 : 0.13);
+      const col = b.dir === 'up' ? C.up : C.down, fl = flash.get(b.key) || 0, a = ease(alphas, b.key + b.dir, related(b) ? 1 : 0.13) * (1 + 0.55 * fl);
       const g = ctx.createLinearGradient(b.x0, 0, b.x1, 0), s = b.dir === 'up' ? [.30, .48, .66] : [.66, .48, .30];
-      g.addColorStop(0, hexA(col, s[0] * a)); g.addColorStop(.5, hexA(col, s[1] * a)); g.addColorStop(1, hexA(col, s[2] * a));
-      b.path = bandPath(b); ctx.shadowColor = hexA(col, .5 * a); ctx.shadowBlur = 16; ctx.fillStyle = g; ctx.fill(b.path);
+      g.addColorStop(0, hexA(col, Math.min(1, s[0] * a))); g.addColorStop(.5, hexA(col, Math.min(1, s[1] * a))); g.addColorStop(1, hexA(col, Math.min(1, s[2] * a)));
+      b.path = bandPath(b); ctx.shadowColor = hexA(col, Math.min(1, .5 * a)); ctx.shadowBlur = 16 + 22 * fl; ctx.fillStyle = g; ctx.fill(b.path);
     }
     ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'source-over';
     const f = sticky;
@@ -200,7 +208,7 @@ function createRiver(host, opts){
     for (let i = bands.length - 1; i >= 0; i--) { const b = bands[i]; if (b.path && ctx.isPointInPath(b.path, x * dpr, y * dpr)) return {type:'band', key:b.key, l:b.l, r:b.r, x, y}; }
     return null;
   }
-  const winSecs = () => data && data.live ? 900 : rangeSecs();
+  const winSecs = () => data ? data.window : rangeSecs();
   function showTip(h){
     if (!h) { tip.hidden = true; return; }
     let html;
@@ -332,7 +340,7 @@ async function kpiCards(){
 function vOverview(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid"><div id="kpis" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
-    <section class="glass panel s8 hero">${ph('flow', 'Мережевий трафік', state.heroMode === 'graph' ? 'наживо (останні 15 хв) · топ-8 внутрішніх і зовнішніх адрес' : 'з’єднання за вибраний період · нові лінії з’являються наживо', seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
+    <section class="glass panel s8 hero">${ph('flow', 'Мережевий трафік', state.heroMode === 'graph' ? '<span id="heroLbl">наживо · вікно 2 хв</span>' : 'з’єднання за вибраний період · нові лінії з’являються наживо', (state.heroMode === 'graph' ? seg('scaleSeg', [['sqrt', 'Стиснений'], ['lin', 'Лінійний']], state.scale) : '') + seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
       + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>внутр.</span><span><i style="background:${C.ext}"></i>зовн.</span></span>`)}
       <div id="heroBody" class="${state.heroMode === 'graph' ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div></section>
     <div class="col s4">
@@ -346,7 +354,9 @@ function vOverview(){
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
   const hb = document.getElementById('heroBody');
-  if (state.heroMode === 'graph') createRiver(hb, {compact:true, refreshMs:30000, fetchData:() => api('river', {top:8, live:1, metric:state.metric})});
+  wireSeg('scaleSeg', m => { state.scale = m; render(); });
+  if (state.heroMode === 'graph') createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
+    onData:d => fill('heroLbl', `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}${state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : ''}`)});
   else api('geo').then(g => { if (!hb.isConnected) return; state.heroMode === 'map' ? flatMap(hb, g) : globe(hb, g); }).catch(e => fill('heroBody', errBox(e)));
   section('heroOvl', async () => {
     if (state.heroMode === 'graph') return '';
@@ -394,8 +404,8 @@ async function inspectorHtml(sel){
 function vFlows(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s9">${ph('flow', 'Обмін між внутрішніми та зовнішніми адресами', 'Ширина стрічки = обсяг · колір = напрямок · топ-10 з кожного боку, решта в «Інші»',
-      seg('metricSeg', [['bytes', 'Байти'], ['packets', 'Пакети'], ['flows', 'Flows']], state.metric) + seg('liveSeg', [['live', 'Наживо'], ['period', 'За період']], state.flowLive ? 'live' : 'period'), true)}
+    <section class="glass panel s9">${ph('flow', 'Обмін між внутрішніми та зовнішніми адресами', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»',
+      seg('metricSeg', [['bytes', 'Байти'], ['packets', 'Пакети'], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', 'Стиснений'], ['lin', 'Лінійний']], state.scale) + seg('liveSeg', [['live', 'Наживо'], ['period', 'За період']], state.flowLive ? 'live' : 'period'), true)}
       <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>download (зовн. → внутр.)</span><span><i class="bar" style="background:${C.up}"></i>upload (внутр. → зовн.)</span><span><i style="background:${C.int}"></i>внутрішня адреса</span><span><i style="background:${C.ext}"></i>зовнішня адреса</span><span id="winLbl" class="mono" style="margin-left:auto"></span></div>
       <div class="river big" id="river"></div></section>
     <div class="col s3">
@@ -415,9 +425,10 @@ function vFlows(){
     const b = document.getElementById('inspFilter'); if (b) b.onclick = () => { const ex = JSON.parse(el.dataset.extra); ex.forEach(f => state.filters.push({...f, neg:false})); state.sel = null; render(); };
   };
   showInsp(state.sel);
-  createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 30000 : 0, onSelect:showInsp,
-    fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, metric:state.metric}),
-    onData:d => { const el = document.getElementById('winLbl'); if (el) el.textContent = d.live && d.window_end ? `вікно 15 хв · ${hhmm(d.window_end - 900)}–${hhmm(d.window_end)}` : rangeLabel(); }});
+  createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 10000 : 0, onSelect:showInsp,
+    fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, win:120, metric:state.metric}),
+    onData:d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}` : rangeLabel()) + (state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : ''); }});
+  wireSeg('scaleSeg', m => { state.scale = m; render(); });
   wireSeg('metricSeg', m => { state.metric = m; render(); });
   wireSeg('liveSeg', m => { state.flowLive = m === 'live'; render(); });
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});

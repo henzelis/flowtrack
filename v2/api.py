@@ -226,6 +226,9 @@ def api_river(q):
     metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     live = q1(q, 'live', '1') == '1'
+    win = max(60, min(q1(q, 'win', '120', int), 900))
+    if live:    # nodes = what is active in the last 15 min; values = the last `win` seconds
+        where = where + ' AND ts >= now() - INTERVAL 15 MINUTE'
     tops = ch(f"""SELECT
             (SELECT groupArray(k) FROM (SELECT int_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS l,
             (SELECT groupArray(k) FROM (SELECT ext_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS r,
@@ -236,19 +239,20 @@ def api_river(q):
     wwin = where
     if live:
         p['wend'] = int(tops['last'] or time.time())
-        wwin = where + ' AND ts > toDateTime({wend:UInt32}) - INTERVAL 15 MINUTE AND ts <= toDateTime({wend:UInt32})'
+        p['win'] = win
+        wwin = where + ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     links = ch(f"""SELECT if(has({{L:Array(String)}}, int_ip), int_ip, '__other') AS l, if(has({{R:Array(String)}}, ext_ip), ext_ip, '__other') AS r,
-            sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir != 'up') AS dn
+            sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir != 'up') AS dn, toUnixTimestamp(max(ts)) AS t
         FROM flows WHERE {wwin} GROUP BY l, r""", p, fmt='JSON')
     info = {}
     if right:
         for r in ch(f"SELECT ext_ip, any(service) AS service, any(country) AS country, any(city) AS city FROM flows WHERE {where} AND has({{R:Array(String)}}, ext_ip) GROUP BY ext_ip", p, fmt='JSON'):
             info[r['ext_ip']] = r
     more_l, more_r = int(tops['nl']) > len(left), int(tops['nr']) > len(right)
-    out = [{'l': x['l'], 'r': x['r'], 'up': float(x['up']), 'dn': float(x['dn'])} for x in links
+    out = [{'l': x['l'], 'r': x['r'], 'up': float(x['up']), 'dn': float(x['dn']), 't': int(x['t'])} for x in links
            if (x['l'] != '__other' or more_l) and (x['r'] != '__other' or more_r)]
     return {'left': [host_obj(ip) for ip in left], 'right': [{'ip': ip, **{k: info.get(ip, {}).get(k, '') for k in ('service', 'country', 'city')}} for ip in right],
-            'more_left': more_l, 'more_right': more_r, 'links': out, 'window_end': p.get('wend'), 'live': live, 'range': rng}
+            'more_left': more_l, 'more_right': more_r, 'links': out, 'window_end': p.get('wend'), 'window': win if live else rng, 'live': live, 'range': rng}
 
 
 def api_flows(q):
