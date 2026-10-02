@@ -14,7 +14,7 @@
 #                       FT_WAN_IFS FT_CITY FT_COUNTRY FT_ADMIN_PASSWORD FT_OPEN_FIREWALL=yes|no
 #                       FT_INSTALL_DOCKER=yes|no
 # HTTPS is on by default with a self-signed certificate; FT_TLS=no keeps plain HTTP.
-# Own certificate: put it in /etc/flowtrack-v2/tls/{cert,key}.pem — the installer keeps it.
+# Own certificate: put it in /etc/flowtrack/tls/{cert,key}.pem — the installer keeps it.
 # Source override (testing): FT_SOURCE=<tar.gz URL>  FT_REF=<branch or tag>
 #
 # Everything is wrapped in main() so a partially downloaded script never runs.
@@ -25,13 +25,13 @@ set -Eeuo pipefail
 FT_REPO=${FT_REPO:-henzelis/flowtrack}
 FT_REF=${FT_REF:-main}
 FT_SOURCE=${FT_SOURCE:-https://codeload.github.com/$FT_REPO/tar.gz/refs/heads/$FT_REF}
-PREFIX=/opt/flowtrack-v2
-ETC=/etc/flowtrack-v2
-STATE=/var/lib/flowtrack-v2
+PREFIX=/opt/flowtrack
+ETC=/etc/flowtrack
+STATE=/var/lib/flowtrack
 LOG=/var/log/flowtrack-install.log
 CH_IMAGE=clickhouse/clickhouse-server:24.8
 CH_NAME=flowtrack-ch
-UNITS="flowtrack2-collector flowtrack2-web"
+UNITS="flowtrack-collector flowtrack-web"
 TLS_DIR=$ETC/tls
 USE_TLS=yes; case "${FT_TLS:-yes}" in no|NO|0|false|off) USE_TLS=no ;; esac
 PROTO=https; [ "$USE_TLS" = yes ] || PROTO=http
@@ -168,6 +168,58 @@ else die "$(t "Unsupported system ($OS_ID): need apt (Debian/Ubuntu) or dnf (Fed
 command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] || die "$(t 'systemd is required.' 'Потрібен systemd.')"
 ARCH=$(uname -m); case "$ARCH" in x86_64|aarch64|arm64) ;; *) die "$(t "Unsupported CPU architecture: $ARCH (ClickHouse needs x86_64 or arm64)" "Непідтримувана архітектура: $ARCH (ClickHouse потребує x86_64 або arm64)")" ;; esac
 ok "$(t 'System' 'Система'): ${PRETTY_NAME:-$OS_ID} ($ARCH)"
+
+# ---- earlier layouts on this machine -------------------------------------------------
+# (a) the SQLite-era FlowTrack used /opt/flowtrack, /etc/flowtrack.env and units flowtrack/flowtrack-web —
+#     the same names this version needs, so it is stopped and moved aside (with consent);
+# (b) installs made before the rename used /opt/flowtrack-v2, /etc/flowtrack-v2, /var/lib/flowtrack-v2 and
+#     flowtrack2-* units — moved to the current names automatically, data and settings kept.
+legacy_unit() { [ -f "/etc/systemd/system/$1.service" ] && grep -qE '/opt/flowtrack/(collector|web)\.py' "/etc/systemd/system/$1.service"; }
+if [ "$MODE" != uninstall ] && { [ -f /etc/flowtrack.env ] || { [ -f /opt/flowtrack/collector.py ] && [ ! -d /opt/flowtrack/app ]; } || legacy_unit flowtrack || legacy_unit flowtrack-web; }; then
+  STAMP=$(date +%Y%m%d-%H%M%S)
+  say ""; warn "$(t 'An older FlowTrack (SQLite collector) is installed in /opt/flowtrack.' 'Знайдено стару версію FlowTrack (колектор із SQLite) в /opt/flowtrack.')"
+  say "  $(t "It will be stopped and its files moved to /opt/flowtrack.legacy-$STAMP (nothing is deleted)." "Її буде зупинено, а файли перенесено в /opt/flowtrack.legacy-$STAMP (нічого не видаляється).")"
+  ask_yn retire "$(t 'Continue?' 'Продовжити?')" y FT_RETIRE_LEGACY
+  [ "$retire" = y ] || die "$(t 'Both versions use the same names, so they cannot be installed side by side.' 'Обидві версії використовують ті самі імена, тож встановити їх поруч неможливо.')"
+  retire_legacy() {
+    for u in flowtrack flowtrack-web; do
+      if legacy_unit "$u"; then systemctl disable --now "$u" || true; rm -f "/etc/systemd/system/$u.service"; fi
+    done
+    systemctl daemon-reload
+    if [ -d /opt/flowtrack ]; then mv /opt/flowtrack "/opt/flowtrack.legacy-$STAMP"; else mkdir -p "/opt/flowtrack.legacy-$STAMP"; fi
+    [ -f /etc/flowtrack.env ] && mv /etc/flowtrack.env "/opt/flowtrack.legacy-$STAMP/flowtrack.env"
+    return 0
+  }
+  step "$(t 'Moving the older version aside' 'Перенесення старої версії')" retire_legacy
+fi
+OLD_PREFIX=/opt/flowtrack-v2; OLD_ETC=/etc/flowtrack-v2; OLD_STATE=/var/lib/flowtrack-v2
+if [ -f "$OLD_ETC/env" ] && [ ! -f "$ETC/env" ]; then
+  info "$(t 'Moving the existing installation to the current paths (data and settings are kept)' 'Перенесення наявного встановлення на нові шляхи (дані й налаштування зберігаються)')"
+  command -v docker >/dev/null 2>&1 || die "$(t 'Docker is missing, but the existing installation needs it.' 'Docker відсутній, а наявне встановлення його потребує.')"
+  migrate_layout() {
+    systemctl disable --now flowtrack2-collector flowtrack2-web flowtrack2-geoip.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/flowtrack2-collector.service /etc/systemd/system/flowtrack2-web.service \
+          /etc/systemd/system/flowtrack2-geoip.service /etc/systemd/system/flowtrack2-geoip.timer
+    systemctl daemon-reload
+    # keep the ClickHouse version that created the data; recreate the container with the new data path
+    if docker inspect "$CH_NAME" >/dev/null 2>&1; then
+      CH_PREV=$(docker inspect -f '{{.Config.Image}}' "$CH_NAME")
+      docker stop "$CH_NAME" && docker rm "$CH_NAME"
+    fi
+    [ -e "$PREFIX" ] && { echo "$PREFIX already exists"; return 1; }
+    mv "$OLD_PREFIX" "$PREFIX"
+    rm -rf "$PREFIX/venv"          # a venv hard-codes its own path; make_venv rebuilds it
+    [ -e "$ETC" ] && { echo "$ETC already exists"; return 1; }
+    mv "$OLD_ETC" "$ETC"
+    sed -i -e "s|$OLD_ETC|$ETC|g" -e "s|$OLD_PREFIX|$PREFIX|g" "$ETC/env"
+    if [ -n "${CH_PREV:-}" ] && ! grep -q '^FT_CH_IMAGE=' "$ETC/env"; then echo "FT_CH_IMAGE=$CH_PREV" >> "$ETC/env"; fi
+    if [ -d "$OLD_STATE" ]; then [ -e "$STATE" ] && rm -rf "$STATE.empty" && mv "$STATE" "$STATE.empty"; mv "$OLD_STATE" "$STATE"; fi
+    rm -rf "$STATE.empty"
+    return 0
+  }
+  step "$(t 'Migrating to the current paths' 'Міграція на нові шляхи')" migrate_layout
+  [ -z "$MODE" ] && MODE=upgrade
+fi
 
 EXISTING=0; [ -f "$ETC/env" ] && EXISTING=1
 if [ "$EXISTING" = 1 ] && [ -z "$MODE" ]; then
@@ -328,9 +380,11 @@ fetch_code() {
 step "$(t 'Downloading FlowTrack' 'Завантаження FlowTrack')" fetch_code
 
 make_venv() {
-  [ -x "$PREFIX/venv/bin/python" ] || python3 -m venv "$PREFIX/venv"
-  "$PREFIX/venv/bin/pip" install -q --upgrade pip
-  "$PREFIX/venv/bin/pip" install -q "netflow==0.12.2" "maxminddb>=2.2,<3"
+  # rebuild a missing or broken venv (e.g. one that was moved — venvs hard-code their path)
+  if ! "$PREFIX/venv/bin/python" -m pip --version >/dev/null 2>&1; then rm -rf "$PREFIX/venv"; python3 -m venv "$PREFIX/venv"; fi
+  "$PREFIX/venv/bin/python" -m pip install -q --upgrade pip
+  "$PREFIX/venv/bin/python" -m pip install -q "netflow==0.12.2" "maxminddb>=2.2,<3"
+  "$PREFIX/venv/bin/python" -c 'import netflow, maxminddb'
 }
 step "$(t 'Python environment' 'Python-оточення')" make_venv
 
@@ -403,7 +457,12 @@ ensure_tls() {
 step "$(t 'HTTPS certificate' 'Сертифікат HTTPS')" ensure_tls
 
 clickhouse_up() {
-  local mem cur
+  local mem cur img
+  # the image that created the data is recorded in the config; a re-run must never switch versions
+  img=$(envget FT_CH_IMAGE)
+  if [ -z "$img" ] && docker inspect "$CH_NAME" >/dev/null 2>&1; then img=$(docker inspect -f '{{.Config.Image}}' "$CH_NAME"); fi
+  [ -n "$img" ] && CH_IMAGE=$img
+  grep -q '^FT_CH_IMAGE=' "$ETC/env" || echo "FT_CH_IMAGE=$CH_IMAGE" >> "$ETC/env"
   mem=$(awk '/MemTotal/ {m=int($2/1024/1024/4); if (m<1) m=1; if (m>4) m=4; print m}' /proc/meminfo)
   if docker inspect "$CH_NAME" >/dev/null 2>&1; then
     cur=$(docker inspect -f '{{.State.Running}}' "$CH_NAME")
@@ -423,10 +482,10 @@ clickhouse_up() {
 step "$(t 'Database (ClickHouse in Docker)' 'База даних (ClickHouse у Docker)')" clickhouse_up
 
 install_units() {
-  cp "$PREFIX/app/deploy/flowtrack2-collector.service" "$PREFIX/app/deploy/flowtrack2-web.service" \
-     "$PREFIX/app/deploy/flowtrack2-geoip.service" "$PREFIX/app/deploy/flowtrack2-geoip.timer" /etc/systemd/system/
+  cp "$PREFIX/app/deploy/flowtrack-collector.service" "$PREFIX/app/deploy/flowtrack-web.service" \
+     "$PREFIX/app/deploy/flowtrack-geoip.service" "$PREFIX/app/deploy/flowtrack-geoip.timer" /etc/systemd/system/
   systemctl daemon-reload
-  systemctl enable -q flowtrack2-geoip.timer $UNITS
+  systemctl enable -q flowtrack-geoip.timer $UNITS
 }
 step "$(t 'System services' 'Системні сервіси')" install_units
 
@@ -450,12 +509,12 @@ fi
 
 start_all() {
   systemctl restart $UNITS
-  systemctl start flowtrack2-geoip.timer
+  systemctl start flowtrack-geoip.timer
   for _ in $(seq 1 30); do
-    if systemctl is-active -q flowtrack2-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi
+    if systemctl is-active -q flowtrack-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi
     sleep 1
   done
-  systemctl status --no-pager $UNITS; journalctl -u flowtrack2-collector -u flowtrack2-web -n 30 --no-pager; return 1
+  systemctl status --no-pager $UNITS; journalctl -u flowtrack-collector -u flowtrack-web -n 30 --no-pager; return 1
 }
 step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
 
@@ -511,8 +570,8 @@ CFG
   esac
   say ""
 fi
-say "${D}$(t 'Status:' 'Стан:') systemctl status flowtrack2-collector flowtrack2-web"
-say "$(t 'Logs:' 'Логи:')  journalctl -u flowtrack2-collector -f"
+say "${D}$(t 'Status:' 'Стан:') systemctl status flowtrack-collector flowtrack-web"
+say "$(t 'Logs:' 'Логи:')  journalctl -u flowtrack-collector -f"
 say "$(t 'Upgrade, reconfigure or remove: run the same install command again.' 'Оновити, переналаштувати чи видалити: запустіть ту саму команду встановлення ще раз.')${N}"
 }
 
@@ -526,9 +585,9 @@ uninstall() {
     ask_yn keep "$(t "Keep collected data and settings ($PREFIX, $ETC, $STATE) for a later reinstall?" "Зберегти зібрані дані й налаштування ($PREFIX, $ETC, $STATE) для повторного встановлення?")" y
   fi
   remove_all() {
-    systemctl disable --now flowtrack2-geoip.timer $UNITS 2>/dev/null || true
-    rm -f /etc/systemd/system/flowtrack2-collector.service /etc/systemd/system/flowtrack2-web.service \
-          /etc/systemd/system/flowtrack2-geoip.service /etc/systemd/system/flowtrack2-geoip.timer
+    systemctl disable --now flowtrack-geoip.timer $UNITS 2>/dev/null || true
+    rm -f /etc/systemd/system/flowtrack-collector.service /etc/systemd/system/flowtrack-web.service \
+          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer
     systemctl daemon-reload
     docker rm -f "$CH_NAME" 2>/dev/null || true
     if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowtrack 2>/dev/null || true

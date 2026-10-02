@@ -35,7 +35,7 @@ SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 
 def log(msg):
-    print(f'[flowtrack2] {msg}', flush=True)
+    print(f'[flowtrack] {msg}', flush=True)
 
 
 def g(rec, *names, default=None):

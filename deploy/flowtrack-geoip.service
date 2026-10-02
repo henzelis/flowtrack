@@ -5,4 +5,4 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/opt/flowtrack-v2/app/deploy/geoip-update.sh
+ExecStart=/opt/flowtrack/app/deploy/geoip-update.sh

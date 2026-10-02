@@ -76,44 +76,44 @@ Run from a checkout of this repository.
 ```bash
 # 1. Service user and directories
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
-sudo mkdir -p /opt/flowtrack-v2/clickhouse /opt/flowtrack-v2/geoip /etc/flowtrack-v2
+sudo mkdir -p /opt/flowtrack/clickhouse /opt/flowtrack/geoip /etc/flowtrack
 
 # 2. ClickHouse, reachable from this host only
 PW=$(openssl rand -hex 16)
 docker run -d --name flowtrack-ch --restart unless-stopped -p 127.0.0.1:8123:8123 --memory 4g \
-  --ulimit nofile=262144:262144 -v /opt/flowtrack-v2/clickhouse:/var/lib/clickhouse \
+  --ulimit nofile=262144:262144 -v /opt/flowtrack/clickhouse:/var/lib/clickhouse \
   -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD=$PW \
   clickhouse/clickhouse-server:24
 
 # 3. GeoIP databases (monthly files, free, CC BY 4.0)
 M=$(date +%Y-%m)
 for f in city asn; do
-  curl -s https://download.db-ip.com/free/dbip-$f-lite-$M.mmdb.gz | gunzip | sudo tee /opt/flowtrack-v2/geoip/dbip-$f.mmdb >/dev/null
+  curl -s https://download.db-ip.com/free/dbip-$f-lite-$M.mmdb.gz | gunzip | sudo tee /opt/flowtrack/geoip/dbip-$f.mmdb >/dev/null
 done
 
 # 4. Code and Python environment
-sudo mkdir -p /opt/flowtrack-v2/app && sudo cp -r *.py schema.sql web deploy /opt/flowtrack-v2/app/
-sudo python3 -m venv /opt/flowtrack-v2/venv
-sudo /opt/flowtrack-v2/venv/bin/pip install netflow==0.12.2 maxminddb
+sudo mkdir -p /opt/flowtrack/app && sudo cp -r *.py schema.sql web deploy /opt/flowtrack/app/
+sudo python3 -m venv /opt/flowtrack/venv
+sudo /opt/flowtrack/venv/bin/pip install netflow==0.12.2 maxminddb
 
 # 5. Configuration
-sudo cp deploy/flowtrack.env.example /etc/flowtrack-v2/env
-sudo sed -i "s/^FT_CH_PASSWORD=.*/FT_CH_PASSWORD=$PW/" /etc/flowtrack-v2/env
-sudo cp deploy/exporters.json.example /etc/flowtrack-v2/exporters.json   # edit for your devices
-sudo cp deploy/hosts.json.example /etc/flowtrack-v2/hosts.json           # optional host names
-sudo chown root:flowtrack /etc/flowtrack-v2/env && sudo chmod 640 /etc/flowtrack-v2/env
+sudo cp deploy/flowtrack.env.example /etc/flowtrack/env
+sudo sed -i "s/^FT_CH_PASSWORD=.*/FT_CH_PASSWORD=$PW/" /etc/flowtrack/env
+sudo cp deploy/exporters.json.example /etc/flowtrack/exporters.json   # edit for your devices
+sudo cp deploy/hosts.json.example /etc/flowtrack/hosts.json           # optional host names
+sudo chown root:flowtrack /etc/flowtrack/env && sudo chmod 640 /etc/flowtrack/env
 
 # 6. HTTPS certificate (self-signed; replace with your own if you have one)
-sudo mkdir -p /etc/flowtrack-v2/tls
+sudo mkdir -p /etc/flowtrack/tls
 sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 -subj "/CN=$(hostname)" \
   -addext "subjectAltName=DNS:$(hostname),IP:$(hostname -I | awk '{print $1}')" \
-  -keyout /etc/flowtrack-v2/tls/key.pem -out /etc/flowtrack-v2/tls/cert.pem
-sudo chown -R root:flowtrack /etc/flowtrack-v2/tls && sudo chmod 750 /etc/flowtrack-v2/tls && sudo chmod 640 /etc/flowtrack-v2/tls/key.pem
+  -keyout /etc/flowtrack/tls/key.pem -out /etc/flowtrack/tls/cert.pem
+sudo chown -R root:flowtrack /etc/flowtrack/tls && sudo chmod 750 /etc/flowtrack/tls && sudo chmod 640 /etc/flowtrack/tls/key.pem
 
 # 7. Services
-sudo cp deploy/flowtrack2-* /etc/systemd/system/ && sudo chmod +x /opt/flowtrack-v2/app/deploy/geoip-update.sh
+sudo cp deploy/flowtrack-* /etc/systemd/system/ && sudo chmod +x /opt/flowtrack/app/deploy/geoip-update.sh
 sudo systemctl daemon-reload
-sudo systemctl enable --now flowtrack2-collector flowtrack2-web flowtrack2-geoip.timer
+sudo systemctl enable --now flowtrack-collector flowtrack-web flowtrack-geoip.timer
 ```
 
 Open `https://<collector>:3030` and sign in as **admin / flowtrack**. The UI keeps reminding you until
@@ -121,11 +121,11 @@ the password is changed (user menu → *Change password*). The schema is created
 first start.
 
 Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
-users, sessions and devices added from the UI are stored in `/var/lib/flowtrack-v2`.
+users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`.
 
 ## Configuration
 
-`/etc/flowtrack-v2/env`:
+`/etc/flowtrack/env`:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -133,10 +133,10 @@ users, sessions and devices added from the UI are stored in `/var/lib/flowtrack-
 | `FT_EXPORTERS` | *(empty = any)* | allowed exporter IPs, comma-separated; devices added in the UI are allowed automatically |
 | `FT_FORWARD` | *(empty)* | `host:port,…` — copy every datagram unchanged to other collectors |
 | `FT_WEB_BIND`, `FT_WEB_PORT` | `0.0.0.0`, `3030` | web UI and API |
-| `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack-v2/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
+| `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
 
-Devices can be described in `/etc/flowtrack-v2/exporters.json` or from the UI (*Devices → Connect
+Devices can be described in `/etc/flowtrack/exporters.json` or from the UI (*Devices → Connect
 device*, admins only; the collector picks changes up within a minute):
 
 ```json
@@ -213,8 +213,8 @@ snippets.
   `https://`, and the session cookie is marked `Secure`. The installer creates a self-signed certificate
   (ECDSA P-256, valid 825 days, all host addresses in SAN) and renews it on upgrade when it expires
   within 30 days. Browsers warn about self-signed certificates once — compare the SHA-256 fingerprint
-  the installer prints. To use your own certificate, place it at `/etc/flowtrack-v2/tls/cert.pem` and
-  `key.pem` (readable by group `flowtrack`) and restart `flowtrack2-web`; the installer keeps it.
+  the installer prints. To use your own certificate, place it at `/etc/flowtrack/tls/cert.pem` and
+  `key.pem` (readable by group `flowtrack`) and restart `flowtrack-web`; the installer keeps it.
   `FT_TLS=no` at install time keeps plain HTTP (e.g. behind a TLS reverse proxy — then set
   `X-Forwarded-Proto: https` there).
 - ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.

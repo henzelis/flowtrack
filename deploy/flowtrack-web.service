@@ -4,8 +4,8 @@ After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
-EnvironmentFile=/etc/flowtrack-v2/env
-ExecStart=/opt/flowtrack-v2/venv/bin/python /opt/flowtrack-v2/app/api.py
+EnvironmentFile=/etc/flowtrack/env
+ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/app/api.py
 Restart=always
 RestartSec=3
 User=flowtrack
@@ -14,9 +14,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-StateDirectory=flowtrack-v2
+StateDirectory=flowtrack
 StateDirectoryMode=0750
-Environment=FT_STATE_DIR=/var/lib/flowtrack-v2
+Environment=FT_STATE_DIR=/var/lib/flowtrack
 
 [Install]
 WantedBy=multi-user.target

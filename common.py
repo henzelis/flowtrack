@@ -8,15 +8,15 @@ import urllib.parse
 import urllib.request
 from functools import lru_cache
 
-CONFIG_DIR = os.environ.get('FT_CONFIG_DIR', '/etc/flowtrack-v2')
-GEOIP_DIR = os.environ.get('FT_GEOIP_DIR', '/opt/flowtrack-v2/geoip')
+CONFIG_DIR = os.environ.get('FT_CONFIG_DIR', '/etc/flowtrack')
+GEOIP_DIR = os.environ.get('FT_GEOIP_DIR', '/opt/flowtrack/geoip')
 CH_URL = os.environ.get('FT_CH_URL', 'http://127.0.0.1:8123')
 CH_USER = os.environ.get('FT_CH_USER', 'default')
 CH_PASSWORD = os.environ.get('FT_CH_PASSWORD', '')
 CH_DB = os.environ.get('FT_CH_DB', 'flowtrack')
 
 
-STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack-v2')
+STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
 UI_EXPORTERS = os.path.join(STATE_DIR, 'exporters.json')
 
 

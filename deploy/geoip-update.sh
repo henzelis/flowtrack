@@ -1,7 +1,7 @@
 #!/bin/sh
-# Refresh the DB-IP Lite databases (free, CC BY 4.0). Run monthly by flowtrack2-geoip.timer.
+# Refresh the DB-IP Lite databases (free, CC BY 4.0). Run monthly by flowtrack-geoip.timer.
 set -eu
-DIR=${FT_GEOIP_DIR:-/opt/flowtrack-v2/geoip}
+DIR=${FT_GEOIP_DIR:-/opt/flowtrack/geoip}
 mkdir -p "$DIR"
 for f in city asn; do
   ok=0
@@ -15,4 +15,4 @@ for f in city asn; do
 done
 chmod 644 "$DIR"/dbip-*.mmdb
 # the collector caches lookups; restart it so new data is used
-systemctl try-restart flowtrack2-collector.service 2>/dev/null || true
+systemctl try-restart flowtrack-collector.service 2>/dev/null || true

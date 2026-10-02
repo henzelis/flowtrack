@@ -16,7 +16,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack-v2')
+STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
 USERS_FILE = os.path.join(STATE_DIR, 'users.json')
 SESSIONS_FILE = os.path.join(STATE_DIR, 'sessions.json')
 SESSION_TTL = 7 * 86400
