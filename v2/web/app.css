@@ -38,9 +38,6 @@ button,input,select{font:inherit;color:inherit}
   background:linear-gradient(160deg,var(--panel-2),var(--panel) 60%);
   border:1px solid var(--edge);
   box-shadow:inset 0 1px 0 rgba(170,200,255,.14),inset 0 0 30px rgba(60,110,255,.05),0 12px 40px rgba(0,4,20,.45)}
-.glass::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .25s;
-  background:radial-gradient(380px circle at var(--mx,50%) var(--my,0%),rgba(120,170,255,.08),transparent 45%)}
-.glass:hover::after{opacity:1}
 
 /* sidebar */
 .side{position:sticky;top:0;height:100vh;height:100dvh;display:flex;flex-direction:column;gap:22px;padding:22px 16px calc(18px + env(safe-area-inset-bottom,0px));

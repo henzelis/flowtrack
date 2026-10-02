@@ -661,8 +661,6 @@ q.addEventListener('keydown', e => {
 });
 document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== q && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); } });
 document.getElementById('bell').onclick = () => { state.view = 'threats'; render(); };
-let sheenEv = null;
-document.addEventListener('pointermove', e => { if (!sheenEv) requestAnimationFrame(() => { const ev = sheenEv; sheenEv = null; const el = ev.target.closest && ev.target.closest('.glass'); if (!el) return; const r = el.getBoundingClientRect(); el.style.setProperty('--mx', (ev.clientX - r.left) + 'px'); el.style.setProperty('--my', (ev.clientY - r.top) + 'px'); }); sheenEv = e; }, {passive:true});
 
 // sidebar health: real collector ingest rate
 const ingHist = [];
