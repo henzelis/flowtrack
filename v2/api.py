@@ -33,7 +33,7 @@ FILTERS = {
     'dir': ('dir', 'String'), 'proto': ('proto', 'UInt8'),
 }
 DIMS = {'int_ip': 'int_ip', 'ext_ip': 'ext_ip', 'service': 'service', 'l7': 'l7', 'country': 'country', 'city': 'city',
-        'asn': 'asn', 'ext_port': 'ext_port', 'exporter': 'exporter', 'dir': 'dir'}
+        'asn': 'asn', 'ext_port': 'ext_port', 'exporter': 'exporter', 'dir': 'dir', 'proto': 'proto'}
 
 
 # ------------------------------------------------------------------ names
@@ -156,7 +156,7 @@ def api_summary(q):
     r = ch(f"""SELECT
         sumIf(bytes, cur) AS s_bytes, sumIf(bytes, cur AND dir = 'up') AS s_up, sumIf(bytes, cur AND dir = 'down') AS s_down,
         countIf(cur) AS s_flows, sumIf(packets, cur) AS s_packets,
-        uniqExactIf(int_ip, cur) + uniqExactIf(ext_ip, cur) AS s_ips,
+        uniqExactIf(int_ip, cur) + uniqExactIf(ext_ip, cur) AS s_ips, uniqExactIf(int_ip, cur) AS s_hosts, uniqExactIf(int_ip, NOT cur) AS s_p_hosts,
         sumIf(bytes, NOT cur) AS s_p_bytes, countIf(NOT cur) AS s_p_flows, uniqExactIf(int_ip, NOT cur) + uniqExactIf(ext_ip, NOT cur) AS s_p_ips,
         toUnixTimestamp(min(ts)) AS s_oldest
       FROM (SELECT ts, dir, bytes, packets, int_ip, ext_ip, ts >= now() - toIntervalSecond({{rng:UInt32}}) AS cur FROM flows WHERE {wprev})""", p, fmt='JSON')[0]
@@ -203,6 +203,15 @@ def api_top(q):
             FROM flows WHERE {where} GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
         for r in rows:
             r['name'] = NAMES.get(r['int_ip'])
+    elif dim == 'host_svc':     # each inside host with its main service and L7 protocol
+        rows = ch(f"""SELECT int_ip AS k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto,
+                sum(u) AS up, sum(d) AS dn, sum(f) AS fl, 0 AS pk
+            FROM (SELECT int_ip, service, l7, proto, sum(bytes) AS b, sumIf(bytes, dir = 'up') AS u, sumIf(bytes, dir != 'up') AS d, count() AS f
+                  FROM flows WHERE {where} GROUP BY int_ip, service, l7, proto)
+            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+        for r in rows:
+            r['name'] = NAMES.get(r['k'])
+            r['proto'] = int(r['proto'])
     elif dim in DIMS:
         col = DIMS[dim]
         extra = ''
@@ -214,6 +223,8 @@ def api_top(q):
             extra = ', uniqExact(int_ip) AS hosts, any(l7) AS l7'
         elif dim == 'city':
             extra = ', any(country) AS country, any(lat) AS la, any(lon) AS lo'
+        elif dim == 'ext_port':
+            extra = ', any(l7) AS l7, any(proto) AS proto_n, uniqExact(int_ip) AS hosts, uniqExact(ext_ip) AS peers, any(service) AS service'
         rows = ch(f"""SELECT toString({col}) AS k, sumIf(bytes, dir = 'up') AS up, sumIf(bytes, dir != 'up') AS dn,
                 count() AS fl, sum(packets) AS pk {extra}
             FROM flows WHERE {where} GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
@@ -224,7 +235,7 @@ def api_top(q):
         raise BadRequest('bad dim')
     tot = ch(f"SELECT sum(bytes) AS b FROM flows WHERE {where}", p, fmt='JSON')[0]['b']
     for r in rows:
-        for k in ('up', 'dn', 'fl', 'pk', 'hosts', 'asn'):
+        for k in ('up', 'dn', 'fl', 'pk', 'hosts', 'asn', 'peers', 'proto_n'):
             if k in r:
                 r[k] = int(r[k])
     return {'total': int(tot), 'rows': rows}

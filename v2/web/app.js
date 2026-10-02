@@ -508,29 +508,128 @@ function recTable(rows){
 }
 document.addEventListener('click', e => { const tr = e.target.closest && e.target.closest('tr[data-rec]'); if (!tr || e.target.closest('[data-f]')) return; const i = +tr.dataset.rec; state.openFlow = state.openFlow === i ? null : i; const box = document.getElementById('recBox'); if (box && window.__recs) { box.innerHTML = recTable(window.__recs); wireFilters(box); } });
 
+// tabs shared by the "top" pages
+const topTabs = cur => `<div class="seg tabs" id="topTabs" role="tablist">${[['overview', 'Огляд'], ['talkers', 'Топ хостів'], ['apps', 'Сервіси'], ['ports', 'Порти']].map(([k, l]) => `<button role="tab" data-v="${k}" aria-pressed="${k === cur}">${l}</button>`).join('')}</div>`;
+const wireTabs = () => wireSeg('topTabs', v => { state.view = v; render(); });
+const pageHead = (ic, title, sub, cur) => `<section class="glass panel s12 pagehead">${ph(ic, title, sub, topTabs(cur), true)}</section>`;
+const HOSTPAL = ['#27D3F5', '#FF4FA0', '#2F7BFF', '#5AC8FA', '#FFB547', '#F0508C', '#2EE59D', '#A06BFF', '#4C7DFF', '#8A96B4'];
+const L4 = {1:'ICMP', 6:'TCP', 17:'UDP', 47:'GRE', 50:'ESP', 51:'AH', 58:'ICMPv6', 132:'SCTP'};
+function downloadCsv(name, header, rows){
+  const q = v => { const t = String(v ?? ''); return /[",\n;]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const blob = new Blob(['﻿' + [header, ...rows].map(r => r.map(q).join(',')).join('\n')], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function vTalkers(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', 'Топ хостів', 'внутрішні адреси · клік відкриває картку хоста')}<div id="tBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('chart', 'Хости в часі', 'топ-7')}<div class="chart" id="cHosts"></div></section></div>`;
-  section('tBox', async () => {
-    const [t, ser] = await Promise.all([api('top', {dim:'int_ip', limit:200}), api('series', {by:'int_ip', top:20})]);
-    const sp = new Map(); for (const [ts, k, b] of ser.rows) { if (!sp.has(k)) sp.set(k, new Map()); sp.get(k).set(ts, b); }
-    const {ts} = grid(ser);
-    const cols = {name:r => r.name || r.k, dn:r => r.dn, up:r => r.up, tot:r => tot(r), fl:r => r.fl};
-    const rows = [...t.rows].sort((a, b) => { const f = cols[state.sort.col], A = f(a), B = f(b); return (A > B ? 1 : A < B ? -1 : 0) * state.sort.dir; });
-    const th = (c, l, num) => `<th class="sortable ${num ? 'num' : ''}" data-c="${c}">${l}${state.sort.col === c ? (state.sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`;
-    setTimeout(() => document.querySelectorAll('#tBox th.sortable').forEach(x => x.onclick = () => { const c = x.dataset.c; state.sort = {col:c, dir:state.sort.col === c ? -state.sort.dir : (c === 'name' ? 1 : -1)}; render(); }));
-    return `<div class="tw"><table><thead><tr>${th('name', 'Хост')}${th('dn', '↓ Download', 1)}${th('up', '↑ Upload', 1)}${th('tot', 'Разом', 1)}<th class="num">%</th><th>Динаміка</th>${th('fl', 'Flows', 1)}<th></th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="click" data-host="${esc(r.k)}"><td>${hostCell(r.k, r.name)}</td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td>
-        <td style="width:140px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), C.down, 140, 24) : ''}</td><td class="num mono">${fmtN(r.fl)}</td><td class="chev">›</td></tr>`).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`;
+  v.innerHTML = `<div class="grid">${pageHead('users', 'Топ хостів', 'внутрішні адреси з найбільшим обсягом трафіку', 'talkers')}
+    <div id="tKpi" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
+    <section class="glass panel s8">${ph('users', 'Топ хостів', 'за загальним обсягом · клік по рядку вибирає хост для швидких дій', '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
+    <div class="col s4">
+      <section class="glass panel">${ph('pie', 'Трафік топ-хостів', 'частка від усього обсягу')}<div id="tDonut" class="loading"></div></section>
+      <section class="glass panel">${ph('nodes', 'За протоколом L4', 'частка трафіку')}<div id="tProto" class="loading"></div></section>
+      <section class="glass panel">${ph('globe', 'Куди йде трафік', 'країни призначення')}<div id="tGeo" class="loading"></div></section>
+      <section class="glass panel">${ph('search', 'Швидкі дії', '<span id="qaFor">—</span>')}<div class="qa" id="qa"></div></section>
+    </div>
+    <section class="glass panel s6">${ph('chart', 'Тренд топ-хостів', 'топ-5 і решта')}<div class="chart" id="cTop5"></div></section>
+    <section class="glass panel s6">${ph('list', 'Топ хостів детально', 'головний сервіс і протокол кожного', '<button class="lnk" id="toFlows2">Потоки →</button>')}<div id="tDetail" class="loading"></div></section></div>`;
+  wireTabs();
+  document.getElementById('toFlows2').onclick = () => { state.view = 'flows'; render(); };
+  const limit = state.talkersAll ? 50 : 10, secs = rangeSecs();
+  fill('tMore', state.talkersAll ? 'Показати топ-10' : 'Показати топ-50');
+  document.getElementById('tMore').onclick = () => { state.talkersAll = !state.talkersAll; render(); };
+  const colorOf = new Map();
+  let selected = null, topRows = [];
+  const drawQa = () => {
+    const h = selected; fill('qaFor', h ? `для ${esc(h.name || h.k)}` : 'немає даних');
+    const box = fill('qa', h ? [
+      ['flow', 'Деталі потоків', 'сторінка Потоки з фільтром', () => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
+      ['users', 'Картка хоста', 'сервіси, протоколи, напрямки', () => openHost(h.k)],
+      ['globe', 'Геолокація', 'карта з’єднань цього хоста', () => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
+      ['list', 'Експорт CSV', 'таблиця топ-хостів', () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
+        topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))],
+    ].map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join('') : '');
+    if (box && h) { const acts = [() => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
+      () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'], topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))];
+      box.querySelectorAll('[data-qa]').forEach(b => b.onclick = acts[+b.dataset.qa]); }
+  };
+  section('tKpi', async () => {
+    const [s, ser, t] = await Promise.all([api('summary'), api('series'), api('top', {dim:'int_ip', limit:1})]);
+    const trend = (a, b) => !s.has_prev || !b ? `<span class="tr" style="color:var(--ink3)">дані з ${hhmm(s.oldest)}</span>` : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
+    const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]), top = t.rows[0];
+    const card = (ic, k, v, tr, sp, col, sub) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sub ? `<span class="s" style="grid-column:2/-1;font-size:12.5px;color:var(--ink2)">${sub}</span>` : ''}${sp ? sparkSvg(sp, col) : ''}</div>`;
+    return card('pulse', 'Загальний трафік', fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
+      + card('ip', 'Топ хост (за обсягом)', esc(top ? top.name || top.k : '—'), '', null, '', top ? `${esc(top.name ? top.k + ' · ' : '')}${fmtB(tot(top))} (${pct(tot(top), t.total)})` : '')
+      + card('users', 'Унікальні хости', fmtN(s.hosts), trend(s.hosts, s.p_hosts), fl.map(Math.sqrt), C.int)
+      + card('nodes', 'Усього flow', fmtN(s.flows), trend(s.flows, s.p_flows), fl, C.ext);
   });
-  api('series', {by:'int_ip', top:7}).then(s => { const el = document.getElementById('cHosts'); if (el) stackChart(el, s, k => k, openHost); }).catch(e => fill('cHosts', errBox(e)));
+  Promise.all([api('top', {dim:'int_ip', limit}), api('series', {by:'int_ip', top:Math.min(limit, 20)})]).then(([t, ser]) => {
+    topRows = t.rows; window.__tTotal = t.total;
+    t.rows.forEach((r, i) => colorOf.set(r.k, HOSTPAL[i % HOSTPAL.length]));
+    selected = t.rows[0] || null; drawQa();
+    const sp = new Map(); for (const [ts, k, b] of ser.rows) { if (!sp.has(k)) sp.set(k, new Map()); sp.get(k).set(ts, b); }
+    const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1;
+    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>Хост / IP</th><th style="width:26%">Обсяг</th><th class="num">%</th><th class="num">Flows</th><th class="num">Сер. швидкість</th><th>Тренд</th><th></th></tr></thead><tbody>
+      ${t.rows.map((r, i) => { const c = colorOf.get(r.k);
+        return `<tr class="click${i === 0 ? ' sel' : ''}" data-pick="${esc(r.k)}"><td class="mono">${i + 1}</td><td><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><b class="mono">${esc(r.k)}</b><br><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? 'без імені' : 'публічна адреса'))}</span></td>
+          <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div></td>
+          <td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
+          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="Картка хоста">›</button></td></tr>`; }).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`);
+    if (box) { box.classList.remove('loading');
+      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => { box.querySelectorAll('tr.sel').forEach(x => x.classList.remove('sel')); tr.classList.add('sel'); selected = t.rows.find(r => r.k === tr.dataset.pick); drawQa(); });
+      box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation(); openHost(b.dataset.open); }); }
+    // donut: top 5 + rest, same colours as the table
+    const top5 = t.rows.slice(0, 5), rest = t.total - top5.reduce((a, r) => a + tot(r), 0);
+    const drows = [...top5.map(r => ({k:r.k, label:r.name || r.k, up:r.up, dn:r.dn})), ...(rest > 0 ? [{k:'__other', label:'Інші', up:rest, dn:0}] : [])];
+    const db = fill('tDonut', `<div class="donut-wrap"><div class="chart donut" id="cTDonut"></div><div class="dl">${drows.map(r => `<i class="idot" style="background:${r.k === '__other' ? C.other : colorOf.get(r.k)}"></i>${r.k === '__other' ? '<span>Інші</span>' : `<button class="link mono" data-f="ip" data-v="${esc(r.k)}">${esc(r.label)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t"></span>`).join('')}</div></div>`);
+    if (db) { db.classList.remove('loading'); wireFilters(db); donut(document.getElementById('cTDonut'), drows.map(r => ({...r, k:r.label})), k => { const r = drows.find(x => x.label === k); return r.k === '__other' ? C.other : colorOf.get(r.k); }, [fmtB(t.total), 'весь трафік']); }
+    // stacked trend: top 5 + others, same colours
+    api('series', {by:'int_ip', top:5}).then(s5 => { const el = document.getElementById('cTop5'); if (!el) return;
+      const {ts: t5, step} = grid(s5), keys = new Map(); for (const [x, k, b] of s5.rows) { if (!keys.has(k)) keys.set(k, new Map()); keys.get(k).set(x, b); }
+      const order = [...keys.keys()].sort((a, b) => (a === '__other') - (b === '__other'));
+      const c = mkChart(el);
+      c.setOption({animation:false, grid:{left:62, right:10, top:36, bottom:24}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
+        tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
+        series:order.map(k => { const col = k === '__other' ? C.other : (colorOf.get(k) || C.other), r = t.rows.find(x => x.k === k);
+          return {name:k === '__other' ? 'інші' : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
+            areaStyle:{color:new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset:0, color:hexA(col, .45)}, {offset:1, color:hexA(col, .05)}])}, data:t5.map(x => [x * 1000, (keys.get(k).get(x) || 0) * 8 / step])}; })});
+    }).catch(e => fill('cTop5', errBox(e)));
+  }).catch(e => fill('tBox', errBox(e)));
+  section('tProto', async () => { const p = await api('top', {dim:'proto', limit:6}); const rows = p.rows.slice(0, 3), rest = p.total - rows.reduce((a, r) => a + tot(r), 0);
+    const all = [...rows.map(r => ({label:L4[r.k] || `IP/${r.k}`, v:tot(r), k:r.k})), ...(rest > 0 ? [{label:'Інше', v:rest}] : [])], cols = ['#2F7BFF', '#27D3F5', '#2EE59D', '#6E7FA6'];
+    return `<div class="pbars">${all.map((r, i) => `<span>${r.k ? `<button class="link" data-f="proto" data-v="${r.k}">${r.label}</button>` : r.label}</span><div class="vbar"><i style="width:${Math.max(1, 100 * r.v / (p.total || 1)).toFixed(1)}%;background:linear-gradient(90deg,${hexA(cols[i], .6)},${cols[i]})"></i></div><b class="mono">${pct(r.v, p.total)}</b>`).join('')}</div>`; });
+  section('tGeo', async () => { const [cc, city] = await Promise.all([api('top', {dim:'country', limit:5}), api('top', {dim:'city', limit:25})]);
+    const rest = cc.total - cc.rows.reduce((a, r) => a + tot(r), 0), cols = ['#27D3F5', '#2F7BFF', '#2EE59D', '#8B5CFF', '#FFB547'];
+    setTimeout(() => { const el = document.getElementById('cMini'); if (!el || !echarts.getMap('world')) return; const c = mkChart(el), cmax = city.rows.length ? tot(city.rows[0]) : 1;
+      c.setOption({animation:false, geo:{map:'world', silent:true, roam:false, left:0, right:0, top:0, bottom:0, itemStyle:{areaColor:'rgba(30,56,120,.45)', borderColor:'rgba(110,160,255,.25)', borderWidth:.4}},
+        series:[{type:'scatter', coordinateSystem:'geo', symbolSize:d => 4 + 10 * Math.sqrt(d[2] / cmax), itemStyle:{color:'#27D3F5', shadowBlur:10, shadowColor:'#27D3F5'},
+          data:city.rows.filter(r => r.la || r.lo).map(r => [r.lo, r.la, tot(r)])}]}); });
+    return `<div class="geomini"><div class="chart" id="cMini" style="height:120px"></div><div class="dl">${cc.rows.map((r, i) => `<i class="idot" style="background:${cols[i]}"></i><button class="link" data-f="country" data-v="${esc(r.k)}">${esc(r.k ? ccName(r.k) : 'Локальні')}</button><span class="p">${pct(tot(r), cc.total)}</span><span class="t"></span>`).join('')}${rest > 0 ? `<i class="idot" style="background:${C.other}"></i><span>Інші</span><span class="p">${pct(rest, cc.total)}</span><span class="t"></span>` : ''}</div></div>`; });
+  section('tDetail', async () => { const d = await api('top', {dim:'host_svc', limit:6});
+    return `<div class="tw"><table><thead><tr><th>Хост</th><th>Головний сервіс</th><th>Протокол</th><th class="num">Обсяг</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
+      return `<tr class="click" data-host="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(r.l7)}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
+}
+function vPorts(){
+  const v = document.getElementById('view');
+  v.innerHTML = `<div class="grid">${pageHead('ip', 'Порти', 'порти зовнішніх адрес, до яких звертаються хости', 'ports')}
+    <section class="glass panel s8">${ph('list', 'Топ портів', 'клік — фільтр за портом')}<div id="pTbl" class="loading"></div></section>
+    <section class="glass panel s4">${ph('pie', 'Протоколи L7', 'за портом')}<div id="pL7" class="loading"></div></section>
+    <section class="glass panel s12">${ph('chart', 'Порти в часі', 'топ-7')}<div class="chart" id="cPorts"></div></section></div>`;
+  wireTabs();
+  section('pTbl', async () => { const t = await api('top', {dim:'ext_port', limit:30}), max = t.rows.length ? tot(t.rows[0]) : 1;
+    return `<div class="tw"><table><thead><tr><th>Порт</th><th>Протокол</th><th>Типовий сервіс</th><th style="width:24%">Обсяг</th><th class="num">%</th><th class="num">Хостів</th><th class="num">Зовн. адрес</th><th class="num">Flows</th></tr></thead><tbody>
+      ${t.rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(r.l7)}</span></td><td>${svcBadge(r.service)}</td>
+        <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,#1aa7d6,#27D3F5)"></i></div></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td><td class="num mono">${fmtN(r.peers)}</td><td class="num mono">${fmtN(r.fl)}</td></tr>`).join('')}</tbody></table></div>`; });
+  section('pL7', async () => { const t = await api('top', {dim:'l7', limit:8});
+    setTimeout(() => { const el = document.getElementById('cPL7'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
+    return `<div class="chart" id="cPL7" style="height:200px"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
+  api('series', {by:'ext_port', top:7}).then(s => { const el = document.getElementById('cPorts'); if (el) stackChart(el, s, k => ':' + k, k => addFilter('port', k)); }).catch(e => fill('cPorts', errBox(e)));
 }
 function vApps(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('chart', 'Сервіси в часі', 'сервіс визначається за ASN адреси призначення та портом')}<div class="chart" id="cApps"></div></section>
+  v.innerHTML = `<div class="grid">${pageHead('grid', 'Сервіси', 'сервіс визначається за ASN адреси призначення та портом', 'apps')}<section class="glass panel s12">${ph('chart', 'Сервіси в часі', 'сервіс визначається за ASN адреси призначення та портом')}<div class="chart" id="cApps"></div></section>
     <section class="glass panel s8">${ph('grid', 'Сервіси')}<div id="aBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('pie', 'Протоколи', 'L7 за портом')}<div id="pBox" class="loading"></div></section></div>`;
+  wireTabs();
   api('series', {by:'service', top:7}).then(s => { const el = document.getElementById('cApps'); if (el) stackChart(el, s, k => k, k => addFilter('service', k)); }).catch(e => fill('cApps', errBox(e)));
   section('aBox', async () => { const t = await api('top', {dim:'service', limit:100});
     return `<div class="tw"><table><thead><tr><th>Сервіс</th><th>Протокол</th><th class="num">↓</th><th class="num">↑</th><th class="num">Разом</th><th class="num">%</th><th class="num">Хостів</th></tr></thead><tbody>
@@ -760,7 +859,7 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, talkers:vTalkers, apps:vApps, geo:vGeo, threats:vThreats, devices:vDevices, users:vUsers};
+const VIEWS = {overview:vOverview, flows:vFlows, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, devices:vDevices, users:vUsers};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
