@@ -691,12 +691,16 @@ function renderUser(){
     <div class="menu glass" id="userMenu" role="menu" hidden><button role="menuitem" id="miPass">Змінити пароль</button>${isAdmin() ? '<button role="menuitem" id="miUsers">Користувачі</button>' : ''}<button role="menuitem" id="miOut">Вийти</button></div>`;
   const btn = document.getElementById('userBtn'), menu = document.getElementById('userMenu');
   btn.onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); };
-  document.addEventListener('click', () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }, {once:true});
+  menu.addEventListener('click', () => closeUserMenu());
   document.getElementById('miPass').onclick = openPassword;
   const pw = document.getElementById('pwWarn'); if (pw) pw.onclick = openPassword;
   const mu = document.getElementById('miUsers'); if (mu) mu.onclick = () => { state.view = 'users'; render(); };
   document.getElementById('miOut').onclick = async () => { try { await apiPost('logout', {}); } catch (e) {} ME = null; showLogin(); };
 }
+function closeUserMenu(){ const m = document.getElementById('userMenu'), b = document.getElementById('userBtn'); if (m) m.hidden = true; if (b) b.setAttribute('aria-expanded', 'false'); }
+// one global listener: any click outside the user menu, or Esc, closes it
+document.addEventListener('click', e => { if (!e.target.closest || !e.target.closest('#userWrap')) closeUserMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeUserMenu(); });
 function openPassword(){
   const m = openModal('Змінити пароль', ME.default_password ? 'Зараз використовується стандартний пароль' : '', `<form class="form" id="pForm">
     <label>Поточний пароль<input id="pCur" type="password" required autocomplete="current-password"></label>

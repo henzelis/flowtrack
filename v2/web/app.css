@@ -17,6 +17,7 @@
   --glass-blur:blur(18px) saturate(150%);
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}   /* `hidden` must win over component display rules */
 html,body{height:100%}
 body{margin:0;color:var(--ink);font:14px/1.5 var(--f-body);overflow-x:hidden;background:var(--bg1)}
 /* fixed backdrop as its own composited layer (cheaper than background-attachment:fixed) */
