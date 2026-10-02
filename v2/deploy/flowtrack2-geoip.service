@@ -1,0 +1,8 @@
+[Unit]
+Description=FlowTrack v2 GeoIP database refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/flowtrack-v2/app/deploy/geoip-update.sh

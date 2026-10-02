@@ -41,6 +41,28 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
 - Login with two roles: **admin** (users, devices) and **viewer** (read-only).
 
+## Quick start
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+```
+
+The installer (English or Ukrainian) installs the dependencies — Python, Docker if missing (asks
+first), ClickHouse in Docker, DB-IP GeoIP databases with a monthly refresh — then asks a few questions
+with defaults: free NetFlow/IPFIX and web ports (busy ports are detected and the next free one is
+offered), your exporter type, its IP and WAN interface, the admin password and whether to open the ports
+in ufw/firewalld. It finishes with the URL and a ready-made exporter configuration for your vendor.
+
+Run the same command again to **upgrade**, **reconfigure** or **uninstall**. Unattended install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | \
+  sudo FT_ADMIN_PASSWORD='change-me-now' FT_VENDOR=Fortinet FT_EXPORTER_IP=192.0.2.1 bash -s -- --yes
+```
+
+Supported: Debian/Ubuntu (apt) and Fedora/RHEL/Rocky/Alma (dnf) with systemd, x86_64 or arm64. Details
+are logged to `/var/log/flowtrack-install.log`. The manual steps below do the same by hand.
+
 ## Requirements
 
 - Linux host reachable from the exporters (UDP 2055), Python 3.10+, Docker (for ClickHouse).
@@ -48,7 +70,7 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   25 MB per million records. A small office exporting ~5 records/s needs about 300 MB for the 30-day
   raw retention.
 
-## Install
+## Manual install
 
 Run from a checkout of this repository.
 
