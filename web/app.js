@@ -66,7 +66,7 @@ function cleanup(){ runScope(rootScope); }
 function childScope(){ const list = []; rootScope.push(() => runScope(list));
   return {run:fn => { const prev = curScope; curScope = list; try { return fn(); } finally { curScope = prev; } }, dispose:() => runScope(list)}; }
 const setPressed = (id, val) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === val)));
-const scaleNote = () => state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : '';
+const scaleNote = () => '';   // the pressed toggle shows the scale; labels keep a constant length
 const charts = [];
 function mkChart(el){ const c = echarts.init(el, null, {renderer:'canvas'}); charts.push(c);
   // axis labels are measured with the web font; re-layout once it has loaded so nothing gets clipped
@@ -344,7 +344,7 @@ const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2
   globe:'M9 2a7 7 0 1 0 0 14A7 7 0 0 0 9 2zM2 9h14M9 2c2.5 2.5 2.5 11.5 0 14M9 2c-2.5 2.5-2.5 11.5 0 14', chart:'M2 15l4-6 3 3 5-8 2 2', conv:'M3 5h8l-2-2M15 13H7l2 2', list:'M3 5h12M3 9h12M3 13h8',
   users:navIcon('talkers'), shield:navIcon('threats'), dev:navIcon('devices'), pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
 const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
-const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l]) => `<button data-v="${v}" aria-pressed="${v === val}">${l}</button>`).join('')}</div>`;
+const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const wireSeg = (id, fn) => document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => fn(b.dataset.v));
 const hostCell = (ip, name) => `<span class="idot int"></span><b class="mono">${esc(name || ip)}</b>${name ? ` <span class="nat">${esc(ip)}</span>` : ''}`;
 const svcBadge = name => { const c = keyColor(name); return `<span class="app-b"><i style="background:${hexA(c, .85)};box-shadow:0 0 8px ${hexA(c, .6)}">${esc((name || '?')[0])}</i>${esc(name)}</span>`; };
@@ -385,12 +385,12 @@ function mountHero(){
   if (heroScope) heroScope.dispose();
   heroScope = childScope();
   const g = state.heroMode === 'graph';
-  fill('heroSec', `${ph('flow', 'Мережевий трафік', g ? '<span id="heroLbl">наживо · вікно 2 хв</span>' : 'з’єднання за вибраний період · нові лінії з’являються наживо',
-      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', 'Стиснений'], ['lin', 'Лінійний']], state.scale)}</span>` + seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
+  fill('heroSec', `${ph('flow', 'Мережевий трафік', g ? '<span id="heroLbl" class="tnum">наживо · вікно 2 хв · оновлюється…</span>' : 'з’єднання за вибраний період · нові лінії з’являються наживо',
+      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', 'Стиснений', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими'], ['lin', 'Лінійний', 'Ширина пропорційна обсягу']], state.scale)}</span>` + seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
       + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>внутр.</span><span><i style="background:${C.ext}"></i>зовн.</span></span>`)}
     <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div>`);
   wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
-  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); const l = document.getElementById('heroLbl'); if (l) l.textContent = l.textContent.replace(/ · ширина ∝ √обсягу$/, '') + scaleNote(); });
+  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
   const hb = document.getElementById('heroBody'), myScope = heroScope;
   heroScope.run(() => {
     if (g) createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
@@ -461,7 +461,7 @@ function vFlows(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
     <section class="glass panel s9">${ph('flow', 'Обмін між внутрішніми та зовнішніми адресами', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»',
-      seg('metricSeg', [['bytes', 'Байти'], ['packets', 'Пакети'], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', 'Стиснений'], ['lin', 'Лінійний']], state.scale) + seg('liveSeg', [['live', 'Наживо'], ['period', 'За період']], state.flowLive ? 'live' : 'period'), true)}
+      seg('metricSeg', [['bytes', 'Байти'], ['packets', 'Пакети'], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', 'Стиснений', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими'], ['lin', 'Лінійний', 'Ширина пропорційна обсягу']], state.scale) + seg('liveSeg', [['live', 'Наживо'], ['period', 'За період']], state.flowLive ? 'live' : 'period'), true)}
       <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>download (зовн. → внутр.)</span><span><i class="bar" style="background:${C.up}"></i>upload (внутр. → зовн.)</span><span><i style="background:${C.int}"></i>внутрішня адреса</span><span><i style="background:${C.ext}"></i>зовнішня адреса</span><span id="winLbl" class="mono" style="margin-left:auto"></span></div>
       <div class="river big" id="river"></div></section>
     <div class="col s3">

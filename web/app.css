@@ -329,3 +329,4 @@ table.compact .app-b{max-width:120px;overflow:hidden;text-overflow:ellipsis;whit
 .hero{display:flex;flex-direction:column}
 .hero > .river,.hero > .chart{flex:1 1 auto;min-height:420px}
 .donut-wrap .dl{gap:8px 10px;font-size:12.5px}
+.tnum,#heroLbl,#winLbl{font-variant-numeric:tabular-nums}
