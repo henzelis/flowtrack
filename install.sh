@@ -13,6 +13,8 @@
 # Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
 #                       FT_WAN_IFS FT_CITY FT_COUNTRY FT_ADMIN_PASSWORD FT_OPEN_FIREWALL=yes|no
 #                       FT_INSTALL_DOCKER=yes|no
+# HTTPS is on by default with a self-signed certificate; FT_TLS=no keeps plain HTTP.
+# Own certificate: put it in /etc/flowtrack-v2/tls/{cert,key}.pem — the installer keeps it.
 # Source override (testing): FT_SOURCE=<tar.gz URL>  FT_REF=<branch or tag>
 #
 # Everything is wrapped in main() so a partially downloaded script never runs.
@@ -30,6 +32,9 @@ LOG=/var/log/flowtrack-install.log
 CH_IMAGE=clickhouse/clickhouse-server:24.8
 CH_NAME=flowtrack-ch
 UNITS="flowtrack2-collector flowtrack2-web"
+TLS_DIR=$ETC/tls
+USE_TLS=yes; case "${FT_TLS:-yes}" in no|NO|0|false|off) USE_TLS=no ;; esac
+PROTO=https; [ "$USE_TLS" = yes ] || PROTO=http
 
 YES=0; MODE=""; LANG_SEL=""
 while [ $# -gt 0 ]; do
@@ -181,15 +186,25 @@ fi
 [ "$MODE" = uninstall ] && { uninstall; exit 0; }
 
 # ------------------------------------------------------------------ dependencies
-pkg_install() {
+pkg_install() {   # installs only what is missing — never upgrades the user's existing packages
+  local missing=()
   if [ "$PKG" = apt ]; then
+    for p in curl ca-certificates python3 python3-venv python3-pip openssl iproute2 tar gzip; do
+      dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
+    [ ${#missing[@]} -eq 0 ] && { echo "all packages present"; return 0; }
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update -q && apt-get install -yq curl ca-certificates python3 python3-venv python3-pip openssl iproute2 tar gzip
+    apt-get update -q && apt-get install -yq --no-upgrade "${missing[@]}"
   else
-    dnf install -yq curl ca-certificates python3 python3-pip openssl iproute tar gzip
+    for p in curl ca-certificates python3 python3-pip openssl iproute tar gzip; do
+      rpm -q "$p" >/dev/null 2>&1 || missing+=("$p"); done
+    [ ${#missing[@]} -eq 0 ] && { echo "all packages present"; return 0; }
+    dnf install -yq "${missing[@]}"
   fi
 }
 step "$(t 'Installing system packages' 'Встановлення системних пакетів')" pkg_install
+for tool in openssl curl ss tar; do
+  command -v "$tool" >/dev/null 2>&1 || die "$(t "'$tool' is still missing after installing packages — install it manually and re-run." "'$tool' досі відсутній після встановлення пакетів — встановіть його вручну й запустіть ще раз.")"
+done
 PYV=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || die "$(t "Python 3.8+ is required, found $PYV" "Потрібен Python 3.8+, знайдено $PYV")"
 ok "Python $PYV"
@@ -276,7 +291,7 @@ else
 
   say ""; say "${B}$(t 'Summary' 'Підсумок')${N}"
   say "  NetFlow/IPFIX   UDP ${B}$NF_PORT${N}   $(t 'from' 'від') ${EXP_IP:-$(t 'any device' 'будь-якого пристрою')}"
-  say "  $(t 'Web interface' 'Вебінтерфейс')    http://${LAN_IP:-<server>}:${B}$WEB_PORT${N}"
+  say "  $(t 'Web interface' 'Вебінтерфейс')    $PROTO://${LAN_IP:-<server>}:${B}$WEB_PORT${N}$([ "$USE_TLS" = yes ] && t ' (self-signed certificate)' ' (самопідписаний сертифікат)')"
   [ "$WRITE_DEVICE" = y ] && say "  $(t 'Device' 'Пристрій')         $DEV_NAME ($VENDOR, $EXP_IP${WAN_IFS:+, WAN $WAN_IFS}${CITY:+, $CITY}${COUNTRY:+ $COUNTRY})"
   say "  $(t 'Admin password' 'Пароль admin')    $([ -n "$ADMIN_PW" ] && t 'set now' 'задано зараз' || t 'flowtrack (change it after login)' 'flowtrack (змініть після входу)')"
   say "  $(t 'Data' 'Дані')             $PREFIX, ClickHouse 127.0.0.1:$CH_PORT"
@@ -366,6 +381,27 @@ PY
   step "$(t 'Writing configuration' 'Запис конфігурації')" write_config
 fi
 
+ensure_tls() {
+  set_env() { if grep -q "^$1=" "$ETC/env"; then sed -i "s|^$1=.*|$1=$2|" "$ETC/env"; else echo "$1=$2" >> "$ETC/env"; fi; }
+  if [ "$USE_TLS" != yes ]; then set_env FT_TLS_CERT ""; set_env FT_TLS_KEY ""; return 0; fi
+  mkdir -p "$TLS_DIR"; chown root:flowtrack "$TLS_DIR"; chmod 750 "$TLS_DIR"
+  local cert="$TLS_DIR/cert.pem" key="$TLS_DIR/key.pem" san ip
+  # keep an existing certificate (also a user-supplied one) unless it expires within 30 days
+  if [ -s "$cert" ] && [ -s "$key" ] && openssl x509 -checkend 2592000 -noout -in "$cert" >/dev/null 2>&1; then :
+  else
+    san="DNS:localhost,IP:127.0.0.1"
+    for h in "$(hostname 2>/dev/null)" "$(hostname -f 2>/dev/null)"; do [ -n "$h" ] && case ",$san," in *",DNS:$h,"*) ;; *) san="$san,DNS:$h" ;; esac; done
+    for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel)/ {split($4, a, "/"); print a[1]}'); do san="$san,IP:$ip"; done
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 -sha256 \
+      -subj "/CN=$(hostname 2>/dev/null || echo flowtrack)/O=FlowTrack" -addext "subjectAltName=$san" \
+      -addext "keyUsage=digitalSignature" -addext "extendedKeyUsage=serverAuth" -keyout "$key.tmp" -out "$cert.tmp"
+    mv "$key.tmp" "$key"; mv "$cert.tmp" "$cert"
+  fi
+  chown root:flowtrack "$cert" "$key"; chmod 644 "$cert"; chmod 640 "$key"
+  set_env FT_TLS_CERT "$cert"; set_env FT_TLS_KEY "$key"
+}
+step "$(t 'HTTPS certificate' 'Сертифікат HTTPS')" ensure_tls
+
 clickhouse_up() {
   local mem cur
   mem=$(awk '/MemTotal/ {m=int($2/1024/1024/4); if (m<1) m=1; if (m>4) m=4; print m}' /proc/meminfo)
@@ -416,7 +452,7 @@ start_all() {
   systemctl restart $UNITS
   systemctl start flowtrack2-geoip.timer
   for _ in $(seq 1 30); do
-    if systemctl is-active -q flowtrack2-collector && curl -fsS -o /dev/null "http://127.0.0.1:$WEB_PORT/"; then return 0; fi
+    if systemctl is-active -q flowtrack2-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi
     sleep 1
   done
   systemctl status --no-pager $UNITS; journalctl -u flowtrack2-collector -u flowtrack2-web -n 30 --no-pager; return 1
@@ -427,8 +463,14 @@ step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
 say ""
 say "${G}${B}$(t 'FlowTrack is running.' 'FlowTrack працює.')${N}"
 say ""
-for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel)/ {split($4, a, "/"); print a[1]}'); do say "  ${B}http://$ip:$WEB_PORT${N}"; done
-say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"
+for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel)/ {split($4, a, "/"); print a[1]}'); do say "  ${B}$PROTO://$ip:$WEB_PORT${N}"; done
+if [ "$USE_TLS" = yes ]; then
+  FP=$(openssl x509 -noout -fingerprint -sha256 -in "$TLS_DIR/cert.pem" 2>/dev/null | cut -d= -f2)
+  say "  ${D}$(t 'The certificate is self-signed, so the browser warns once — check that its SHA-256 fingerprint matches, then continue:' 'Сертифікат самопідписаний, тож браузер один раз попередить — звірте відбиток SHA-256 і продовжуйте:')${N}"
+  say "  ${D}$FP${N}"
+fi
+if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwords are unchanged.' 'Вхід: ваші користувачі й паролі не змінились.')"
+else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
 say ""
 if [ "$MODE" != upgrade ]; then
   CIP=${LAN_IP:-<collector-ip>}

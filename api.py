@@ -7,7 +7,9 @@ never by string interpolation; dimension names come from fixed whitelists.
 import ipaddress
 import json
 import os
+import re
 import socket
+import ssl
 import sys
 import threading
 import time
@@ -22,6 +24,8 @@ from common import CHError, ch, exporters_mtime, is_private, load_exporters, loa
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_WEB_PORT', '3030'))
+TLS_CERT = os.environ.get('FT_TLS_CERT', '')
+TLS_KEY = os.environ.get('FT_TLS_KEY', '')
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 RANGES = {'1h': 3600, '6h': 6 * 3600, '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400}
 STEP = {3600: 60, 6 * 3600: 300, 86400: 300, 7 * 86400: 3600, 30 * 86400: 4 * 3600}
@@ -454,6 +458,7 @@ COOKIE = 'ft_session'
 
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
+    timeout = 60          # idle keep-alive connections do not hold a thread forever
 
     def log_message(self, *a):
         pass
@@ -471,7 +476,8 @@ class H(BaseHTTPRequestHandler):
         return self.client_address[0]
 
     def set_cookie(self, value, max_age):
-        secure = '; Secure' if self.headers.get('X-Forwarded-Proto') == 'https' else ''
+        tls = isinstance(self.connection, ssl.SSLSocket) or self.headers.get('X-Forwarded-Proto') == 'https'
+        secure = '; Secure' if tls else ''
         self._cookie = f'{COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}'
 
     def json(self, code, obj):
@@ -576,9 +582,86 @@ class H(BaseHTTPRequestHandler):
             return self.json(500, {'error': 'не вдалося зберегти'})
 
 
+_HOST_RE = re.compile(r'^[A-Za-z0-9.\-]+$|^\[[0-9A-Fa-f:.]+\]$')
+
+
+def redirect_to_https(sock, port):
+    """A plain-HTTP request on the HTTPS port: answer with a redirect to the same URL over HTTPS."""
+    try:
+        data = sock.recv(8192).decode('latin-1')
+    except OSError:
+        return
+    lines = data.split('\r\n')
+    parts = lines[0].split(' ') if lines else []
+    path = parts[1] if len(parts) >= 2 and parts[1].startswith('/') else '/'
+    host = ''
+    for line in lines[1:]:
+        if line.lower().startswith('host:'):
+            host = line.split(':', 1)[1].strip()
+            break
+    if host.startswith('['):
+        host = host.split(']')[0] + ']'
+    else:
+        host = host.split(':')[0]
+    if not _HOST_RE.match(host or '-'):
+        host = sock.getsockname()[0]
+    if any(c in path for c in '\r\n ') or len(path) > 2000:
+        path = '/'
+    body = f'HTTP/1.1 301 Moved Permanently\r\nLocation: https://{host}:{port}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+    try:
+        sock.sendall(body.encode('latin-1'))
+    except OSError:
+        pass
+
+
+class Server(ThreadingHTTPServer):
+    """HTTP(S) server. With TLS, the same port also answers plain HTTP with a redirect to HTTPS:
+    the first byte of a TLS connection is a handshake record (0x16), anything else is HTTP.
+    TLS handshakes run in the per-connection thread, so slow clients never block accept()."""
+    daemon_threads = True
+
+    def __init__(self, addr, handler, ctx=None):
+        super().__init__(addr, handler)
+        self.ctx = ctx
+
+    def finish_request(self, request, client_address):
+        if not self.ctx:
+            return super().finish_request(request, client_address)
+        try:
+            request.settimeout(10)
+            first = request.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return
+        if not first:
+            return
+        if first != b'\x16':
+            return redirect_to_https(request, self.server_address[1])
+        try:
+            tls = self.ctx.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):
+            return              # e.g. the browser rejected the self-signed certificate and closed
+        try:
+            self.RequestHandlerClass(tls, client_address, self)
+        finally:
+            try:
+                tls.close()
+            except OSError:
+                pass
+
+
+def tls_context():
+    if not (TLS_CERT and TLS_KEY):
+        return None
+    ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(TLS_CERT, TLS_KEY)
+    return ctx
+
+
 if __name__ == '__main__':
     AUTH = Auth()
-    srv = ThreadingHTTPServer((BIND, PORT), H)
-    srv.daemon_threads = True
-    print(f'[flowtrack-api] serving on http://{BIND}:{PORT}', flush=True)
+    ctx = tls_context()
+    srv = Server((BIND, PORT), H, ctx)
+    print(f'[flowtrack-api] serving on {"https" if ctx else "http"}://{BIND}:{PORT}'
+          f'{" (plain HTTP redirects to HTTPS)" if ctx else ""}', flush=True)
     srv.serve_forever()

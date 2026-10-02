@@ -48,7 +48,9 @@ The installer (English or Ukrainian) installs the dependencies — Python, Docke
 first), ClickHouse in Docker, DB-IP GeoIP databases with a monthly refresh — then asks a few questions
 with defaults: free NetFlow/IPFIX and web ports (busy ports are detected and the next free one is
 offered), your exporter type, its IP and WAN interface, the admin password and whether to open the ports
-in ufw/firewalld. It finishes with the URL and a ready-made exporter configuration for your vendor.
+in ufw/firewalld. The web interface is served over **HTTPS** with an automatically generated
+self-signed certificate. It finishes with the URL, the certificate fingerprint and a ready-made exporter
+configuration for your vendor.
 
 Run the same command again to **upgrade**, **reconfigure** or **uninstall**. Unattended install:
 
@@ -101,13 +103,20 @@ sudo cp deploy/exporters.json.example /etc/flowtrack-v2/exporters.json   # edit 
 sudo cp deploy/hosts.json.example /etc/flowtrack-v2/hosts.json           # optional host names
 sudo chown root:flowtrack /etc/flowtrack-v2/env && sudo chmod 640 /etc/flowtrack-v2/env
 
-# 6. Services
+# 6. HTTPS certificate (self-signed; replace with your own if you have one)
+sudo mkdir -p /etc/flowtrack-v2/tls
+sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 -subj "/CN=$(hostname)" \
+  -addext "subjectAltName=DNS:$(hostname),IP:$(hostname -I | awk '{print $1}')" \
+  -keyout /etc/flowtrack-v2/tls/key.pem -out /etc/flowtrack-v2/tls/cert.pem
+sudo chown -R root:flowtrack /etc/flowtrack-v2/tls && sudo chmod 750 /etc/flowtrack-v2/tls && sudo chmod 640 /etc/flowtrack-v2/tls/key.pem
+
+# 7. Services
 sudo cp deploy/flowtrack2-* /etc/systemd/system/ && sudo chmod +x /opt/flowtrack-v2/app/deploy/geoip-update.sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now flowtrack2-collector flowtrack2-web flowtrack2-geoip.timer
 ```
 
-Open `http://<collector>:3030` and sign in as **admin / flowtrack**. The UI keeps reminding you until
+Open `https://<collector>:3030` and sign in as **admin / flowtrack**. The UI keeps reminding you until
 the password is changed (user menu → *Change password*). The schema is created by the collector on its
 first start.
 
@@ -124,6 +133,7 @@ users, sessions and devices added from the UI are stored in `/var/lib/flowtrack-
 | `FT_EXPORTERS` | *(empty = any)* | allowed exporter IPs, comma-separated; devices added in the UI are allowed automatically |
 | `FT_FORWARD` | *(empty)* | `host:port,…` — copy every datagram unchanged to other collectors |
 | `FT_WEB_BIND`, `FT_WEB_PORT` | `0.0.0.0`, `3030` | web UI and API |
+| `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack-v2/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
 
 Devices can be described in `/etc/flowtrack-v2/exporters.json` or from the UI (*Devices → Connect
@@ -199,9 +209,14 @@ snippets.
   stored. Sessions use an `HttpOnly`, `SameSite=Strict` cookie and expire after 7 days of inactivity.
 - Five failed logins from one address within five minutes block further attempts for a while.
 - Roles are enforced by the API, not only hidden in the UI.
-- The built-in server speaks plain HTTP. Keep port 3030 on a trusted network, or put a TLS reverse
-  proxy (nginx, Caddy) in front of it; set `X-Forwarded-Proto: https` so the session cookie is marked
-  `Secure`.
+- The web interface is HTTPS-only (TLS 1.2+). Plain `http://` on the same port is redirected to
+  `https://`, and the session cookie is marked `Secure`. The installer creates a self-signed certificate
+  (ECDSA P-256, valid 825 days, all host addresses in SAN) and renews it on upgrade when it expires
+  within 30 days. Browsers warn about self-signed certificates once — compare the SHA-256 fingerprint
+  the installer prints. To use your own certificate, place it at `/etc/flowtrack-v2/tls/cert.pem` and
+  `key.pem` (readable by group `flowtrack`) and restart `flowtrack2-web`; the installer keeps it.
+  `FT_TLS=no` at install time keeps plain HTTP (e.g. behind a TLS reverse proxy — then set
+  `X-Forwarded-Proto: https` there).
 - ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.
 
 ## API
