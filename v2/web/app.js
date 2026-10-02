@@ -584,18 +584,20 @@ function openAddDevice(){
   let vendor = 'Fortinet';
   const root = document.getElementById('drawerRoot'), me = location.hostname;
   const draw = () => {
-    root.innerHTML = `<div class="scrim" id="scrim"></div><aside class="drawer glass" role="dialog" aria-modal="true" aria-label="Підключити пристрій">
+    root.innerHTML = `<div class="scrim" id="scrim"></div><div class="modal glass" role="dialog" aria-modal="true" aria-label="Підключити пристрій">
       <header><div><h3>Підключити пристрій</h3><span class="nat">Налаштуйте експорт на пристрої — він з’явиться в списку з першим пакетом</span></div><button class="btn x" id="dx">Закрити</button></header>
       <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
-      <div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc(VENDORS[vendor](me))}</pre></div>
+      <div class="cols"><div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc(VENDORS[vendor](me))}</pre></div>
       <form class="form" id="devForm"><h4 style="margin:0">2. Опис пристрою для FlowTrack (необов’язково)</h4>
         <div class="two"><label>IP, з якого йде експорт<input id="fIp" placeholder="192.0.2.1"></label><label>Назва<input id="fName" placeholder="branch-fw01"></label></div>
         <div class="two"><label>snmp-index WAN-інтерфейсів (через кому)<input id="fWan" placeholder="1"></label><label>Місто, код країни<input id="fSite" placeholder="Kyiv, UA"></label></div>
         <button class="btn primary" type="submit">Згенерувати запис</button><pre class="codebox" id="fOut" hidden></pre>
-        <p class="note" style="margin:0">Додайте запис у <span class="mono">/etc/flowtrack-v2/exporters.json</span> і перезапустіть сервіси. Без нього напрямок визначається за приватними адресами.</p></form></aside>`;
+        <p class="note" style="margin:0">Додайте запис у <span class="mono">/etc/flowtrack-v2/exporters.json</span> і перезапустіть сервіси. Без нього напрямок визначається за приватними адресами.</p></form></div></div>`;
     root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; draw(); });
-    const close = () => { root.innerHTML = ''; };
-    document.getElementById('scrim').onclick = close; document.getElementById('dx').onclick = close;
+    const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+    const onKey = e => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    document.getElementById('scrim').onclick = close; document.getElementById('dx').onclick = close; document.getElementById('dx').focus();
     document.getElementById('devForm').addEventListener('submit', e => { e.preventDefault();
       const ip = document.getElementById('fIp').value.trim() || '192.0.2.1', [city, cc] = document.getElementById('fSite').value.split(',').map(s => s.trim());
       const rec = {[ip]:{name:document.getElementById('fName').value.trim() || ip, vendor, wan_ifs:document.getElementById('fWan').value.split(',').map(s => +s.trim()).filter(n => n || n === 0), city:city || '', country:(cc || '').toUpperCase()}};
