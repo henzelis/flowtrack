@@ -298,9 +298,6 @@ button.user:focus-visible{outline:2px solid var(--blue-hi)}
 @media (max-width:900px){.user .who{display:none}}
 
 /* top hosts page */
-.pagehead{padding:14px 18px}
-.pagehead .ph{margin:0}
-.tabs button{padding:7px 18px}
 table.talkers td{padding:8px 10px;vertical-align:middle}
 table.talkers tr.is-picked td{background:rgba(47,123,255,.12)}
 table.talkers tr.is-picked td:first-child{background:linear-gradient(90deg,var(--blue-hi) 0 3px,rgba(47,123,255,.12) 3px)}

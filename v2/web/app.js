@@ -24,11 +24,15 @@ async function apiPost(path, body){
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
 }
-function addFilter(k, v, neg){
-  v = String(v);
-  if (state.filters.some(f => f.k === k && f.v === v && !!f.neg === !!neg)) return;
-  state.filters.push({k, v, neg:!!neg}); state.sel = null; render();
+// single entry point for new filters: no duplicates; a positive filter replaces the previous positive
+// filter of the same key (two would AND to nothing); exclusions stack; the opposite of a filter replaces it
+function putFilter(f){
+  const k = f.k, v = String(f.v), neg = !!f.neg;
+  if (!FILTER_KEYS.includes(k) || !v) return;
+  state.filters = state.filters.filter(x => !(x.k === k && (x.v === v || (!neg && !x.neg))));
+  state.filters.push({k, v, neg});
 }
+function addFilter(k, v, neg){ putFilter({k, v, neg}); state.sel = null; render(); }
 
 // ===================== formatting =====================
 const fmtB = b => { b = +b || 0; const u = ['B','KB','MB','GB','TB']; let i = 0; while (b >= 1000 && i < 4) { b /= 1000; i++; } return (i >= 2 ? b.toFixed(b < 10 ? 2 : 1) : Math.round(b)) + ' ' + u[i]; };
@@ -330,14 +334,15 @@ function globe(el, geo){
 // ===================== shared UI =====================
 const NAV = [
   ['overview','Огляд','M3 9.5L9 4l6 5.5V15H3z'], ['flows','Потоки','M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['talkers','Топ хостів','M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
-  ['apps','Сервіси','M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['geo','Геолокація','M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
+  ['apps','Сервіси','M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports','Порти','M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo','Геолокація','M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
   ['threats','Події','M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'], ['devices','Пристрої','M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6'],
   ['users','Користувачі','M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4', 'admin'],
 ];
+const navIcon = k => NAV.find(n => n[0] === k)[2];
 const icon = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
-const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2 0 1 0 0 .01M14 13a2 2 0 1 0 0 .01M8 5l-3 6M10 5l3 6', ip:'M3 5h12v6H3zM6 14h6M7 8h.01M10 8h.01', grid:NAV[3][2], flow:NAV[1][2],
+const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2 0 1 0 0 .01M14 13a2 2 0 1 0 0 .01M8 5l-3 6M10 5l3 6', ip:'M3 5h12v6H3zM6 14h6M7 8h.01M10 8h.01', grid:navIcon('apps'), flow:navIcon('flows'),
   globe:'M9 2a7 7 0 1 0 0 14A7 7 0 0 0 9 2zM2 9h14M9 2c2.5 2.5 2.5 11.5 0 14M9 2c-2.5 2.5-2.5 11.5 0 14', chart:'M2 15l4-6 3 3 5-8 2 2', conv:'M3 5h8l-2-2M15 13H7l2 2', list:'M3 5h12M3 9h12M3 13h8',
-  users:NAV[2][2], shield:NAV[5][2], dev:NAV[6][2], pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
+  users:navIcon('talkers'), shield:navIcon('threats'), dev:navIcon('devices'), pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
 const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l]) => `<button data-v="${v}" aria-pressed="${v === val}">${l}</button>`).join('')}</div>`;
 const wireSeg = (id, fn) => document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => fn(b.dataset.v));
@@ -473,7 +478,7 @@ function vFlows(){
     if (seq !== renderSeq) return; fill('insp', html);
     const el = document.getElementById('cInsp');
     if (el) api('series', {}, JSON.parse(el.dataset.extra)).then(s => { if (el.isConnected) trendChart(el, s, true); });
-    const b = document.getElementById('inspFilter'); if (b) b.onclick = () => { const ex = JSON.parse(el.dataset.extra); ex.forEach(f => state.filters.push({...f, neg:false})); state.sel = null; render(); };
+    const b = document.getElementById('inspFilter'); if (b) b.onclick = () => { const ex = JSON.parse(el.dataset.extra); ex.forEach(f => putFilter({...f, neg:false})); state.sel = null; render(); };
   };
   showInsp(state.sel);
   let riverScope = null;
@@ -511,10 +516,6 @@ function recTable(rows){
 }
 document.addEventListener('click', e => { const tr = e.target.closest && e.target.closest('tr[data-rec]'); if (!tr || e.target.closest('[data-f]')) return; const i = +tr.dataset.rec; state.openFlow = state.openFlow === i ? null : i; const box = document.getElementById('recBox'); if (box && window.__recs) { box.innerHTML = recTable(window.__recs); wireFilters(box); } });
 
-// tabs shared by the "top" pages
-const topTabs = cur => `<div class="seg tabs" id="topTabs" role="tablist">${[['overview', 'Огляд'], ['talkers', 'Топ хостів'], ['apps', 'Сервіси'], ['ports', 'Порти']].map(([k, l]) => `<button role="tab" data-v="${k}" aria-pressed="${k === cur}">${l}</button>`).join('')}</div>`;
-const wireTabs = () => wireSeg('topTabs', v => { state.view = v; render(); });
-const pageHead = (ic, title, sub, cur) => `<section class="glass panel s12 pagehead">${ph(ic, title, sub, topTabs(cur), true)}</section>`;
 const HOSTPAL = ['#27D3F5', '#FF4FA0', '#2F7BFF', '#5AC8FA', '#FFB547', '#F0508C', '#2EE59D', '#A06BFF', '#4C7DFF', '#8A96B4'];
 const L4 = {1:'ICMP', 6:'TCP', 17:'UDP', 47:'GRE', 50:'ESP', 51:'AH', 58:'ICMPv6', 132:'SCTP'};
 function downloadCsv(name, header, rows){
@@ -524,7 +525,7 @@ function downloadCsv(name, header, rows){
 }
 function vTalkers(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid">${pageHead('users', 'Топ хостів', 'внутрішні адреси з найбільшим обсягом трафіку', 'talkers')}
+  v.innerHTML = `<div class="grid">
     <div id="tKpi" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
     <section class="glass panel s8">${ph('users', 'Топ хостів', 'за загальним обсягом · клік по рядку вибирає хост для швидких дій', '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
     <div class="col s4">
@@ -535,7 +536,6 @@ function vTalkers(){
     </div>
     <section class="glass panel s6">${ph('chart', 'Тренд топ-хостів', 'топ-5 і решта')}<div class="chart" id="cTop5"></div></section>
     <section class="glass panel s6">${ph('list', 'Топ хостів детально', 'головний сервіс і протокол кожного', '<button class="lnk" id="toFlows2">Потоки →</button>')}<div id="tDetail" class="loading"></div></section></div>`;
-  wireTabs();
   document.getElementById('toFlows2').onclick = () => { state.view = 'flows'; render(); };
   const limit = state.talkersAll ? 50 : 10, secs = rangeSecs();
   fill('tMore', state.talkersAll ? 'Показати топ-10' : 'Показати топ-50');
@@ -545,13 +545,13 @@ function vTalkers(){
   const drawQa = () => {
     const h = selected; fill('qaFor', h ? `для ${esc(h.name || h.k)}` : 'немає даних');
     const box = fill('qa', h ? [
-      ['flow', 'Деталі потоків', 'сторінка Потоки з фільтром', () => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
+      ['flow', 'Деталі потоків', 'сторінка Потоки з фільтром', () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
       ['users', 'Картка хоста', 'сервіси, протоколи, напрямки', () => openHost(h.k)],
-      ['globe', 'Геолокація', 'карта з’єднань цього хоста', () => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
+      ['globe', 'Геолокація', 'карта з’єднань цього хоста', () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
       ['list', 'Експорт CSV', 'таблиця топ-хостів', () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
         topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))],
     ].map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join('') : '');
-    if (box && h) { const acts = [() => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { state.filters.push({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
+    if (box && h) { const acts = [() => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
       () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'], topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))];
       box.querySelectorAll('[data-qa]').forEach(b => b.onclick = acts[+b.dataset.qa]); }
   };
@@ -613,11 +613,10 @@ function vTalkers(){
 }
 function vPorts(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid">${pageHead('ip', 'Порти', 'порти зовнішніх адрес, до яких звертаються хости', 'ports')}
+  v.innerHTML = `<div class="grid">
     <section class="glass panel s8">${ph('list', 'Топ портів', 'клік — фільтр за портом')}<div id="pTbl" class="loading"></div></section>
     <section class="glass panel s4">${ph('pie', 'Протоколи L7', 'за портом')}<div id="pL7" class="loading"></div></section>
     <section class="glass panel s12">${ph('chart', 'Порти в часі', 'топ-7')}<div class="chart" id="cPorts"></div></section></div>`;
-  wireTabs();
   section('pTbl', async () => { const t = await api('top', {dim:'ext_port', limit:30}), max = t.rows.length ? tot(t.rows[0]) : 1;
     return `<div class="tw"><table><thead><tr><th>Порт</th><th>Протокол</th><th>Типовий сервіс</th><th style="width:24%">Обсяг</th><th class="num">%</th><th class="num">Хостів</th><th class="num">Зовн. адрес</th><th class="num">Flows</th></tr></thead><tbody>
       ${t.rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(r.l7)}</span></td><td>${svcBadge(r.service)}</td>
@@ -629,10 +628,9 @@ function vPorts(){
 }
 function vApps(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid">${pageHead('grid', 'Сервіси', 'сервіс визначається за ASN адреси призначення та портом', 'apps')}<section class="glass panel s12">${ph('chart', 'Сервіси в часі', 'сервіс визначається за ASN адреси призначення та портом')}<div class="chart" id="cApps"></div></section>
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('chart', 'Сервіси в часі', 'сервіс визначається за ASN адреси призначення та портом')}<div class="chart" id="cApps"></div></section>
     <section class="glass panel s8">${ph('grid', 'Сервіси')}<div id="aBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('pie', 'Протоколи', 'L7 за портом')}<div id="pBox" class="loading"></div></section></div>`;
-  wireTabs();
   api('series', {by:'service', top:7}).then(s => { const el = document.getElementById('cApps'); if (el) stackChart(el, s, k => k, k => addFilter('service', k)); }).catch(e => fill('cApps', errBox(e)));
   section('aBox', async () => { const t = await api('top', {dim:'service', limit:100});
     return `<div class="tw"><table><thead><tr><th>Сервіс</th><th>Протокол</th><th class="num">↓</th><th class="num">↑</th><th class="num">Разом</th><th class="num">%</th><th class="num">Хостів</th></tr></thead><tbody>
@@ -876,21 +874,21 @@ function renderShell(){
   document.getElementById('rangeSel').value = state.range;
 }
 function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
-function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r')) state.range = p.get('r'); if (p.get('f')) state.filters = JSON.parse(p.get('f')).filter(f => FILTER_KEYS.includes(f.k)); } catch (e) {} }
+function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r')) state.range = p.get('r'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
 function render(){ if (state.view === 'users' && !isAdmin()) state.view = 'overview'; renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
 
-document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) state.filters.push({k:'device', v:e.target.value, neg:false}); render(); };
+document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) putFilter({k:'device', v:e.target.value, neg:false}); render(); };
 document.getElementById('rangeSel').onchange = e => { state.range = e.target.value; render(); };
 const q = document.getElementById('q');
 q.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     for (let t of q.value.trim().split(/\s+/).filter(Boolean)) {
       const neg = t.startsWith('-'); if (neg) t = t.slice(1); const i = t.indexOf(':');
-      if (i > 0 && FILTER_KEYS.includes(t.slice(0, i).toLowerCase()) && t.slice(i + 1)) state.filters.push({k:t.slice(0, i).toLowerCase(), v:t.slice(i + 1), neg});
-      else if (/^[\d.]+$/.test(t) && t.split('.').length === 4) state.filters.push({k:/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(t) ? 'ip' : 'dst', v:t, neg});
-      else if (/^AS\d+$/i.test(t)) state.filters.push({k:'asn', v:t, neg});
-      else if (/^[A-Za-z]{2}$/.test(t)) state.filters.push({k:'country', v:t.toUpperCase(), neg});
-      else if (t) state.filters.push({k:'service', v:t, neg});
+      if (i > 0 && FILTER_KEYS.includes(t.slice(0, i).toLowerCase()) && t.slice(i + 1)) putFilter({k:t.slice(0, i).toLowerCase(), v:t.slice(i + 1), neg});
+      else if (/^[\d.]+$/.test(t) && t.split('.').length === 4) putFilter({k:/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(t) ? 'ip' : 'dst', v:t, neg});
+      else if (/^AS\d+$/i.test(t)) putFilter({k:'asn', v:t, neg});
+      else if (/^[A-Za-z]{2}$/.test(t)) putFilter({k:'country', v:t.toUpperCase(), neg});
+      else if (t) putFilter({k:'service', v:t, neg});
     }
     q.value = ''; render();
   } else if (e.key === 'Backspace' && !q.value && state.filters.length) { state.filters.pop(); render(); }
