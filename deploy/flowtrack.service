@@ -7,7 +7,15 @@ EnvironmentFile=-/etc/flowtrack.env
 ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/collector.py
 WorkingDirectory=/opt/flowtrack
 Restart=always
-User=root
+RestartSec=3
+User=flowtrack
+Group=flowtrack
+# hardening: unprivileged ports only, read-only system
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/opt/flowtrack
 
 [Install]
 WantedBy=multi-user.target

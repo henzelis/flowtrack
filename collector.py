@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
 """flowtrack-collector: NetFlow v9 collector for FortiGate -> SQLite.
 
-Design (verified against live FortiOS 7.4 exports):
-- FortiGate reports ONE record per direction of a session (src/dst swapped pairs).
-- IN_BYTES == OUT_BYTES in each record = total bytes of that direction.
-- Re-reports are CUMULATIVE since session start (active-flow-timeout=60s),
-  so we track running max per 5-tuple and only add the delta.
-- A byte-count DROP on a tuple means 5-tuple reuse by a NEW session ->
-  finalize old, start fresh with this record's cumulative value.
-- INPUT_SNMP/OUTPUT_SNMP carry interface snmp-index (wan=1) => WAN-touching filter.
+FortiOS NetFlow v9 semantics (verified on a live FortiOS 7.4 capture):
+- ONE record per direction of a session (src/dst swapped pairs).
+- IN_BYTES == OUT_BYTES in each record = bytes of that direction.
+- Records are DELTAS: a long session is re-exported every active-flow-timeout,
+  and each export covers only [FIRST_SWITCHED, LAST_SWITCHED] — the next
+  export's FIRST_SWITCHED equals the previous LAST_SWITCHED. So the correct
+  accounting is simply: sum every record. No per-session state is needed.
+- INPUT_SNMP/OUTPUT_SNMP carry interface snmp-index. Direction is taken from
+  them: leaving via WAN = up, entering via WAN = down. Index 0 = the firewall
+  itself (its own VPN tunnels, syslog, management traffic).
 
-Tables:
-  usage_min(ts_minute, host, down_bytes, up_bytes, pkts)  -- tiny, powers all charts
-  sessions(id, ts_start, ts_end, src, dst, sport, dport, proto, bytes) -- finalized flows
+Each record's bytes are spread across the minutes its [FIRST, LAST] interval
+covers, so charts reflect when traffic actually flowed, not when it was exported.
+
+Table:
+  usage_min(ts, host, down_bytes, up_bytes, pkts, flows) -- per minute x host,
+  plus a synthetic host '__WAN__' with the WAN totals. Powers all charts.
 """
-import socket
-import time
-import json
-import os
-import sys
-import sqlite3
 import ipaddress
+import os
+import signal
+import socket
+import sqlite3
+import time
+
 from netflow import parse_packet
 from netflow.v9 import V9TemplateNotRecognized
 
@@ -29,13 +34,14 @@ BIND_HOST = os.environ.get('FLOWTRACK_BIND', '0.0.0.0')
 BIND_PORT = int(os.environ.get('FLOWTRACK_PORT', '2055'))
 DATA_DIR = os.environ.get('FLOWTRACK_DATA_DIR', '/opt/flowtrack')
 DB_PATH = os.path.join(DATA_DIR, 'data.db')
-STATE_PATH = os.path.join(DATA_DIR, 'state.json')
 # snmp-index of the WAN interface on FortiGate (check: show system interface wan)
 WAN_SNMP_INDEX = int(os.environ.get('FLOWTRACK_WAN_SNMP_INDEX', '1'))
-# FW's own public IP(s), comma-separated — appears as src/dst in some records,
-# labeled as host 'firewall' instead of being dropped.
-OUR_WAN_IPS = {ip.strip() for ip in os.environ.get('FLOWTRACK_FW_PUBLIC_IPS', '').split(',') if ip.strip()}
-FINALIZE_GAP = 45           # seconds without a re-report => session closed
+# Exporter IPs allowed to send NetFlow, comma-separated. Empty = accept any (not recommended).
+EXPORTERS = {ip.strip() for ip in os.environ.get('FLOWTRACK_EXPORTERS', '').split(',') if ip.strip()}
+FLUSH_EVERY = 15            # seconds between DB writes
+STATS_EVERY = 600           # seconds between stats log lines
+FW_HOST = 'firewall'        # host label for traffic the firewall itself originates/terminates
+LOCAL_SNMP_INDEX = 0
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage_min (
@@ -44,236 +50,213 @@ CREATE TABLE IF NOT EXISTS usage_min (
     down_bytes INTEGER NOT NULL DEFAULT 0,
     up_bytes INTEGER NOT NULL DEFAULT 0,
     pkts INTEGER NOT NULL DEFAULT 0,
+    flows INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (ts, host)
 );
-CREATE TABLE IF NOT EXISTS sessions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts_start INTEGER NOT NULL,
-    ts_end INTEGER NOT NULL,
-    src TEXT NOT NULL,
-    dst TEXT NOT NULL,
-    sport INTEGER, dport INTEGER, proto INTEGER,
-    bytes INTEGER NOT NULL,
-    direction TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sessions_ts ON sessions(ts_start);
 """
 
 
+def log(msg):
+    print(f'[flowtrack] {msg}', flush=True)
+
+
 def ipstr(v):
-    """Normalize an IP field (int or str) to dotted string."""
+    """Normalize an IP field (int or str) to its canonical string, or None."""
     if v is None:
         return None
     try:
-        return str(ipaddress.ip_address(int(v)))
+        return str(ipaddress.ip_address(int(v) if isinstance(v, int) or str(v).isdigit() else str(v)))
     except (ValueError, TypeError):
-        s = str(v).strip()
-        return s or None
-
-
-def norm_ip(v):
-    """Return ipaddress object or None."""
-    if v is None:
         return None
+
+
+def intfield(rec, name):
     try:
-        if isinstance(v, int) or str(v).isdigit():
-            return ipaddress.ip_address(int(v))
-        return ipaddress.ip_address(str(v))
-    except (ValueError, TypeError):
-        return None
+        return int(rec.get(name) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def open_db():
+    db = sqlite3.connect(DB_PATH, timeout=10)
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('PRAGMA synchronous=NORMAL')
+    db.executescript(SCHEMA)
+    cols = {r[1] for r in db.execute('PRAGMA table_info(usage_min)')}
+    if 'flows' not in cols:     # DB created by v1
+        db.execute('ALTER TABLE usage_min ADD COLUMN flows INTEGER NOT NULL DEFAULT 0')
+    db.commit()
+    return db
+
+
+def classify(rec):
+    """Return (host, direction) for a WAN-crossing record, else None.
+    host = the inside endpoint (LAN IP before NAT, or 'firewall')."""
+    in_if, out_if = intfield(rec, 'INPUT_SNMP'), intfield(rec, 'OUTPUT_SNMP')
+    if out_if == WAN_SNMP_INDEX and in_if != WAN_SNMP_INDEX:
+        if in_if == LOCAL_SNMP_INDEX:
+            return FW_HOST, 'up'
+        host = ipstr(rec.get('IPV4_SRC_ADDR')) or ipstr(rec.get('IPV6_SRC_ADDR'))
+        return (host, 'up') if host else None
+    if in_if == WAN_SNMP_INDEX and out_if != WAN_SNMP_INDEX:
+        if out_if == LOCAL_SNMP_INDEX:
+            return FW_HOST, 'down'
+        host = ipstr(rec.get('IPV4_DST_ADDR')) or ipstr(rec.get('IPV6_DST_ADDR'))
+        return (host, 'down') if host else None
+    return None     # not WAN-crossing (LAN<->LAN, or WAN hairpin)
+
+
+def flow_interval(rec, header, now):
+    """Unix [start, end] of the record, from sysUptime-relative FIRST/LAST_SWITCHED."""
+    uptime, export_ts = header.uptime, header.timestamp
+    first, last = intfield(rec, 'FIRST_SWITCHED'), intfield(rec, 'LAST_SWITCHED')
+    if not export_ts or not last:
+        return now, now
+    # sysUptime is a 32-bit ms counter; handle wrap between switch time and export
+    age_last = (uptime - last) % 2**32 / 1000.0
+    age_first = (uptime - first) % 2**32 / 1000.0
+    end = export_ts - age_last
+    start = export_ts - age_first
+    if not (now - 86400 < start <= end <= now + 120):   # clock skew / garbage: fall back
+        return now, now
+    return start, end
 
 
 class Collector:
     def __init__(self):
-        self.db = sqlite3.connect(DB_PATH)
-        self.db.executescript(SCHEMA)
-        self.db.commit()
-        # open sessions: key -> dict(bytes=running_max, first_ts, last_ts, meta...)
-        self.open = {}
-        if os.path.exists(STATE_PATH):
-            try:
-                with open(STATE_PATH) as f:
-                    self.open = json.load(f)
-                print(f'[flowtrack] restored {len(self.open)} open sessions from state', flush=True)
-            except Exception as e:
-                print(f'[flowtrack] WARN state restore failed: {e}', flush=True)
-        # in-memory minute buckets: (minute_ts, host) -> [down, up, pkts]
-        self.buckets = {}
-        self.last_flush = time.time()
-        self.total_records = 0
+        self.db = open_db()
+        self.buckets = {}       # (minute_ts, host) -> [down, up, pkts, flows]
+        self.templates = {}     # exporter ip -> netflow template store
+        self.last_seq = {}      # exporter ip -> last v9 sequence number
+        self.stats = dict(records=0, wan_records=0, bytes=0, no_template=0,
+                          foreign=0, decode_errors=0, lost_packets=0)
 
-    def minute_bucket(self):
-        return int(time.time()) // 60 * 60
-
-    def add_bytes(self, ts_min, host, down, up, pkts=0):
-        key = (ts_min, host)
-        b = self.buckets.setdefault(key, [0, 0, 0])
+    def add(self, ts_min, host, down, up, pkts, flows):
+        b = self.buckets.setdefault((ts_min, host), [0, 0, 0, 0])
         b[0] += down
         b[1] += up
         b[2] += pkts
+        b[3] += flows
 
-    def classify(self, src, dst, in_snmp, out_snmp):
-        """Return (host_label, direction) or None if not WAN-touching.
-        host: private endpoint IP, 'firewall', or None for pure public->public."""
-        touches_wan = (in_snmp == WAN_SNMP_INDEX) or (out_snmp == WAN_SNMP_INDEX)
-        if not touches_wan:
-            return None
-        src_o, dst_o = norm_ip(src), norm_ip(dst)
-        host = None
-        for o in (src_o, dst_o):
-            if o is not None and (o.is_private or o.is_loopback):
-                host = str(o)
-                break
-        if src_o is not None and str(src_o) in OUR_WAN_IPS:
-            host = 'firewall'
-        if dst_o is not None and str(dst_o) in OUR_WAN_IPS:
-            host = host or 'firewall'
-        # direction from WAN perspective
-        if src_o is not None and dst_o is not None:
-            src_pub = src_o.is_global and str(src_o) not in OUR_WAN_IPS
-            dst_pub = dst_o.is_global and str(dst_o) not in OUR_WAN_IPS
-            if src_pub and not dst_pub:
-                direction = 'down'   # internet -> LAN host
-            elif dst_pub and not src_pub:
-                direction = 'up'     # LAN host -> internet
-            else:
-                direction = 'wan'    # public<->public / fw-own; still WAN bytes
-        else:
-            direction = 'wan'
-        if host is None:
-            host = 'firewall'
-        return host, direction
-
-    def handle_record(self, rec):
-        src = ipstr(rec.get('IPV4_SRC_ADDR')) or ipstr(rec.get('IPV6_SRC_ADDR'))
-        dst = ipstr(rec.get('IPV4_DST_ADDR')) or ipstr(rec.get('IPV6_DST_ADDR'))
-        if not src or not dst:
-            return
-        try:
-            inb = int(rec.get('IN_BYTES', 0) or 0)
-            outb = int(rec.get('OUT_BYTES', 0) or 0)
-        except (TypeError, ValueError):
-            return
-        nbytes = max(inb, outb)
-        npkts = max(int(rec.get('IN_PKTS', 0) or 0), int(rec.get('OUT_PKTS', 0) or 0))
-
-        cls = self.classify(src, dst, rec.get('INPUT_SNMP'), rec.get('OUTPUT_SNMP'))
+    def handle_record(self, rec, header, now):
+        self.stats['records'] += 1
+        cls = classify(rec)
         if cls is None:
             return
         host, direction = cls
-
-        key = f'{src}|{dst}|{rec.get("L4_SRC_PORT", 0)}|{rec.get("PROTOCOL", 0)}'
-        now = time.time()
-        st = self.open.get(key)
-        if st is None:
-            self.open[key] = {'bytes': nbytes, 'first_ts': now, 'last_ts': now,
-                              'src': src, 'dst': dst, 'host': host, 'dir': direction}
-            delta = nbytes  # full cumulative value of the (new) session
-        else:
-            if nbytes >= st['bytes']:
-                delta = nbytes - st['bytes']      # growth since last report
-                st['last_ts'] = now
-                st['bytes'] = nbytes
-            else:
-                # counter dropped => 5-tuple reused by a NEW session.
-                # finalize old instance, start new one with its own cumulative value.
-                self.finalize(key)
-                self.open[key] = {'bytes': nbytes, 'first_ts': now, 'last_ts': now,
-                                  'src': src, 'dst': dst, 'host': host, 'dir': direction}
-                delta = nbytes
-
-        if delta > 0:
-            ts_min = int(now) // 60 * 60
-            down = delta if direction == 'down' else 0
-            up = delta if direction in ('up', 'wan') else 0
-            self.add_bytes(ts_min, host, down, up, npkts if delta else 0)
-            # synthetic WAN total row (every byte touching the wan interface)
-            self.add_bytes(ts_min, '__WAN__', down + up, 0, 0)
-
-    def finalize(self, key):
-        st = self.open.pop(key, None)
-        if not st:
+        nbytes = max(intfield(rec, 'IN_BYTES'), intfield(rec, 'OUT_BYTES'))
+        npkts = max(intfield(rec, 'IN_PKTS'), intfield(rec, 'OUT_PKTS'))
+        if nbytes <= 0:
             return
+        self.stats['wan_records'] += 1
+        self.stats['bytes'] += nbytes
+
+        start, end = flow_interval(rec, header, now)
+        # spread bytes/packets over the minutes the interval covers, proportionally
+        span = end - start
+        m0, m1 = int(start) // 60 * 60, int(end) // 60 * 60
+        if span <= 0 or m0 == m1:
+            parts = [(m1, nbytes, npkts)]
+        else:
+            parts, left_b, left_p = [], nbytes, npkts
+            m = m0
+            while m <= m1:
+                if m == m1:
+                    b, p = left_b, left_p
+                else:
+                    frac = (min(m + 60, end) - max(m, start)) / span
+                    b, p = int(nbytes * frac), int(npkts * frac)
+                    left_b -= b
+                    left_p -= p
+                parts.append((m, b, p))
+                m += 60
+        for i, (m, b, p) in enumerate(parts):
+            flows = 1 if i == len(parts) - 1 else 0
+            down, up = (b, 0) if direction == 'down' else (0, b)
+            self.add(m, host, down, up, p, flows)
+            self.add(m, '__WAN__', down, up, p, flows)
+
+    def handle_packet(self, data, addr):
+        src = addr[0]
+        if EXPORTERS and src not in EXPORTERS:
+            self.stats['foreign'] += 1
+            return
+        tpl = self.templates.setdefault(src, {'netflow': {}, 'ipfix': {}})
         try:
-            self.db.execute(
-                'INSERT INTO sessions (ts_start, ts_end, src, dst, sport, dport, proto, bytes, direction)'
-                ' VALUES (?,?,?,?,?,?,?,?,?)',
-                (int(st['first_ts']), int(st['last_ts']), st['src'], st['dst'],
-                 0, 0, 0, int(st['bytes']), st.get('dir', '?')))
-        except sqlite3.Error as e:
-            print(f'[flowtrack] WARN finalize insert failed: {e}', flush=True)
+            pkt = parse_packet(data, tpl)
+        except V9TemplateNotRecognized:
+            self.stats['no_template'] += 1   # template arrives shortly; packet skipped
+            return
+        except Exception as e:
+            self.stats['decode_errors'] += 1
+            log(f'WARN decode error from {src}: {e}')
+            return
+        hdr = pkt.header
+        seq = getattr(hdr, 'sequence', None)
+        if seq is not None:
+            prev = self.last_seq.get(src)
+            # FortiOS increments the v9 sequence per export packet
+            if prev is not None and 0 < (seq - prev) % 2**32 < 10000:
+                self.stats['lost_packets'] += (seq - prev) % 2**32 - 1
+            self.last_seq[src] = seq
+        now = time.time()
+        for f in pkt.flows:
+            self.handle_record(f.data if hasattr(f, 'data') else dict(vars(f)), hdr, now)
 
     def flush(self):
-        # close stale sessions (no re-report for FINALIZE_GAP seconds)
-        now = time.time()
-        stale = [k for k, st in self.open.items() if now - st['last_ts'] > FINALIZE_GAP]
-        for k in stale:
-            self.finalize(k)
-        # persist minute buckets
-        if self.buckets:
-            rows = [(ts, h, d, u, p) for (ts, h), (d, u, p) in self.buckets.items()]
-            self.db.executemany(
-                'INSERT INTO usage_min (ts, host, down_bytes, up_bytes, pkts)'
-                ' VALUES (?,?,?,?,?)'
-                ' ON CONFLICT(ts, host) DO UPDATE SET'
-                '   down_bytes = down_bytes + excluded.down_bytes,'
-                '   up_bytes = up_bytes + excluded.up_bytes,'
-                '   pkts = pkts + excluded.pkts', rows)
-            self.buckets.clear()
+        if not self.buckets:
+            return
+        rows = [(ts, h, d, u, p, n) for (ts, h), (d, u, p, n) in self.buckets.items()]
+        self.db.executemany(
+            'INSERT INTO usage_min (ts, host, down_bytes, up_bytes, pkts, flows)'
+            ' VALUES (?,?,?,?,?,?)'
+            ' ON CONFLICT(ts, host) DO UPDATE SET'
+            '   down_bytes = down_bytes + excluded.down_bytes,'
+            '   up_bytes = up_bytes + excluded.up_bytes,'
+            '   pkts = pkts + excluded.pkts,'
+            '   flows = flows + excluded.flows', rows)
         self.db.commit()
-        # persist open-session state (survives restarts: no double/lost counts)
-        tmp = STATE_PATH + '.tmp'
-        with open(tmp, 'w') as f:
-            json.dump(self.open, f)
-        os.replace(tmp, STATE_PATH)
+        self.buckets.clear()
 
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
         sock.bind((BIND_HOST, BIND_PORT))
-        print(f'[flowtrack] listening on {BIND_HOST}:{BIND_PORT}', flush=True)
+        sock.settimeout(1.0)
+        log(f'listening on {BIND_HOST}:{BIND_PORT}, wan snmp-index={WAN_SNMP_INDEX}, '
+            f'exporters={",".join(sorted(EXPORTERS)) or "ANY"}')
 
-        templates = {'netflow': {}, 'ipfix': {}}   # dict! (library bug seeds a list otherwise)
         stop = False
 
-        def sigterm(*_):
+        def on_signal(*_):
             nonlocal stop
             stop = True
 
-        import signal
-        signal.signal(signal.SIGTERM, sigterm)
-        signal.signal(signal.SIGINT, sigterm)
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
 
+        last_flush = last_stats = time.time()
         while not stop:
-            sock.settimeout(1.0)
             try:
                 data, addr = sock.recvfrom(65535)
-                pkt = parse_packet(data, templates)
-                for f in pkt.flows:
-                    self.handle_record(f.data if hasattr(f, 'data') else dict(vars(f)))
-                    self.total_records += 1
+                self.handle_packet(data, addr)
             except socket.timeout:
                 pass
-            except V9TemplateNotRecognized:
-                pass   # template arrives shortly; record skipped (documented loss)
-            except Exception as e:
-                print(f'[flowtrack] WARN decode error: {e}', flush=True)
-
-            if time.time() - self.last_flush > 60:
+            now = time.time()
+            if now - last_flush >= FLUSH_EVERY:
                 try:
                     self.flush()
-                except Exception as e:
-                    print(f'[flowtrack] WARN flush failed: {e}', flush=True)
-                self.last_flush = time.time()
-                if self.total_records and self.total_records % 500 < 100:
-                    print(f'[flowtrack] records={self.total_records} open_sessions={len(self.open)}', flush=True)
+                except sqlite3.Error as e:
+                    log(f'WARN flush failed (will retry): {e}')
+                last_flush = now
+            if now - last_stats >= STATS_EVERY:
+                log(' '.join(f'{k}={v}' for k, v in self.stats.items()))
+                last_stats = now
 
-        # graceful shutdown: finalize everything, flush all
-        for k in list(self.open.keys()):
-            self.finalize(k)
         self.flush()
         self.db.close()
-        print(f'[flowtrack] stopped. total_records={self.total_records}', flush=True)
+        log('stopped. ' + ' '.join(f'{k}={v}' for k, v in self.stats.items()))
 
 
 if __name__ == '__main__':

@@ -14,7 +14,6 @@ FortiGate keeps only ~7 days of logs in RAM, so "how much internet did we consum
 FortiGate ── NetFlow v9 (UDP 2055, full rate) ──▶ collector.py ──▶ SQLite (data.db)
                                                           ▲
 dashboard ◀── http (LAN only) ───────────── web.py ◀──────┘  usage_min: per-minute × host (+ __WAN__ total row)
-                                                        sessions: finalized flows
 ```
 
 ## FortiGate configuration
@@ -42,7 +41,10 @@ end
 
 Notes (verified on FortiOS 7.4):
 
-- One record per session **direction**; `IN_BYTES`/`OUT_BYTES` are cumulative since session start and re-reported every `active-flow-timeout`. The collector tracks the running max per 5-tuple and stores only deltas; a byte-count drop means 5-tuple reuse → old session finalized, new one started.
+- One record per session **direction**; `IN_BYTES` == `OUT_BYTES` = bytes of that direction.
+- Records are **deltas**, not cumulative: a long session is re-exported every `active-flow-timeout`, and each export covers only `[FIRST_SWITCHED, LAST_SWITCHED]` — the next export's `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. So the collector simply sums every record; no per-session state. (A short controlled download can't tell the two models apart — it fits in one export. Check a long-lived flow in a capture instead.)
+- Each record's bytes are spread over the minutes its `[FIRST, LAST]` interval covers, so charts show when traffic flowed, not when it was exported.
+- Direction comes from interfaces: `OUTPUT_SNMP` = WAN → **up**, `INPUT_SNMP` = WAN → **down**. Interface index `0` is the firewall itself (its VPN tunnels, syslog, management) → host `firewall`. Host = the inside endpoint as the firewall saw it (pre-NAT LAN IP).
 - Records appear in the DB ~60 s after the flow ends (timeout) — that's normal.
 - `INPUT_SNMP`/`OUTPUT_SNMP` carry the interface **snmp-index**; WAN filtering uses it (`FLOWTRACK_WAN_SNMP_INDEX`, check with `show system interface wan`).
 
@@ -51,13 +53,15 @@ Notes (verified on FortiOS 7.4):
 ### 1. Collector host (any Linux box reachable from the firewall)
 
 ```bash
-sudo mkdir -p /opt/flowtrack && sudo chown $USER /opt/flowtrack   # or keep root-owned
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
+sudo mkdir -p /opt/flowtrack
 git clone https://github.com/henzelis/flowtrack /tmp/flowtrack-src
 sudo cp /tmp/flowtrack-src/{collector.py,web.py,chart.umd.min.js} /opt/flowtrack/
 
 # venv (system pip is PEP-668 locked on modern distros)
 sudo python3 -m venv /opt/flowtrack/venv
 sudo /opt/flowtrack/venv/bin/pip install netflow
+sudo chown -R flowtrack:flowtrack /opt/flowtrack   # services run as 'flowtrack', not root
 
 # config — copy and edit the values for YOUR network
 sudo cp deploy/flowtrack.env.example /etc/flowtrack.env
@@ -91,23 +95,24 @@ A 20 MB test gave `IN_BYTES ≈ 20.75 MB` — ~3–4 % overhead is TLS/retransmi
 | `FLOWTRACK_DB` | `/opt/flowtrack/data.db` | DB path (web) |
 | `FLOWTRACK_WEB_PORT` | `3020` | dashboard HTTP port — **LAN only, never publish via WAN** |
 | `FLOWTRACK_WAN_SNMP_INDEX` | `1` | snmp-index of the WAN interface on FortiGate |
-| `FLOWTRACK_FW_PUBLIC_IPS` | *(empty)* | FW's own public IP(s), comma-separated; traffic touching them is labeled host `firewall` |
+| `FLOWTRACK_EXPORTERS` | *(empty)* | exporter IPs allowed to send NetFlow, comma-separated; empty = anyone (set it!) |
+| `FLOWTRACK_TZ` | `Europe/Kyiv` | IANA time zone for day/month/hour buckets |
 
 ## Dashboard
 
 Open `http://<COLLECTOR_IP>:3020`:
 
-- KPI cards: month total, today, top host, session count
-- Per-day stacked bars for the selected month (last 7 months)
+- KPI cards: month total, today (both with down/up split), top host, flow-record count
+- Per-day stacked bars for the selected month (every month since data starts)
 - Last 48 h hourly line chart
 - Host table with down/up/total and % of WAN
 
-Timezone is Europe/Kyiv (fixed UTC+3, no DST since 2022); all bucketing is integer math on `ts + 10800` — host TZ irrelevant.
+Bucketing uses `FLOWTRACK_TZ` via `zoneinfo`, DST included (Europe/Kyiv still switches EET ⇄ EEST); labels come from the server, so neither the host's nor the browser's TZ matters.
 
 ## Known limitations (honest ones)
 
 - No history before the collector started running; FortiGate RAM logs don't help there.
-- Collector reboot loses at most ~1–2 min of unflushed buckets (open sessions survive via `state.json`).
+- Collector restart loses nothing it already received (buckets are flushed on SIGTERM; at most 15 s on a crash). Right after start, packets arriving before the FortiGate re-sends its template are skipped (`no_template` in the stats log line).
 - LAN-to-LAN traffic doesn't traverse the firewall → not visible. For "internet consumption" that's fine.
 
 ## Roadmap ideas
