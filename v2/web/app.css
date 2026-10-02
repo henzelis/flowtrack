@@ -290,6 +290,7 @@ button.user:focus-visible{outline:2px solid var(--blue-hi)}
 .user .who b{display:block;font-size:13.5px}
 .user .who small{display:block;color:var(--ink2);font-size:12px}
 .menu{position:absolute;right:0;top:calc(100% + 6px);z-index:15;min-width:200px;padding:6px;display:grid;gap:2px;background:linear-gradient(160deg,rgba(22,38,82,.97),rgba(10,20,46,.98))}
+.menu[hidden]{display:none}
 .menu button{all:unset;cursor:pointer;padding:8px 12px;border-radius:8px;font-size:13.5px;color:var(--ink)}
 .menu button:hover,.menu button:focus-visible{background:rgba(47,123,255,.18)}
 .modal.narrow{width:min(520px,calc(100% - 32px))}
