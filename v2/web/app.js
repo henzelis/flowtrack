@@ -2,7 +2,7 @@
 // FlowTrack v2 web UI — talks to /api/* (see api.py). No build step.
 
 // ===================== state, api =====================
-const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'bytes', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null};
+const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null};
 let META = {devices:[]};
 const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto'];
 const FILTER_LABEL = {ip:'хост', dst:'зовн. IP', service:'сервіс', l7:'протокол', country:'країна', city:'місто', port:'порт', device:'пристрій', asn:'ASN', dir:'напрямок', proto:'L4'};
