@@ -35,7 +35,8 @@ def ch(query, params=None, data=None, fmt=None, timeout=30):
     params: {name: value} bound to {name:Type} placeholders (server-side, no string interpolation).
     data: bytes to POST after the query (for INSERT ... FORMAT JSONEachRow).
     Returns parsed JSON rows for fmt='JSON', else raw text."""
-    qs = {'database': CH_DB}
+    # WHERE must see real columns even when a SELECT alias has the same name (any(service) AS service)
+    qs = {'database': CH_DB, 'prefer_column_name_to_alias': '1'}
     for k, v in (params or {}).items():
         if isinstance(v, (list, tuple)):     # Array(String) literal
             v = '[' + ','.join("'" + str(x).replace('\\', '\\\\').replace("'", "\\'") + "'" for x in v) + ']'
