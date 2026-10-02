@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FlowTrack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="app.css">
+<script src="vendor/echarts.min.js"></script>
+<script src="vendor/world.js"></script>
+<script src="vendor/echarts-gl.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <svg width="40" height="34" viewBox="0 0 40 34" aria-hidden="true"><defs><linearGradient id="lg1" x1="0" x2="1"><stop offset="0" stop-color="#27D3F5"/><stop offset="1" stop-color="#2F7BFF"/></linearGradient></defs>
+        <path d="M3 10c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="url(#lg1)" stroke-width="4.5" stroke-linecap="round"/>
+        <path d="M3 22c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="url(#lg1)" stroke-width="4.5" stroke-linecap="round" opacity=".75"/></svg>
+      <div><b>FlowTrack</b><small>NetFlow · IPFIX</small></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Розділи"></nav>
+    <div class="health">
+      <div class="coll"><span class="dot" id="collDot"></span><b id="collState">Колектор</b><span id="expCount">—</span></div>
+      <div class="ingest glass"><div class="k">Прийом записів</div><div class="v" id="ingV">—</div><div class="meter"><i id="ingM" style="width:0"></i></div><svg id="ingS" width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+    </div>
+  </aside>
+  <main>
+    <div class="top">
+      <label class="search glass"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12.5 12.5l4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+        <input id="q" placeholder="Пошук: IP, сервіс, країна, порт…  (ip:10.0.0.5  service:Telegram  -country:US  port:443)" autocomplete="off" aria-label="Пошук і фільтр"><kbd>/</kbd></label>
+      <label class="sel glass" title="Пристрій-експортер"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3" width="13" height="7" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5 13h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><select id="devSel" aria-label="Пристрій"></select></label>
+      <label class="sel glass" title="Період"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <select id="rangeSel" aria-label="Період"><option value="1h">Остання година</option><option value="6h">Останні 6 годин</option><option value="24h" selected>Останні 24 години</option><option value="7d">Останні 7 днів</option><option value="30d">Останні 30 днів</option></select></label>
+      <button class="iconbtn glass" aria-label="Події" id="bell"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M4.5 12.5V8a4.5 4.5 0 0 1 9 0v4.5l1.5 1.5h-12zM7.5 16h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><span class="badge" id="bellBadge" hidden></span></button>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div id="view"></div>
+    <p class="foot-note">FlowTrack v2 · <span id="geoAttr">IP Geolocation by <a href="https://db-ip.com" rel="noopener">DB-IP</a></span></p>
+  </main>
+</div>
+<div id="drawerRoot"></div>
+<script src="app.js"></script>
+</body>
+</html>
