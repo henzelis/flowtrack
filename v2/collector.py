@@ -21,8 +21,8 @@ from netflow.ipfix import IPFIXTemplateNotRecognized
 from netflow.v9 import V9TemplateNotRecognized
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (CHError, Geo, apply_schema, ch, classify_l7, ipstr, is_private,  # noqa: E402
-                    load_json, service_name)
+from common import (CHError, Geo, apply_schema, ch, classify_l7, exporters_mtime, ipstr, is_private,  # noqa: E402
+                    load_exporters, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -64,13 +64,16 @@ def utc_ms(ts):
 class Exporter:
     def __init__(self, ip, cfg):
         self.ip = ip
-        self.wan = set(cfg.get('wan_ifs', []))
-        self.local_if = cfg.get('local_if')          # FortiOS: 0 = the firewall itself
+        self.configure(cfg)
         self.templates = {'netflow': {}, 'ipfix': {}}
         self.last_seq = None
         self.version = 0
         self._last_count = 0
         self.reset()
+
+    def configure(self, cfg):
+        self.wan = set(cfg.get('wan_ifs', []))
+        self.local_if = cfg.get('local_if')          # FortiOS: 0 = the firewall itself
 
     def reset(self):
         self.packets = self.records = self.lost = self.no_template = self.decode_errors = 0
@@ -79,7 +82,8 @@ class Exporter:
 class Collector:
     def __init__(self):
         self.geo = Geo()
-        self.cfg = load_json('exporters.json', {})
+        self.cfg = load_exporters()
+        self.cfg_mtime = exporters_mtime()
         self.exporters = {}
         self.buf = []
         self.dropped = 0
@@ -176,7 +180,7 @@ class Collector:
             except OSError:
                 pass
         ip = addr[0]
-        if ALLOW and ip not in ALLOW:
+        if ALLOW and ip not in ALLOW and ip not in self.cfg:     # allow-list = env + devices configured (incl. from the UI)
             return
         e = self.exporter(ip)
         e.packets += 1
@@ -246,6 +250,16 @@ class Collector:
         except (CHError, OSError) as ex:
             log(f'WARN stats insert failed: {str(ex)[:200]}')
 
+    def reload_config(self):
+        """Pick up devices added/edited in the UI without a restart."""
+        mt = exporters_mtime()
+        if mt == self.cfg_mtime:
+            return
+        self.cfg_mtime, self.cfg = mt, load_exporters()
+        for ip, e in self.exporters.items():
+            e.configure(self.cfg.get(ip, {}))
+        log(f'exporter config reloaded ({len(self.cfg)} configured)')
+
     def run(self):
         for attempt in range(60):
             try:
@@ -285,6 +299,7 @@ class Collector:
             if now - self.last_stats >= 60:
                 self.write_stats()
                 self.last_stats = now
+                self.reload_config()
         self.flush()
         self.write_stats()
         log('stopped')

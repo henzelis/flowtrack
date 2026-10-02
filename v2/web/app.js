@@ -3,7 +3,8 @@
 
 // ===================== state, api =====================
 const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null};
-let META = {devices:[]};
+let META = {devices:[]}, ME = null;
+const isAdmin = () => ME && ME.role === 'admin';
 const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto'];
 const FILTER_LABEL = {ip:'хост', dst:'зовн. IP', service:'сервіс', l7:'протокол', country:'країна', city:'місто', port:'порт', device:'пристрій', asn:'ASN', dir:'напрямок', proto:'L4'};
 let renderSeq = 0;
@@ -11,9 +12,17 @@ let renderSeq = 0;
 async function api(path, params = {}, extraFilters = []){
   const qs = new URLSearchParams({range:state.range, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
   const r = await fetch(`api/${path}?${qs}`);
+  if (r.status === 401) { showLogin('Сесія завершилась — увійдіть знову'); throw new Error('потрібен вхід'); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
   return body;
+}
+async function apiPost(path, body){
+  const r = await fetch(`api/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body || {})});
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && path !== 'login') { showLogin('Сесія завершилась — увійдіть знову'); throw new Error('потрібен вхід'); }
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
 }
 function addFilter(k, v, neg){
   v = String(v);
@@ -320,6 +329,7 @@ const NAV = [
   ['overview','Огляд','M3 9.5L9 4l6 5.5V15H3z'], ['flows','Потоки','M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['talkers','Топ хостів','M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
   ['apps','Сервіси','M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['geo','Геолокація','M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
   ['threats','Події','M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'], ['devices','Пристрої','M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6'],
+  ['users','Користувачі','M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4', 'admin'],
 ];
 const icon = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2 0 1 0 0 .01M14 13a2 2 0 1 0 0 .01M8 5l-3 6M10 5l3 6', ip:'M3 5h12v6H3zM6 14h6M7 8h.01M10 8h.01', grid:NAV[3][2], flow:NAV[1][2],
@@ -570,40 +580,158 @@ const VENDORS = {
 };
 function vDevices(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', 'Пристрої-експортери', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв', '<button class="btn primary" id="addDev">+ Підключити пристрій</button>')}<div id="dBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('ip', 'Інтерфейси', 'за INPUT/OUTPUT snmp-index за останню годину · назви з exporters.json')}<div id="ifBox" class="loading"></div></section></div>`;
-  document.getElementById('addDev').onclick = openAddDevice;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', 'Пристрої-експортери', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв', isAdmin() ? '<button class="btn primary" id="addDev">+ Підключити пристрій</button>' : '<span class="nat">додавати пристрої може адміністратор</span>')}<div id="dBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('ip', 'Інтерфейси', 'за INPUT/OUTPUT snmp-index за останню годину')}<div id="ifBox" class="loading"></div></section></div>`;
+  if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
   section('dBox', async () => { const d = (await api('devices')).devices; window.__devs = d;
-    setTimeout(() => (fill('ifBox', d.map(x => `<h4 class="mono" style="margin:4px 0 8px">${esc(x.name)}</h4><div class="tw"><table><thead><tr><th>Інтерфейс</th><th class="num">snmp-index</th><th>Роль</th><th class="num">Трафік за годину</th></tr></thead><tbody>${x.interfaces.map(i => `<tr><td class="ipl"><b>${esc(i.name)}</b></td><td class="num mono">${i.index}</td><td>${i.wan ? '<span class="pill warn">WAN</span>' : i.index === 0 ? '<span class="tag">сам пристрій</span>' : '<span class="tag">LAN</span>'}</td><td class="num mono">${fmtB(i.bytes)}</td></tr>`).join('')}</tbody></table></div>`).join('') || '<div class="empty">Немає даних</div>')).classList.remove('loading'));
-    return `<div class="tw"><table><thead><tr><th>Стан</th><th>Пристрій</th><th>Виробник / модель</th><th>Протокол</th><th>Майданчик</th><th>IP експорту</th><th class="num">Записів/с</th><th class="num">Шаблони</th><th>Вибірка</th><th class="num">Втрати</th><th class="num">Без шаблону</th></tr></thead><tbody>
-      ${d.map(x => { const stale = Date.now() / 1000 - x.last > 180, st = stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
-        return `<tr class="click" data-f="device" data-v="${esc(x.ip)}"><td><span class="dot ${st}" title="${stale ? 'немає даних понад 3 хв' : 'онлайн'}"></span></td><td><b class="mono">${esc(x.name)}</b></td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
-          <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td></tr>`; }).join('') || '<tr><td colspan="11"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div><p class="note">Клік по рядку фільтрує весь інтерфейс за пристроєм.</p>`; });
+    setTimeout(() => {
+      const box = fill('ifBox', d.filter(x => x.interfaces.length).map(x => `<h4 class="mono" style="margin:4px 0 8px">${esc(x.name)}</h4><div class="tw"><table><thead><tr><th>Інтерфейс</th><th class="num">snmp-index</th><th>Роль</th><th class="num">Трафік за годину</th></tr></thead><tbody>${x.interfaces.map(i => `<tr><td class="ipl"><b>${esc(i.name)}</b></td><td class="num mono">${i.index}</td><td>${i.wan ? '<span class="pill warn">WAN</span>' : i.index === 0 ? '<span class="tag">сам пристрій</span>' : '<span class="tag">LAN</span>'}</td><td class="num mono">${fmtB(i.bytes)}</td></tr>`).join('')}</tbody></table></div>`).join('') || '<div class="empty">Немає даних</div>');
+      if (box) box.classList.remove('loading');
+      document.querySelectorAll('[data-edit]').forEach(b => b.onclick = e => { e.stopPropagation(); openDevice(d.find(x => x.ip === b.dataset.edit)); });
+    });
+    return `<div class="tw"><table><thead><tr><th>Стан</th><th>Пристрій</th><th>Виробник / модель</th><th>Протокол</th><th>Майданчик</th><th>IP експорту</th><th class="num">Записів/с</th><th class="num">Шаблони</th><th>Вибірка</th><th class="num">Втрати</th><th class="num">Без шаблону</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
+      ${d.map(x => { const never = !x.last, stale = Date.now() / 1000 - x.last > 180, st = never ? 'warn' : stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
+        return `<tr class="click" data-f="device" data-v="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? 'ще не надсилав даних' : stale ? 'немає даних понад 3 хв' : 'онлайн'}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ' <span class="tag">не описаний</span>'}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? 'очікую' : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
+          <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td>
+          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div><p class="note">Клік по рядку фільтрує весь інтерфейс за пристроєм.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
 }
-function openAddDevice(){
-  let vendor = 'Fortinet';
-  const root = document.getElementById('drawerRoot'), me = location.hostname;
+// generic centered dialog; returns {root, close}
+function openModal(title, sub, body, wide){
+  const root = document.getElementById('drawerRoot');
+  root.innerHTML = `<div class="scrim" id="scrim"></div><div class="modal glass${wide ? '' : ' narrow'}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <header><div><h3>${esc(title)}</h3>${sub ? `<span class="nat">${sub}</span>` : ''}</div><button class="btn x" id="dx">Закрити</button></header>${body}</div>`;
+  const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  document.getElementById('scrim').onclick = close; document.getElementById('dx').onclick = close;
+  return {root, close};
+}
+const formErr = (id, msg) => { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.hidden = !msg; } };
+function openDevice(dev){
+  const c = dev ? dev.config || {} : {}, editing = !!dev;
+  let vendor = c.vendor && VENDORS[c.vendor] ? c.vendor : (c.vendor || 'Fortinet');
+  const me = location.hostname;
   const draw = () => {
-    root.innerHTML = `<div class="scrim" id="scrim"></div><div class="modal glass" role="dialog" aria-modal="true" aria-label="Підключити пристрій">
-      <header><div><h3>Підключити пристрій</h3><span class="nat">Налаштуйте експорт на пристрої — він з’явиться в списку з першим пакетом</span></div><button class="btn x" id="dx">Закрити</button></header>
-      <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
-      <div class="cols"><div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc(VENDORS[vendor](me))}</pre></div>
-      <form class="form" id="devForm"><h4 style="margin:0">2. Опис пристрою для FlowTrack (необов’язково)</h4>
-        <div class="two"><label>IP, з якого йде експорт<input id="fIp" placeholder="192.0.2.1"></label><label>Назва<input id="fName" placeholder="branch-fw01"></label></div>
-        <div class="two"><label>snmp-index WAN-інтерфейсів (через кому)<input id="fWan" placeholder="1"></label><label>Місто, код країни<input id="fSite" placeholder="Kyiv, UA"></label></div>
-        <button class="btn primary" type="submit">Згенерувати запис</button><pre class="codebox" id="fOut" hidden></pre>
-        <p class="note" style="margin:0">Додайте запис у <span class="mono">/etc/flowtrack-v2/exporters.json</span> і перезапустіть сервіси. Без нього напрямок визначається за приватними адресами.</p></form></div></div>`;
-    root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; draw(); });
-    const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
-    const onKey = e => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    document.getElementById('scrim').onclick = close; document.getElementById('dx').onclick = close; document.getElementById('dx').focus();
-    document.getElementById('devForm').addEventListener('submit', e => { e.preventDefault();
-      const ip = document.getElementById('fIp').value.trim() || '192.0.2.1', [city, cc] = document.getElementById('fSite').value.split(',').map(s => s.trim());
-      const rec = {[ip]:{name:document.getElementById('fName').value.trim() || ip, vendor, wan_ifs:document.getElementById('fWan').value.split(',').map(s => +s.trim()).filter(n => n || n === 0), city:city || '', country:(cc || '').toUpperCase()}};
-      const out = document.getElementById('fOut'); out.hidden = false; out.textContent = JSON.stringify(rec, null, 2); });
+    const m = openModal(editing ? `Пристрій ${dev.name}` : 'Підключити пристрій', editing ? esc(dev.ip) : 'Налаштуйте експорт на пристрої та опишіть його тут', `
+      <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
+      <div class="cols"><div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc((VENDORS[vendor] || VENDORS.Fortinet)(me))}</pre></div>
+      <form class="form" id="devForm"><h4 style="margin:0">2. Опис для FlowTrack</h4>
+        <div class="two"><label>IP, з якого йде експорт<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>Назва<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
+        <div class="two"><label>Модель<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>Вибірка (sampling)<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
+        <div class="two"><label>snmp-index WAN-інтерфейсів (через кому)<input id="fWan" value="${esc((c.wan_ifs || []).join(', '))}" placeholder="1"></label><label>Індекс «сам пристрій» (FortiOS: 0)<input id="fLocal" value="${c.local_if ?? ''}" placeholder="0"></label></div>
+        <label>Публічні IP пристрою (через кому)<input id="fPub" value="${esc((c.public_ips || []).join(', '))}" placeholder="198.51.100.10"></label>
+        <div class="two"><label>Місто<input id="fCity" value="${esc(c.city || '')}" placeholder="Kyiv"></label><label>Код країни<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="UA"></label></div>
+        <div class="two"><label>Широта<input id="fLat" value="${c.lat ?? ''}" placeholder="50.45"></label><label>Довгота<input id="fLon" value="${c.lon ?? ''}" placeholder="30.52"></label></div>
+        <p class="err" id="fErr" hidden></p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? 'Зберегти' : 'Додати пристрій'}</button>${editing && dev.configured ? '<button class="btn" type="button" id="fDel">Видалити опис</button>' : ''}<span class="nat" id="fDelAsk" hidden>Точно видалити? <button class="btn" type="button" id="fDelYes">Так, видалити</button></span></div></form></div>`, true);
+    m.root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; keep(); draw(); restore(); });
+    const list = id => document.getElementById(id).value.split(',').map(x => x.trim()).filter(Boolean);
+    document.getElementById('devForm').addEventListener('submit', async e => { e.preventDefault(); formErr('fErr');
+      try {
+        await apiPost('devices/save', {ip:document.getElementById('fIp').value.trim(), name:document.getElementById('fName').value, vendor, model:document.getElementById('fModel').value,
+          sampling:document.getElementById('fSamp').value, wan_ifs:list('fWan'), local_if:document.getElementById('fLocal').value.trim(), public_ips:list('fPub'),
+          city:document.getElementById('fCity').value, country:document.getElementById('fCc').value, lat:document.getElementById('fLat').value.trim(), lon:document.getElementById('fLon').value.trim()});
+        m.close(); META = await fetch('api/meta').then(r => r.json()); render();
+      } catch (err) { formErr('fErr', err.message); } });
+    const del = document.getElementById('fDel');
+    if (del) { del.onclick = () => { document.getElementById('fDelAsk').hidden = false; del.hidden = true; };
+      document.getElementById('fDelYes').onclick = async () => { try { await apiPost('devices/delete', {ip:dev.ip}); m.close(); render(); } catch (err) { formErr('fErr', err.message); } }; }
   };
+  // keep typed values when switching vendor tabs
+  let saved = null;
+  const ids = ['fIp', 'fName', 'fModel', 'fSamp', 'fWan', 'fLocal', 'fPub', 'fCity', 'fCc', 'fLat', 'fLon'];
+  const keep = () => { saved = Object.fromEntries(ids.map(id => [id, (document.getElementById(id) || {}).value])); };
+  const restore = () => { if (saved) ids.forEach(id => { const el = document.getElementById(id); if (el && saved[id] != null) el.value = saved[id]; }); };
   draw();
+}
+
+// ===================== users (admin) =====================
+const ROLE_LABEL = {admin:'Адміністратор', viewer:'Перегляд'};
+function vUsers(){
+  const v = document.getElementById('view');
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', 'Користувачі', 'адміністратор керує всім; «Перегляд» — лише читання, без змін пристроїв і користувачів', '<button class="btn primary" id="addUser">+ Новий користувач</button>')}<div id="uBox" class="loading"></div></section></div>`;
+  document.getElementById('addUser').onclick = () => openUser(null);
+  section('uBox', async () => { const r = await fetch('api/users'); if (!r.ok) throw new Error((await r.json()).error || r.status); const users = (await r.json()).users;
+    setTimeout(() => document.querySelectorAll('[data-user]').forEach(b => b.onclick = () => openUser(users.find(u => u.name === b.dataset.user))));
+    const when = t => t ? new Date(t * 1000).toLocaleString('uk-UA', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : 'ще не входив';
+    return `<div class="tw"><table><thead><tr><th>Логін</th><th>Роль</th><th>Створено</th><th>Останній вхід</th><th></th></tr></thead><tbody>
+      ${users.map(u => `<tr><td><b class="mono">${esc(u.name)}</b>${u.name === ME.name ? ' <span class="tag">це ви</span>' : ''}${u.default_password ? ' <span class="pill warn">стандартний пароль</span>' : ''}</td><td>${u.role === 'admin' ? '<span class="pill info">Адміністратор</span>' : '<span class="tag">Перегляд</span>'}</td>
+        <td class="nat">${when(u.created)}</td><td class="nat">${when(u.last_login)}</td><td><button class="btn" data-user="${esc(u.name)}">Змінити</button></td></tr>`).join('')}</tbody></table></div>`; });
+}
+function genPassword(){ const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const b = new Uint32Array(14); crypto.getRandomValues(b); return [...b].map(x => a[x % a.length]).join(''); }
+function openUser(u){
+  const editing = !!u, self = editing && u.name === ME.name;
+  const m = openModal(editing ? `Користувач ${u.name}` : 'Новий користувач', '', `<form class="form" id="uForm">
+    <label>Логін<input id="uName" ${editing ? `value="${esc(u.name)}" readonly` : 'required placeholder="olena"'} autocomplete="off"></label>
+    <label>Роль<select id="uRole" ${self ? 'disabled' : ''}><option value="viewer">Перегляд — лише читання</option><option value="admin">Адміністратор — повний доступ</option></select></label>
+    <label>${editing ? 'Новий пароль (залиште порожнім, щоб не змінювати)' : 'Пароль'}<input id="uPass" type="text" autocomplete="new-password" ${editing ? '' : 'required'} minlength="8" placeholder="щонайменше 8 символів"></label>
+    <button class="lnk" type="button" id="uGen" style="justify-self:start">Згенерувати пароль</button>
+    <p class="err" id="uErr" hidden></p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? 'Зберегти' : 'Створити'}</button>${editing && !self ? '<button class="btn" type="button" id="uDel">Видалити користувача</button><span class="nat" id="uDelAsk" hidden>Точно? <button class="btn" type="button" id="uDelYes">Так, видалити</button></span>' : ''}</div>
+    ${self ? '<p class="note" style="margin:0">Власний пароль зручніше змінити в меню користувача — там потрібен поточний пароль.</p>' : ''}</form>`);
+  document.getElementById('uRole').value = editing ? u.role : 'viewer';
+  document.getElementById('uGen').onclick = () => { document.getElementById('uPass').value = genPassword(); };
+  document.getElementById('uForm').addEventListener('submit', async e => { e.preventDefault(); formErr('uErr');
+    const pass = document.getElementById('uPass').value, role = document.getElementById('uRole').value;
+    try {
+      if (editing) await apiPost('users/update', {name:u.name, role:self ? undefined : role, password:pass || undefined});
+      else await apiPost('users', {name:document.getElementById('uName').value.trim(), role, password:pass});
+      m.close(); render();
+    } catch (err) { formErr('uErr', err.message); } });
+  const del = document.getElementById('uDel');
+  if (del) { del.onclick = () => { document.getElementById('uDelAsk').hidden = false; del.hidden = true; };
+    document.getElementById('uDelYes').onclick = async () => { try { await apiPost('users/delete', {name:u.name}); m.close(); render(); } catch (err) { formErr('uErr', err.message); } }; }
+}
+
+// ===================== session: login, user menu, password =====================
+function renderUser(){
+  const w = document.getElementById('userWrap'); if (!w || !ME) return;
+  w.innerHTML = `${ME.default_password ? '<button class="pill warn" id="pwWarn" style="border:0;cursor:pointer" title="Змініть стандартний пароль">змініть пароль</button>' : ''}
+    <button class="user" id="userBtn" aria-haspopup="menu" aria-expanded="false"><span class="avatar">${esc(ME.name[0].toUpperCase())}</span><span class="who"><b>${esc(ME.name)}</b><small>${ROLE_LABEL[ME.role]}</small></span></button>
+    <div class="menu glass" id="userMenu" role="menu" hidden><button role="menuitem" id="miPass">Змінити пароль</button>${isAdmin() ? '<button role="menuitem" id="miUsers">Користувачі</button>' : ''}<button role="menuitem" id="miOut">Вийти</button></div>`;
+  const btn = document.getElementById('userBtn'), menu = document.getElementById('userMenu');
+  btn.onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); };
+  document.addEventListener('click', () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }, {once:true});
+  document.getElementById('miPass').onclick = openPassword;
+  const pw = document.getElementById('pwWarn'); if (pw) pw.onclick = openPassword;
+  const mu = document.getElementById('miUsers'); if (mu) mu.onclick = () => { state.view = 'users'; render(); };
+  document.getElementById('miOut').onclick = async () => { try { await apiPost('logout', {}); } catch (e) {} ME = null; showLogin(); };
+}
+function openPassword(){
+  const m = openModal('Змінити пароль', ME.default_password ? 'Зараз використовується стандартний пароль' : '', `<form class="form" id="pForm">
+    <label>Поточний пароль<input id="pCur" type="password" required autocomplete="current-password"></label>
+    <label>Новий пароль<input id="pNew" type="password" required minlength="8" autocomplete="new-password" placeholder="щонайменше 8 символів"></label>
+    <label>Повторіть новий пароль<input id="pNew2" type="password" required minlength="8" autocomplete="new-password"></label>
+    <p class="err" id="pErr" hidden></p><p class="note" id="pOk" hidden style="color:var(--ok)">Пароль змінено. Інші сесії цього користувача завершено.</p>
+    <div><button class="btn primary" type="submit">Змінити пароль</button></div></form>`);
+  document.getElementById('pCur').focus();
+  document.getElementById('pForm').addEventListener('submit', async e => { e.preventDefault(); formErr('pErr');
+    const n1 = document.getElementById('pNew').value, n2 = document.getElementById('pNew2').value;
+    if (n1 !== n2) return formErr('pErr', 'Нові паролі не збігаються');
+    try { ME = await apiPost('me/password', {current:document.getElementById('pCur').value, new:n1}); document.getElementById('pOk').hidden = false; renderUser(); setTimeout(m.close, 1400); }
+    catch (err) { formErr('pErr', err.message); } });
+}
+let loginShown = false;
+function showLogin(msg){
+  if (loginShown) return; loginShown = true;
+  cleanup(); document.getElementById('drawerRoot').innerHTML = '';
+  document.querySelector('.app').hidden = true;
+  const box = document.createElement('div'); box.className = 'login-wrap'; box.id = 'loginWrap';
+  box.innerHTML = `<form class="glass login" id="loginForm">
+    <div class="brand" style="padding:0"><svg width="40" height="34" viewBox="0 0 40 34" aria-hidden="true"><path d="M3 10c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#27D3F5" stroke-width="4.5" stroke-linecap="round"/><path d="M3 22c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#2F7BFF" stroke-width="4.5" stroke-linecap="round"/></svg><div><b>FlowTrack</b><small>Вхід до панелі</small></div></div>
+    ${msg ? `<p class="note" style="margin:0">${esc(msg)}</p>` : ''}
+    <label>Логін<input id="lUser" required autocomplete="username" autofocus></label>
+    <label>Пароль<input id="lPass" type="password" required autocomplete="current-password"></label>
+    <p class="err" id="lErr" hidden></p>
+    <button class="btn primary" type="submit" style="justify-self:stretch;text-align:center;padding:9px">Увійти</button></form>`;
+  document.body.appendChild(box);
+  document.getElementById('lUser').focus();
+  document.getElementById('loginForm').addEventListener('submit', async e => { e.preventDefault(); formErr('lErr');
+    try {
+      ME = await apiPost('login', {username:document.getElementById('lUser').value.trim(), password:document.getElementById('lPass').value});
+      box.remove(); loginShown = false; document.querySelector('.app').hidden = false;
+      META = await fetch('api/meta').then(r => r.json()); render(); health();
+    } catch (err) { formErr('lErr', err.message); document.getElementById('lPass').select(); } });
 }
 
 async function openHost(ip){
@@ -628,9 +756,9 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, talkers:vTalkers, apps:vApps, geo:vGeo, threats:vThreats, devices:vDevices};
+const VIEWS = {overview:vOverview, flows:vFlows, talkers:vTalkers, apps:vApps, geo:vGeo, threats:vThreats, devices:vDevices, users:vUsers};
 function renderShell(){
-  document.getElementById('nav').innerHTML = NAV.map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
+  document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
   document.getElementById('chips').innerHTML = state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : f.v)}<button aria-label="Прибрати фільтр" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? '<button class="lnk" id="clearF">Скинути всі</button>' : '');
@@ -643,7 +771,7 @@ function renderShell(){
 }
 function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
 function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r')) state.range = p.get('r'); if (p.get('f')) state.filters = JSON.parse(p.get('f')).filter(f => FILTER_KEYS.includes(f.k)); } catch (e) {} }
-function render(){ renderSeq++; cleanup(); renderShell(); saveUrl(); VIEWS[state.view](); }
+function render(){ if (state.view === 'users' && !isAdmin()) state.view = 'overview'; renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
 
 document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) state.filters.push({k:'device', v:e.target.value, neg:false}); render(); };
 document.getElementById('rangeSel').onchange = e => { state.range = e.target.value; render(); };
@@ -667,6 +795,7 @@ document.getElementById('bell').onclick = () => { state.view = 'threats'; render
 // sidebar health: real collector ingest rate
 const ingHist = [];
 async function health(){
+  if (!ME) return;
   try {
     const d = (await fetch('api/devices').then(r => r.json())).devices || [];
     const rps = d.reduce((s, x) => s + x.rps, 0), online = d.filter(x => Date.now() / 1000 - x.last < 180).length;
@@ -684,6 +813,9 @@ async function health(){
 
 (async () => {
   loadUrl();
-  try { META = await fetch('api/meta').then(r => r.json()); } catch (e) {}
-  render(); health(); setInterval(health, 60000);
+  const r = await fetch('api/me').catch(() => null);
+  if (!r || r.status === 401) { showLogin(); setInterval(() => ME && health(), 60000); return; }
+  ME = await r.json();
+  try { META = await fetch('api/meta').then(x => x.json()); } catch (e) {}
+  render(); health(); setInterval(() => ME && health(), 60000);
 })();

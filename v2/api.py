@@ -12,11 +12,13 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import CHError, ch, is_private, load_json  # noqa: E402
+from auth import Auth, AuthError  # noqa: E402
+from common import CHError, ch, exporters_mtime, is_private, load_exporters, load_json, save_ui_exporter  # noqa: E402
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_WEB_PORT', '3030'))
@@ -47,7 +49,8 @@ class Names:
 
     def reload(self):
         self.manual = load_json('hosts.json', {})
-        self.exporters = load_json('exporters.json', {})
+        self.exporters = load_exporters()
+        self.mtime = exporters_mtime()
         self.self_ips = {}
         for ip, e in self.exporters.items():
             for pub in e.get('public_ips', []) + [ip]:
@@ -125,6 +128,8 @@ def host_obj(ip):
 
 
 def exporters_cfg():
+    if exporters_mtime() != NAMES.mtime:
+        NAMES.reload()
     return NAMES.exporters
 
 
@@ -305,6 +310,10 @@ def api_devices(q):
             UNION ALL SELECT exporter, out_if AS i, bytes AS b FROM flows WHERE ts >= now() - INTERVAL 1 HOUR)
         GROUP BY exporter, i ORDER BY exporter, bytes DESC""", fmt='JSON')
     out = []
+    seen = {s['exporter'] for s in stats}
+    for ip in exp:
+        if ip not in seen:
+            stats.append({'exporter': ip, 'version': 0, 'packets': 0, 'records': 0, 'lost': 0, 'no_template': 0, 'errors': 0, 'templates': 0, 'last': 0, 'span': 60})
     for s in stats:
         c = exp.get(s['exporter'], {})
         names = c.get('if_names', {})
@@ -314,7 +323,8 @@ def api_devices(q):
                     'rps': round(recs / span, 1), 'packets': int(s['packets']), 'records': recs, 'lost': int(s['lost']),
                     'loss_pct': round(100 * int(s['lost']) / max(1, int(s['packets']) + int(s['lost'])), 2), 'no_template': int(s['no_template']),
                     'errors': int(s['errors']), 'templates': int(s['templates']), 'last': int(s['last']), 'sampling': c.get('sampling', '1:1'),
-                    'wan_ifs': c.get('wan_ifs', []),
+                    'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
+                    'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'interfaces': [{'index': int(r['i']), 'name': names.get(str(r['i']), 'local' if r['i'] == 0 and c.get('local_if') == 0 else f"if {r['i']}"),
                                     'wan': int(r['i']) in c.get('wan_ifs', []), 'bytes': int(r['bytes'])} for r in ifs if r['exporter'] == s['exporter']]})
     return {'devices': out}
@@ -343,7 +353,8 @@ def api_alerts(q):
         out.append({'sev': 'warn', 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
                     'title': 'Тривале вивантаження', 'text': f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Мбіт/с протягом {r['mins']} хв за останні 3 год.",
                     'when': r['since']})
-    for r in ch("""SELECT exporter, sum(lost) AS lost, sum(packets) AS packets FROM exporter_stats WHERE ts >= now() - INTERVAL 1 HOUR GROUP BY exporter HAVING lost > 0""", fmt='JSON'):
+    for r in ch("""SELECT exporter, sum(lost) AS lost_n, sum(packets) AS packets_n FROM exporter_stats WHERE ts >= now() - INTERVAL 1 HOUR GROUP BY exporter HAVING lost_n > 0""", fmt='JSON'):
+        r['lost'], r['packets'] = r['lost_n'], r['packets_n']
         pct = 100 * int(r['lost']) / max(1, int(r['packets']) + int(r['lost']))
         out.append({'sev': 'warn' if pct < 2 else 'crit', 'kind': 'export_loss', 'device': r['exporter'], 'title': 'Втрати експорту',
                     'text': f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: втрачено {r['lost']} пакетів ({pct:.2f}%) за годину. Перевірте канал до колектора.", 'when': 'за годину'})
@@ -361,10 +372,73 @@ def api_alerts(q):
     return {'alerts': out}
 
 
+def _str(v, n, field):
+    if v is None or v == '':
+        return ''
+    if not isinstance(v, str) or len(v) > n:
+        raise BadRequest(f'поле {field}: до {n} символів')
+    return v.strip()
+
+
+def device_from_body(b):
+    try:
+        ip = str(ipaddress.ip_address(str(b.get('ip', '')).strip()))
+    except ValueError:
+        raise BadRequest('Некоректна IP-адреса експорту')
+    cfg = {'name': _str(b.get('name'), 64, 'назва') or ip, 'vendor': _str(b.get('vendor'), 64, 'виробник'), 'model': _str(b.get('model'), 64, 'модель'),
+           'city': _str(b.get('city'), 64, 'місто'), 'sampling': _str(b.get('sampling'), 16, 'вибірка') or '1:1'}
+    cc = _str(b.get('country'), 2, 'країна').upper()
+    if cc and not cc.isalpha():
+        raise BadRequest('Код країни — дві латинські літери')
+    cfg['country'] = cc
+    try:
+        cfg['wan_ifs'] = sorted({int(x) for x in (b.get('wan_ifs') or []) if 0 <= int(x) < 2**32})
+        cfg['local_if'] = None if b.get('local_if') in (None, '') else int(b['local_if'])
+        for k, lim in (('lat', 90), ('lon', 180)):
+            v = b.get(k)
+            cfg[k] = None if v in (None, '') else float(v)
+            if cfg[k] is not None and abs(cfg[k]) > lim:
+                raise ValueError
+    except (TypeError, ValueError):
+        raise BadRequest('Інтерфейси — цілі числа; широта/довгота — числа в межах ±90/±180')
+    pubs = []
+    for x in (b.get('public_ips') or [])[:16]:
+        try:
+            pubs.append(str(ipaddress.ip_address(str(x).strip())))
+        except ValueError:
+            raise BadRequest(f'Некоректна публічна IP: {x}')
+    cfg['public_ips'] = pubs
+    old = exporters_cfg().get(ip, {})
+    if old.get('if_names'):
+        cfg['if_names'] = old['if_names']
+    return ip, cfg
+
+
+def post_device_save(body, user):
+    ip, cfg = device_from_body(body)
+    save_ui_exporter(ip, cfg)
+    NAMES.reload()
+    return {'ok': True, 'ip': ip}
+
+
+def post_device_delete(body, user):
+    ip = str(body.get('ip', ''))
+    if ip not in exporters_cfg():
+        raise BadRequest('Пристрій не налаштований')
+    save_ui_exporter(ip, None)
+    NAMES.reload()
+    return {'ok': True}
+
+
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
+
+
+AUTH = None
+ADMIN_GET = {'/api/users'}
+COOKIE = 'ft_session'
 
 
 class H(BaseHTTPRequestHandler):
@@ -373,8 +447,32 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def token(self):
+        c = SimpleCookie()
+        try:
+            c.load(self.headers.get('Cookie', ''))
+        except Exception:
+            return None
+        m = c.get(COOKIE)
+        return m.value if m else None
+
+    def client_ip(self):
+        return self.client_address[0]
+
+    def set_cookie(self, value, max_age):
+        secure = '; Secure' if self.headers.get('X-Forwarded-Proto') == 'https' else ''
+        self._cookie = f'{COOKIE}={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}'
+
+    def json(self, code, obj):
+        self.send(code, json.dumps(obj, default=str).encode(), 'application/json')
+
     def send(self, code, body, ctype, cache='no-store'):
         self.send_response(code)
+        if getattr(self, '_cookie', None):
+            self.send_header('Set-Cookie', self._cookie)
+            self._cookie = None
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'same-origin')
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', cache)
@@ -384,6 +482,16 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path.startswith('/api/'):
+            user = AUTH.session_user(self.token())
+            if not user:
+                return self.json(401, {'error': 'login required'})
+            if u.path == '/api/me':
+                return self.json(200, AUTH.public(user))
+            if u.path in ADMIN_GET:
+                if AUTH.users[user]['role'] != 'admin':
+                    return self.json(403, {'error': 'Потрібні права адміністратора'})
+                return self.json(200, {'users': AUTH.list_users()})
         fn = ROUTES.get(u.path)
         if fn:
             try:
@@ -403,7 +511,62 @@ class H(BaseHTTPRequestHandler):
         self.send(200, body, STATIC.get(ext, 'application/octet-stream'), 'no-cache' if ext == '.html' else 'max-age=86400')
 
 
+    def do_POST(self):
+        u = urlparse(self.path)
+        if not u.path.startswith('/api/'):
+            return self.json(404, {'error': 'not found'})
+        # CSRF: browsers only send JSON cross-site with a CORS preflight, which we never grant; cookie is SameSite=Strict too
+        if not self.headers.get('Content-Type', '').startswith('application/json'):
+            return self.json(415, {'error': 'JSON expected'})
+        n = int(self.headers.get('Content-Length') or 0)
+        if n > 65536:
+            return self.json(413, {'error': 'too large'})
+        try:
+            body = json.loads(self.rfile.read(n) or b'{}')
+            if not isinstance(body, dict):
+                raise ValueError
+        except ValueError:
+            return self.json(400, {'error': 'bad JSON'})
+        try:
+            if u.path == '/api/login':
+                token = AUTH.login(body.get('username'), body.get('password'), self.client_ip())
+                self.set_cookie(token, 7 * 86400)
+                return self.json(200, AUTH.public(body['username']))
+            tok = self.token()
+            user = AUTH.session_user(tok)
+            if not user:
+                return self.json(401, {'error': 'login required'})
+            if u.path == '/api/logout':
+                AUTH.logout(tok)
+                self.set_cookie('', 0)
+                return self.json(200, {'ok': True})
+            if u.path == '/api/me/password':
+                AUTH.change_own_password(user, body.get('current'), body.get('new'), tok)
+                return self.json(200, AUTH.public(user))
+            admin_routes = {
+                '/api/users': lambda: AUTH.create_user(body.get('name'), body.get('role'), body.get('password')),
+                '/api/users/update': lambda: AUTH.update_user(user, body.get('name'), body.get('role'), body.get('password')),
+                '/api/users/delete': lambda: AUTH.delete_user(user, body.get('name')),
+                '/api/devices/save': lambda: post_device_save(body, user),
+                '/api/devices/delete': lambda: post_device_delete(body, user),
+            }
+            if u.path not in admin_routes:
+                return self.json(404, {'error': 'not found'})
+            if AUTH.users[user]['role'] != 'admin':
+                return self.json(403, {'error': 'Потрібні права адміністратора'})
+            res = admin_routes[u.path]()
+            return self.json(200, res if isinstance(res, dict) else {'ok': True})
+        except AuthError as e:
+            return self.json(429 if 'спроб' in str(e) else 400, {'error': str(e)})
+        except BadRequest as e:
+            return self.json(400, {'error': str(e)})
+        except OSError as e:
+            print(f'[flowtrack-api] POST {u.path}: {e}', flush=True)
+            return self.json(500, {'error': 'не вдалося зберегти'})
+
+
 if __name__ == '__main__':
+    AUTH = Auth()
     srv = ThreadingHTTPServer((BIND, PORT), H)
     srv.daemon_threads = True
     print(f'[flowtrack-api] serving on http://{BIND}:{PORT}', flush=True)

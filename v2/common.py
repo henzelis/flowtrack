@@ -16,6 +16,51 @@ CH_PASSWORD = os.environ.get('FT_CH_PASSWORD', '')
 CH_DB = os.environ.get('FT_CH_DB', 'flowtrack')
 
 
+STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack-v2')
+UI_EXPORTERS = os.path.join(STATE_DIR, 'exporters.json')
+
+
+def load_exporters():
+    """/etc exporters.json (deployment) overlaid with devices managed from the UI (state dir).
+    A UI entry set to null hides a deployment entry."""
+    merged = dict(load_json('exporters.json', {}))
+    try:
+        with open(UI_EXPORTERS) as f:
+            for ip, cfg in json.load(f).items():
+                if cfg is None:
+                    merged.pop(ip, None)
+                else:
+                    merged[ip] = {**merged.get(ip, {}), **cfg}
+    except (FileNotFoundError, ValueError):
+        pass
+    return merged
+
+
+def exporters_mtime():
+    mt = []
+    for p in (os.path.join(CONFIG_DIR, 'exporters.json'), UI_EXPORTERS):
+        try:
+            mt.append(os.path.getmtime(p))
+        except OSError:
+            mt.append(0)
+    return tuple(mt)
+
+
+def save_ui_exporter(ip, cfg):
+    """cfg=None deletes the device. Atomic write; readable by the service group only."""
+    try:
+        with open(UI_EXPORTERS) as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError):
+        data = {}
+    data[ip] = cfg
+    tmp = UI_EXPORTERS + '.tmp'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640)
+    with os.fdopen(fd, 'w') as f:
+        json.dump(data, f, indent=1, ensure_ascii=False)
+    os.replace(tmp, UI_EXPORTERS)
+
+
 def load_json(name, default):
     try:
         with open(os.path.join(CONFIG_DIR, name)) as f:
