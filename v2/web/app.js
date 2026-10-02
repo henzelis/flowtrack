@@ -350,7 +350,11 @@ const convRows = (rows, total) => rows.length ? '<div class="blist">' + rows.map
 // ===================== views =====================
 async function kpiCards(){
   const [s, ser] = await Promise.all([api('summary'), api('series')]);
-  const trend = (a, b) => !s.has_prev || !b ? '<span class="tr" style="color:var(--ink3)">н/д</span>' : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
+  // trend vs the previous equal period; until enough history exists, say since when data is collected and when the comparison appears
+  const since = s.oldest ? (Date.now() / 1000 - s.oldest > 86400 ? dmy(s.oldest) + ' ' : '') + hhmm(s.oldest) : '';
+  const ready = s.oldest ? s.oldest + 2 * s.range : 0, readyTxt = ready ? new Date(ready * 1000).toLocaleString('uk-UA', {day:'numeric', month:'long', hour:'2-digit', minute:'2-digit'}) : '';
+  const noPrev = `<span class="tr" style="color:var(--ink3)" title="Порівняння з попереднім таким самим періодом з’явиться, коли назбирається вдвічі більше даних${readyTxt ? ' — орієнтовно ' + readyTxt : ''}">${since ? 'дані з ' + since : 'немає даних'}</span>`;
+  const trend = (a, b) => !s.has_prev || !b ? noPrev : `<span class="tr ${a < b ? 'dn' : ''}" title="порівняно з попереднім таким самим періодом">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
   const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]);
   const card = (ic, k, v, tr, sp, col) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sparkSvg(sp, col)}</div>`;
   return card('pulse', 'Загальний трафік', fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)

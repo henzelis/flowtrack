@@ -158,7 +158,12 @@ def api_summary(q):
     r = {k[2:]: v for k, v in r.items()}
     top = ch(f"SELECT service AS k, sum(bytes) AS b FROM flows WHERE {where} GROUP BY k ORDER BY b DESC LIMIT 1", p, fmt='JSON')
     r = {k: int(v) for k, v in r.items()}
-    r['has_prev'] = r.pop('oldest') <= time.time() - 2 * rng + step
+    # history starts when the collector started receiving (late-exported flows can carry older timestamps)
+    started = ch("SELECT toUnixTimestamp(min(ts)) - 60 AS t FROM exporter_stats", fmt='JSON')
+    if started and int(started[0]['t']) > 0:
+        r['oldest'] = max(r['oldest'], int(started[0]['t']))
+    r['has_prev'] = r['oldest'] <= time.time() - 2 * rng + step
+    r['range'] = rng
     r['top_service'] = top[0]['k'] if top else None
     r['top_service_bytes'] = int(top[0]['b']) if top else 0
     return r
