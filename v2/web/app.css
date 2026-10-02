@@ -59,7 +59,7 @@ button,input,select{font:inherit;color:inherit}
 .side .health{margin-top:auto;display:grid;gap:12px}
 .coll{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;align-items:center;padding:0 6px;font-size:13px}
 .coll b{color:var(--ok);font-weight:700}
-.coll span{grid-column:2;color:var(--ink2)}
+.coll span:not(.dot){grid-column:2;color:var(--ink2)}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);display:inline-block;box-shadow:0 0 10px var(--ok)}
 .dot.warn{background:var(--warn);box-shadow:0 0 10px var(--warn)} .dot.crit{background:var(--crit);box-shadow:0 0 10px var(--crit)}
 .ingest{padding:12px 14px}
@@ -149,7 +149,7 @@ main{min-width:0;padding:18px 22px 36px}
 .chart{width:100%;height:260px}
 .chart.hero-h{height:420px}
 .chart.map{height:520px}
-.chart.donut{height:190px}
+.chart.donut{height:150px}
 
 /* inspector */
 .insp{display:grid;gap:12px}
@@ -197,10 +197,10 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .chev{color:var(--ink3)}
 
 /* donut legend */
-.dl{display:grid;grid-template-columns:auto 1fr auto auto;gap:9px 12px;align-items:center;font-size:13px}
+.dl{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:9px 12px;align-items:center;font-size:13px}
 .dl .p,.dl .t{font:12.5px var(--f-mono);text-align:right}
 .dl .t{color:var(--ink2)}
-.donut-wrap{display:grid;grid-template-columns:190px 1fr;gap:16px;align-items:center}
+.donut-wrap{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:center}
 
 /* events */
 .alerts{display:grid;gap:8px}
@@ -302,9 +302,12 @@ button.user:focus-visible{outline:2px solid var(--blue-hi)}
 .pagehead .ph{margin:0}
 .tabs button{padding:7px 18px}
 table.talkers td{padding:8px 10px;vertical-align:middle}
-table.talkers tr.sel td{background:rgba(47,123,255,.12)}
-table.talkers tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--blue-hi)}
-.hbar{display:inline-block;width:5px;height:26px;border-radius:3px;margin-right:10px;vertical-align:middle;float:left}
+table.talkers tr.is-picked td{background:rgba(47,123,255,.12)}
+table.talkers tr.is-picked td:first-child{background:linear-gradient(90deg,var(--blue-hi) 0 3px,rgba(47,123,255,.12) 3px)}
+.hcell{display:flex;align-items:stretch;gap:10px;min-width:0}
+.hbar{flex:none;width:5px;border-radius:3px}
+.htxt{display:flex;flex-direction:column;justify-content:center;min-width:0;line-height:1.35}
+.htxt .nat{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vbar{height:6px;border-radius:3px;background:rgba(0,0,0,.35);overflow:hidden;margin-top:5px}
 .vbar i{display:block;height:100%;border-radius:3px}
 .pbars{display:grid;grid-template-columns:auto 1fr auto;gap:10px 14px;align-items:center;font-size:13px}
@@ -318,3 +321,14 @@ table.talkers tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--blue-hi)}
 .qa-btn b{display:block;font-size:13px}
 .qa-btn small{display:block;font-size:11.5px;color:var(--ink3)}
 @media (max-width:900px){.geomini{grid-template-columns:1fr}.qa{grid-template-columns:1fr}}
+
+/* layout polish found on real-browser screenshots */
+.dl .t,.dl .p{white-space:nowrap}
+.dl > .link,.dl > span:not(.p):not(.t){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+table.compact th,table.compact td{padding:7px 6px;font-size:12.5px}
+table.compact .app-b{max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.two-line{display:flex;flex-direction:column;line-height:1.3;min-width:0}
+.two-line .nat{font-size:11px}
+.hero{display:flex;flex-direction:column}
+.hero > .river,.hero > .chart{flex:1 1 auto;min-height:420px}
+.donut-wrap .dl{gap:8px 10px;font-size:12.5px}

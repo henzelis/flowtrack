@@ -64,7 +64,9 @@ function childScope(){ const list = []; rootScope.push(() => runScope(list));
 const setPressed = (id, val) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === val)));
 const scaleNote = () => state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : '';
 const charts = [];
-function mkChart(el){ const c = echarts.init(el, null, {renderer:'canvas'}); charts.push(c); onCleanup(() => { c.dispose(); const i = charts.indexOf(c); if (i >= 0) charts.splice(i, 1); }); return c; }
+function mkChart(el){ const c = echarts.init(el, null, {renderer:'canvas'}); charts.push(c);
+  // axis labels are measured with the web font; re-layout once it has loaded so nothing gets clipped
+  if (document.fonts && document.fonts.status !== 'loaded') document.fonts.ready.then(() => { if (!c.isDisposed()) c.resize(); }); onCleanup(() => { c.dispose(); const i = charts.indexOf(c); if (i >= 0) charts.splice(i, 1); }); return c; }
 window.addEventListener('resize', () => charts.forEach(c => c.resize()));
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 function every(ms, fn){ const t = setInterval(() => { if (!document.hidden) fn(); }, ms); onCleanup(() => clearInterval(t)); }   // paused while the tab is hidden
@@ -72,7 +74,7 @@ function every(ms, fn){ const t = setInterval(() => { if (!document.hidden) fn()
 // ===================== chart helpers =====================
 const axisX = () => ({type:'time', axisLine:{lineStyle:{color:C.hair}}, axisTick:{show:false}, splitLine:{show:false},
   axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, hideOverlap:true, formatter:v => rangeSecs() > 86400 ? dmy(v / 1000) : hhmm(v / 1000)}});
-const axisY = fmt => ({type:'value', splitLine:{lineStyle:{color:C.hair}}, axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, formatter:fmt}});
+const axisY = fmt => ({type:'value', splitLine:{lineStyle:{color:C.hair}}, axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, formatter:v => String(fmt(v)).replace(/\.0 /, ' ')}});
 const tipBase = () => ({backgroundColor:'rgba(10,20,46,.94)', borderColor:'rgba(130,175,255,.45)', textStyle:{color:C.ink, fontFamily:'Manrope', fontSize:12}, extraCssText:'border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)'});
 // fill missing buckets with zeros so lines drop to 0 instead of interpolating across gaps
 function grid(series){
@@ -84,7 +86,7 @@ function trendChart(el, series, compact){
   const {ts, step} = grid(series), m = new Map(series.rows.map(r => [r[0], r]));
   const area = c => ({color:new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset:0, color:hexA(c, .35)}, {offset:1, color:hexA(c, .02)}])});
   const c = mkChart(el);
-  c.setOption({animation:false, grid:compact ? {left:52, right:8, top:8, bottom:20} : {left:62, right:10, top:30, bottom:24},
+  c.setOption({animation:false, grid:compact ? {left:12, right:8, top:8, bottom:4, containLabel:true} : {left:14, right:10, top:30, bottom:4, containLabel:true},
     legend:{show:!compact, top:0, right:0, icon:'roundRect', itemWidth:14, itemHeight:6, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
     tooltip:{...tipBase(), trigger:'axis', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
     series:[
@@ -97,7 +99,7 @@ function stackChart(el, series, label, onPick){
   for (const [t, k, b] of series.rows) { if (!keys.has(k)) keys.set(k, new Map()); keys.get(k).set(t, b); }
   const order = [...keys.keys()].sort((a, b) => (a === '__other') - (b === '__other'));
   const c = mkChart(el);
-  c.setOption({animation:false, grid:{left:62, right:10, top:36, bottom:24}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
+  c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
     tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
     series:order.map(k => { const col = k === '__other' ? C.other : keyColor(k); return {name:k === '__other' ? 'інше' : label(k), id:k, type:'line', stack:'a', smooth:.25, showSymbol:false,
       lineStyle:{width:1.4, color:col}, itemStyle:{color:col}, areaStyle:{opacity:k === '__other' ? .2 : .35}, emphasis:{focus:'series'}, data:ts.map(t => [t * 1000, (keys.get(k).get(t) || 0) * 8 / step])}; })});
@@ -285,7 +287,8 @@ function flatMap(el, geo, onConn){
       {id:'live', type:'lines', coordinateSystem:'geo', zlevel:2, silent:true, effect:{show:!reduceMotion, period:2.4, trailLength:0, symbol:'circle', symbolSize:5}, lineStyle:{width:1.4, opacity:.75, curveness:.28}, data:[]},
       {id:'remotes', type:'scatter', coordinateSystem:'geo', zlevel:3, symbolSize:d => 5 + 12 * Math.sqrt(d[2] / rmax), itemStyle:{color:C.ext, shadowBlur:12, shadowColor:C.ext},
         label:lbl('right', 12), labelLayout:{hideOverlap:true}, emphasis:{label:{show:true}},
-        data:[...cities.values()].map(g => ({name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v}))},
+        data:[...cities.values()].map(g => { const onSite = META.devices.some(d => d.lat != null && Math.abs(d.lat - g.lat) < 0.6 && Math.abs(d.lon - g.lon) < 0.9);
+          return {name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v, label:onSite ? {show:false} : undefined}; })},
       {id:'sites', type:'scatter', coordinateSystem:'geo', zlevel:4, symbolSize:12, itemStyle:{color:C.int, borderColor:'rgba(255,255,255,.85)', borderWidth:2, shadowBlur:10, shadowColor:C.int}, label:lbl('left', 13), data:sites},
     ]});
   // live arcs: poll new flows, then release them gradually so bursts from the exporter become a steady stream
@@ -423,11 +426,11 @@ function vOverview(){
     return `<div class="donut-wrap"><div class="chart donut" id="cDonut"></div><div class="dl">${rows.map(r => `<i class="idot" style="background:${r.k === 'Інші' ? C.other : keyColor(r.k)}"></i>${r.k === 'Інші' ? '<span>Інші</span>' : `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.k)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`;
   });
   section('hostBox', async () => { const t = await api('top', {dim:'int_ip', limit:5});
-    return `<div class="tw"><table><thead><tr><th>#</th><th>Хост</th><th class="num">Трафік</th><th class="num">%</th><th></th></tr></thead><tbody>${t.rows.map((r, i) => `<tr class="click" data-host="${esc(r.k)}"><td class="mono">${i + 1}</td><td>${hostCell(r.k, r.name)}</td><td class="num mono">${fmtB(tot(r))}</td><td class="num mono">${pct(tot(r), t.total)}</td><td class="chev">›</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>#</th><th>Хост</th><th class="num">Трафік</th><th class="num">%</th><th></th></tr></thead><tbody>${t.rows.map((r, i) => `<tr class="click" data-host="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="two-line"><b class="mono">${esc(r.name || r.k)}</b>${r.name ? `<span class="nat">${esc(r.k)}</span>` : ''}</div></td><td class="num mono">${fmtB(tot(r))}</td><td class="num mono">${pct(tot(r), t.total)}</td><td class="chev">›</td></tr>`).join('')}</tbody></table></div>`; });
   api('series').then(s => { const el = document.getElementById('cTrend'); if (el) trendChart(el, s); }).catch(e => fill('cTrend', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:5}); return convRows(t.rows, t.total); });
   section('recentBox', async () => { const t = await api('flows', {limit:7});
-    return `<div class="tw"><table><thead><tr><th>Час</th><th>Внутр. → зовн.</th><th>Сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td class="ipl">${esc(f.name || f.int_ip)} <span class="nat ${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : '←'}</span> ${esc(f.ext_ip)}</td><td>${svcBadge(f.service)}</td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Немає записів</div></td></tr>'}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>Час</th><th>Внутр. → зовн. · сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : '←'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(f.service)}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Немає записів</div></td></tr>'}</tbody></table></div>`; });
 }
 
 async function inspectorHtml(sel){
@@ -489,7 +492,7 @@ function vFlows(){
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:6});
-    return `<div class="tw"><table><thead><tr><th>Внутр.</th><th>Зовн.</th><th>Сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(x => `<tr><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>Внутр.</th><th>Зовн.</th><th>Сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(x => `<tr><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
   section('protoBox', async () => { const t = await api('top', {dim:'l7', limit:6});
     setTimeout(() => { const el = document.getElementById('cProto'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
     return `<div class="donut-wrap"><div class="chart donut" id="cProto"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`; });
@@ -570,12 +573,12 @@ function vTalkers(){
     const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1;
     const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>Хост / IP</th><th style="width:26%">Обсяг</th><th class="num">%</th><th class="num">Flows</th><th class="num">Сер. швидкість</th><th>Тренд</th><th></th></tr></thead><tbody>
       ${t.rows.map((r, i) => { const c = colorOf.get(r.k);
-        return `<tr class="click${i === 0 ? ' sel' : ''}" data-pick="${esc(r.k)}"><td class="mono">${i + 1}</td><td><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><b class="mono">${esc(r.k)}</b><br><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? 'без імені' : 'публічна адреса'))}</span></td>
+        return `<tr class="click${i === 0 ? ' is-picked' : ''}" data-pick="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? 'без імені' : 'публічна адреса'))}</span></span></div></td>
           <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div></td>
           <td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
           <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="Картка хоста">›</button></td></tr>`; }).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`);
     if (box) { box.classList.remove('loading');
-      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => { box.querySelectorAll('tr.sel').forEach(x => x.classList.remove('sel')); tr.classList.add('sel'); selected = t.rows.find(r => r.k === tr.dataset.pick); drawQa(); });
+      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => { box.querySelectorAll('tr.is-picked').forEach(x => x.classList.remove('is-picked')); tr.classList.add('is-picked'); selected = t.rows.find(r => r.k === tr.dataset.pick); drawQa(); });
       box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation(); openHost(b.dataset.open); }); }
     // donut: top 5 + rest, same colours as the table
     const top5 = t.rows.slice(0, 5), rest = t.total - top5.reduce((a, r) => a + tot(r), 0);
@@ -587,7 +590,7 @@ function vTalkers(){
       const {ts: t5, step} = grid(s5), keys = new Map(); for (const [x, k, b] of s5.rows) { if (!keys.has(k)) keys.set(k, new Map()); keys.get(k).set(x, b); }
       const order = [...keys.keys()].sort((a, b) => (a === '__other') - (b === '__other'));
       const c = mkChart(el);
-      c.setOption({animation:false, grid:{left:62, right:10, top:36, bottom:24}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
+      c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
         tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
         series:order.map(k => { const col = k === '__other' ? C.other : (colorOf.get(k) || C.other), r = t.rows.find(x => x.k === k);
           return {name:k === '__other' ? 'інші' : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
@@ -605,7 +608,7 @@ function vTalkers(){
           data:city.rows.filter(r => r.la || r.lo).map(r => [r.lo, r.la, tot(r)])}]}); });
     return `<div class="geomini"><div class="chart" id="cMini" style="height:120px"></div><div class="dl">${cc.rows.map((r, i) => `<i class="idot" style="background:${cols[i]}"></i><button class="link" data-f="country" data-v="${esc(r.k)}">${esc(r.k ? ccName(r.k) : 'Локальні')}</button><span class="p">${pct(tot(r), cc.total)}</span><span class="t"></span>`).join('')}${rest > 0 ? `<i class="idot" style="background:${C.other}"></i><span>Інші</span><span class="p">${pct(rest, cc.total)}</span><span class="t"></span>` : ''}</div></div>`; });
   section('tDetail', async () => { const d = await api('top', {dim:'host_svc', limit:6});
-    return `<div class="tw"><table><thead><tr><th>Хост</th><th>Головний сервіс</th><th>Протокол</th><th class="num">Обсяг</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
+    return `<div class="tw"><table class="compact"><thead><tr><th>Хост</th><th>Головний сервіс</th><th>Протокол</th><th class="num">Обсяг</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
       return `<tr class="click" data-host="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(r.l7)}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
 }
 function vPorts(){
