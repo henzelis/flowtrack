@@ -44,9 +44,16 @@ const devName = ip => (META.devices.find(d => d.ip === ip) || {}).name || ip;
 const hostLabel = h => h.name ? `${esc(h.name)}` : esc(h.ip);
 
 // ===================== lifecycle =====================
-const cleanups = [];
-const onCleanup = fn => cleanups.push(fn);
-function cleanup(){ while (cleanups.length) { try { cleanups.pop()(); } catch (e) {} } }
+// cleanup scopes: the page has a root scope; widgets that re-mount on their own (hero, river) get a child scope
+const rootScope = [];
+let curScope = rootScope;
+const onCleanup = fn => curScope.push(fn);
+function runScope(list){ while (list.length) { try { list.pop()(); } catch (e) {} } }
+function cleanup(){ runScope(rootScope); }
+function childScope(){ const list = []; rootScope.push(() => runScope(list));
+  return {run:fn => { const prev = curScope; curScope = list; try { return fn(); } finally { curScope = prev; } }, dispose:() => runScope(list)}; }
+const setPressed = (id, val) => document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === val)));
+const scaleNote = () => state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : '';
 const charts = [];
 function mkChart(el){ const c = echarts.init(el, null, {renderer:'canvas'}); charts.push(c); onCleanup(() => { c.dispose(); const i = charts.indexOf(c); if (i >= 0) charts.splice(i, 1); }); return c; }
 window.addEventListener('resize', () => charts.forEach(c => c.resize()));
@@ -108,7 +115,6 @@ function createRiver(host, opts){
   const cv = host.querySelector('canvas'), tip = host.querySelector('.rtip'), ctx = cv.getContext('2d');
   let W = 0, H = 0, dpr = 1, raf = 0, hover = null, sticky = state.sel, data = null, first = true;
   const cur = new Map(), alphas = new Map(), pos = new Map(), flash = new Map(), lastT = new Map();
-  const sz = v => v <= 0 ? 0 : state.scale === 'sqrt' ? Math.sqrt(v) : v;   // width transform; tooltips show real values
   let targets = new Map(), left = [], right = [], info = {L:new Map(), R:new Map()};
   const ease = (m, k, target) => { const v = m.has(k) ? m.get(k) : target; const n = v + (target - v) * 0.1; m.set(k, n); return n; };
   async function load(){
@@ -135,11 +141,13 @@ function createRiver(host, opts){
     const headH = compact ? 22 : 30, gap = compact ? 6 : 8, n = Math.max(left.length, right.length, 1);
     const cardH = Math.max(28, Math.min(compact ? 40 : 50, (H - headH - gap * (n - 1)) / n));
     const cardW = Math.min(compact ? 160 : 210, Math.max(118, W * (compact ? 0.21 : 0.18)));
-    const x0 = cardW + 6, x1 = W - cardW - 6, nodeTot = new Map(), nodeReal = new Map(), MINW = 1.5;
-    for (const [k, v] of cur) { const [l, r] = k.split('|'); const s = sz(v.dn) + sz(v.up), real = v.dn + v.up;
-      for (const key of ['L' + l, 'R' + r]) { nodeTot.set(key, (nodeTot.get(key) || 0) + s); nodeReal.set(key, (nodeReal.get(key) || 0) + real); } }
-    const scale = cardH * 0.8 / Math.max(1e-9, ...nodeTot.values());
-    const w = v => v <= 0 ? 0 : Math.max(MINW, sz(v) * scale);
+    const x0 = cardW + 6, x1 = W - cardW - 6, totS = new Map(), nodeReal = new Map(), MINW = 1.5;
+    for (const [k, v] of cur) { const [l, r] = k.split('|'); const sq = Math.sqrt(Math.max(0, v.dn)) + Math.sqrt(Math.max(0, v.up)), real = v.dn + v.up;
+      for (const key of ['L' + l, 'R' + r]) { totS.set(key, (totS.get(key) || 0) + sq); nodeReal.set(key, (nodeReal.get(key) || 0) + real); } }
+    // widths blend smoothly between linear and sqrt when the user flips the scale (tooltips always show real values)
+    const mix = ease(alphas, '__scale', state.scale === 'sqrt' ? 1 : 0);
+    const scaleS = cardH * 0.8 / Math.max(1e-9, ...totS.values()), scaleL = cardH * 0.8 / Math.max(1e-9, ...nodeReal.values());
+    const w = v => v <= 0 ? 0 : Math.max(MINW, mix * Math.sqrt(v) * scaleS + (1 - mix) * v * scaleL);
     // cards glide to their slot; new cards fade in from transparent
     const yOf = (side, k, i) => { const key = side + k, target = headH + i * (cardH + gap); if (!pos.has(key)) { pos.set(key, target); alphas.set('card' + key, 0); } const y = pos.get(key) + (target - pos.get(key)) * 0.12; pos.set(key, y); return y; };
     cards = [];
@@ -337,12 +345,40 @@ async function kpiCards(){
     + card('ip', 'Унікальні IP', fmtN(s.ips), trend(s.ips, s.p_ips), fl.map(Math.sqrt), '#4C93FF')
     + card('grid', 'Топ сервіс', esc(s.top_service || '—'), s.top_service ? `<span class="tr" style="color:var(--ink2)">${pct(s.top_service_bytes, s.bytes)}</span>` : '', vals.map(Math.sqrt), C.int);
 }
+let heroScope = null;
+function mountHero(){
+  if (heroScope) heroScope.dispose();
+  heroScope = childScope();
+  const g = state.heroMode === 'graph';
+  fill('heroSec', `${ph('flow', 'Мережевий трафік', g ? '<span id="heroLbl">наживо · вікно 2 хв</span>' : 'з’єднання за вибраний період · нові лінії з’являються наживо',
+      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', 'Стиснений'], ['lin', 'Лінійний']], state.scale)}</span>` + seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
+      + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>внутр.</span><span><i style="background:${C.ext}"></i>зовн.</span></span>`)}
+    <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div>`);
+  wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
+  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); const l = document.getElementById('heroLbl'); if (l) l.textContent = l.textContent.replace(/ · ширина ∝ √обсягу$/, '') + scaleNote(); });
+  const hb = document.getElementById('heroBody'), myScope = heroScope;
+  heroScope.run(() => {
+    if (g) createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
+      onData:() => fill('heroLbl', `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}${scaleNote()}`)});
+  });
+  if (!g) {
+    api('geo').then(geo => { if (!hb.isConnected || heroScope !== myScope) return; myScope.run(() => state.heroMode === 'map' ? flatMap(hb, geo) : globe(hb, geo)); }).catch(e => fill('heroBody', errBox(e)));
+    section('heroOvl', async () => {
+      const [h, d, s] = await Promise.all([api('top', {dim:'int_ip', limit:1}), api('top', {dim:'ext_ip', limit:1}), api('top', {dim:'service', limit:1})]);
+      if (heroScope !== myScope) return null;
+      const a = h.rows[0], b = d.rows[0], c = s.rows[0];
+      return `<div class="overlay"><div class="ovl">
+        <div><span class="ico">${icon(ICO.users, 15)}</span><span>Топ джерело</span><b>${esc(a ? a.name || a.k : '—')}</b><small>${a ? fmtB(tot(a)) : ''}</small></div>
+        <div><span class="ico">${icon(ICO.globe, 15)}</span><span>Топ призначення</span><b>${esc(b ? b.k : '—')}</b><small>${b ? [b.city, fmtB(tot(b))].filter(Boolean).join(' · ') : ''}</small></div>
+        <div><span class="ico">${icon(ICO.grid, 15)}</span><span>Топ сервіс</span><b>${esc(c ? c.k : '—')}</b><small>${c ? pct(tot(c), s.total) : ''}</small></div></div>
+        <div class="livebadge"><b>Наживо</b>нові з’єднання</div></div>`;
+    });
+  }
+}
 function vOverview(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid"><div id="kpis" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
-    <section class="glass panel s8 hero">${ph('flow', 'Мережевий трафік', state.heroMode === 'graph' ? '<span id="heroLbl">наживо · вікно 2 хв</span>' : 'з’єднання за вибраний період · нові лінії з’являються наживо', (state.heroMode === 'graph' ? seg('scaleSeg', [['sqrt', 'Стиснений'], ['lin', 'Лінійний']], state.scale) : '') + seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
-      + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>внутр.</span><span><i style="background:${C.ext}"></i>зовн.</span></span>`)}
-      <div id="heroBody" class="${state.heroMode === 'graph' ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div></section>
+    <section class="glass panel s8 hero" id="heroSec"></section>
     <div class="col s4">
       <section class="glass panel">${ph('pie', 'Топ сервісів', 'за обсягом трафіку')}<div id="svcBox" class="loading"></div></section>
       <section class="glass panel">${ph('users', 'Топ хостів', 'внутрішні адреси')}<div id="hostBox" class="loading"></div></section>
@@ -350,24 +386,9 @@ function vOverview(){
     <section class="glass panel s4">${ph('chart', 'Динаміка трафіку', rangeLabel())}<div class="chart" id="cTrend"></div></section>
     <section class="glass panel s4">${ph('conv', 'Топ розмов', 'внутрішня → зовнішня адреса')}<div id="convBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('list', 'Останні потоки', 'нова мережева активність', '<button class="lnk" id="toFlows">Усі</button>')}<div id="recentBox" class="loading"></div></section></div>`;
-  wireSeg('heroSeg', m => { state.heroMode = m; render(); });
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
-  const hb = document.getElementById('heroBody');
-  wireSeg('scaleSeg', m => { state.scale = m; render(); });
-  if (state.heroMode === 'graph') createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
-    onData:d => fill('heroLbl', `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}${state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : ''}`)});
-  else api('geo').then(g => { if (!hb.isConnected) return; state.heroMode === 'map' ? flatMap(hb, g) : globe(hb, g); }).catch(e => fill('heroBody', errBox(e)));
-  section('heroOvl', async () => {
-    if (state.heroMode === 'graph') return '';
-    const [h, d, s] = await Promise.all([api('top', {dim:'int_ip', limit:1}), api('top', {dim:'ext_ip', limit:1}), api('top', {dim:'service', limit:1})]);
-    const a = h.rows[0], b = d.rows[0], c = s.rows[0];
-    return `<div class="overlay"><div class="ovl">
-      <div><span class="ico">${icon(ICO.users, 15)}</span><span>Топ джерело</span><b>${esc(a ? a.name || a.k : '—')}</b><small>${a ? fmtB(tot(a)) : ''}</small></div>
-      <div><span class="ico">${icon(ICO.globe, 15)}</span><span>Топ призначення</span><b>${esc(b ? b.k : '—')}</b><small>${b ? [b.city, fmtB(tot(b))].filter(Boolean).join(' · ') : ''}</small></div>
-      <div><span class="ico">${icon(ICO.grid, 15)}</span><span>Топ сервіс</span><b>${esc(c ? c.k : '—')}</b><small>${c ? pct(tot(c), s.total) : ''}</small></div></div>
-      <div class="livebadge"><b>Наживо</b>нові з’єднання</div></div>`;
-  });
+  mountHero();
   section('svcBox', async () => {
     const t = await api('top', {dim:'service', limit:5}); const rest = t.total - t.rows.reduce((s, r) => s + tot(r), 0);
     const rows = [...t.rows, ...(rest > 0 ? [{k:'Інші', up:rest, dn:0}] : [])];
@@ -425,12 +446,19 @@ function vFlows(){
     const b = document.getElementById('inspFilter'); if (b) b.onclick = () => { const ex = JSON.parse(el.dataset.extra); ex.forEach(f => state.filters.push({...f, neg:false})); state.sel = null; render(); };
   };
   showInsp(state.sel);
-  createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 10000 : 0, onSelect:showInsp,
-    fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, win:120, metric:state.metric}),
-    onData:d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}` : rangeLabel()) + (state.scale === 'sqrt' ? ' · ширина ∝ √обсягу' : ''); }});
-  wireSeg('scaleSeg', m => { state.scale = m; render(); });
-  wireSeg('metricSeg', m => { state.metric = m; render(); });
-  wireSeg('liveSeg', m => { state.flowLive = m === 'live'; render(); });
+  let riverScope = null;
+  const winLbl = d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}` : rangeLabel()) + scaleNote(); };
+  let lastData = null;
+  const mountRiver = () => {
+    if (riverScope) riverScope.dispose();
+    riverScope = childScope();
+    riverScope.run(() => createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 10000 : 0, onSelect:showInsp,
+      fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, win:120, metric:state.metric}), onData:d => { lastData = d; winLbl(d); }}));
+  };
+  mountRiver();
+  wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); if (lastData) winLbl(lastData); });
+  wireSeg('metricSeg', m => { if (m === state.metric) return; state.metric = m; setPressed('metricSeg', m); mountRiver(); });
+  wireSeg('liveSeg', m => { const live = m === 'live'; if (live === state.flowLive) return; state.flowLive = live; setPressed('liveSeg', m); mountRiver(); });
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:6});
