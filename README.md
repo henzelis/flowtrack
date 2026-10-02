@@ -13,7 +13,9 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 ## Features
 
 **Collection**
-- NetFlow v5, NetFlow v9 and IPFIX; templates are tracked per exporter.
+- NetFlow v5, NetFlow v9 and IPFIX from exporters on IPv4 or IPv6 (the collector and the web
+  interface listen on both). Templates are tracked per exporter and saved, so a collector restart does
+  not drop the first minutes of data while waiting for the exporter to resend them.
 - Correct accounting of delta counters. FortiOS (like NetFlow v9/IPFIX in general) re-exports a long
   session every `active-flow-timeout`, and each export covers only its own interval — the next export's
   `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. Traffic is therefore the plain sum of records.
@@ -23,8 +25,11 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - Enrichment: country, city, coordinates and ASN of the outside address
   ([DB-IP Lite](https://db-ip.com/db/lite.php), CC BY 4.0), L7 protocol from protocol + port,
   service name from ASN or port, post-NAT address, inside host names from a names file and reverse DNS.
+- Sampled exporters: the sampling rate is read from the record itself, from NetFlow v9 / IPFIX options
+  records, from the NetFlow v5 header, or taken from the device settings (`"sampling": "1:N"`), and bytes
+  and packets are scaled up accordingly. The rate is stored with every record and shown per device.
 - Exporter health: records/s, templates, packets lost (sequence gaps), records skipped while waiting
-  for a template.
+  for a template, effective sampling rate.
 - Optional raw forwarding (`FT_FORWARD`) so another collector keeps receiving the same feed.
 
 **Web UI**
@@ -237,11 +242,37 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 | `POST /api/login`, `/api/logout`, `/api/me/password` | session and own password |
 | `GET/POST /api/users…`, `POST /api/devices/save`, `/api/devices/delete` | admin only |
 
+## Performance
+
+One collector process handles about **30,000 flow records per second** on one CPU core (measured on an
+AMD Ryzen 7 5700X with real FortiGate NetFlow v9 traffic, including enrichment and ClickHouse inserts):
+
+| Offered load | Stored |
+|---|---|
+| 10,400 records/s | 100 % |
+| 20,800 records/s | 100 % |
+| 31,200 records/s | 98.7 % |
+| 41,600 records/s | 76 % — the collector is CPU-bound; the excess is dropped at the socket |
+
+For scale: a small office firewall exports a few records per second, a busy 1 Gbit/s internet edge
+typically a few thousand. Above ~25,000 records/s per collector, use sampling on the exporter or run
+more collectors (see the roadmap).
+
 ## Roadmap
 
-sFlow; SNMP polling for interface names and counter cross-checks; notifications (Telegram, e-mail,
-webhook); host names from DHCP leases; template persistence across collector restarts (today the first
-minute after a restart is skipped until the exporter resends its templates).
+**Next — scale and reach**
+- Several collector workers on one port (`SO_REUSEPORT`), so many exporters use many cores
+- English web interface and a language switch; screenshots in this README
+- Automated tests and CI (GitHub Actions), API tokens for scripts and monitoring
+- Socket-level drop counter in exporter health
+
+**Features**
+- Notifications: Telegram, e-mail, webhook
+- Host names from DHCP leases (FortiGate API) and SNMP interface names / counter cross-checks
+- sFlow v5
+- FortiGate application names from `APPLICATION_TAG`
+- Detections: port scans, IP reputation lists
+- Scheduled reports; configurable retention; ClickHouse backups
 
 ## Repository layout
 

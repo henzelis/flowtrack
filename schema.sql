@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS flows
     lon        Float32,
     asn        UInt32,
     as_org     LowCardinality(String),
-    app_tag    UInt64                            -- exporter-specific application id (FortiOS APPLICATION_TAG)
+    app_tag    UInt64,                           -- exporter-specific application id (FortiOS APPLICATION_TAG)
+    sampling   UInt32 DEFAULT 1                  -- 1 of N packets sampled; bytes/packets are already scaled up
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
@@ -67,8 +68,13 @@ CREATE TABLE IF NOT EXISTS exporter_stats
     lost          UInt64,
     no_template   UInt64,
     decode_errors UInt64,
-    templates     UInt16
+    templates     UInt16,
+    sampling      UInt32 DEFAULT 1
 )
 ENGINE = MergeTree
 ORDER BY (exporter, ts)
 TTL ts + INTERVAL 90 DAY;
+
+-- columns added after the first release (no-ops on new databases)
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
+ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;

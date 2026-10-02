@@ -119,12 +119,30 @@ def ipstr(v):
     """Normalize an address field (int, str, ipaddress object) to canonical text, or ''."""
     if v is None:
         return ''
+    if type(v) is str:                               # hot path: the netflow library hands addresses over as text
+        return _ip_text(v)
+    if type(v) is int and 0 <= v < 4294967296:
+        return _ipv4_text(v)
     try:
         if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
             return str(ipaddress.ip_address(int(v)))
         return str(ipaddress.ip_address(str(v)))
     except ValueError:
         return ''
+
+
+@lru_cache(maxsize=262144)
+def _ip_text(v):
+    """Validated, canonical form of a textual address (addresses repeat a lot, so this is cached)."""
+    try:
+        return str(ipaddress.ip_address(v.strip()))
+    except ValueError:
+        return ''
+
+
+@lru_cache(maxsize=131072)
+def _ipv4_text(v):
+    return f'{v >> 24}.{(v >> 16) & 255}.{(v >> 8) & 255}.{v & 255}'
 
 
 @lru_cache(maxsize=65536)

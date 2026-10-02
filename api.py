@@ -284,11 +284,11 @@ def api_flows(q):
     where, p, rng, step = scope(q)
     p['lim'] = max(1, min(q1(q, 'limit', '50', int), 1000))
     rows = ch(f"""SELECT toUnixTimestamp(ts) AS t, toFloat64(ts_start) AS t0, exporter, in_if, out_if, toString(dir) AS dir, int_ip, int_port, ext_ip, ext_port,
-            proto, nat_ip, nat_port, bytes, packets, l7, service, country, city, asn, as_org
+            proto, nat_ip, nat_port, bytes, packets, l7, service, country, city, asn, as_org, sampling
         FROM flows WHERE {where} ORDER BY ts DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
     for r in rows:
         r['name'] = NAMES.get(r['int_ip'])
-        for k in ('t', 'in_if', 'out_if', 'int_port', 'ext_port', 'proto', 'nat_port', 'bytes', 'packets', 'asn'):
+        for k in ('t', 'in_if', 'out_if', 'int_port', 'ext_port', 'proto', 'nat_port', 'bytes', 'packets', 'asn', 'sampling'):
             r[k] = int(r[k])
     return {'rows': rows}
 
@@ -317,7 +317,7 @@ def api_geo(q):
 def api_devices(q):
     exp = exporters_cfg()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
-            sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates,
+            sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, max(sampling) AS sampling_n,
             toUnixTimestamp(max(ts)) AS last, dateDiff('second', min(ts), max(ts)) + 60 AS span
         FROM exporter_stats WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')
     ifs = ch("""SELECT exporter, i, sum(b) AS bytes FROM (
@@ -328,7 +328,7 @@ def api_devices(q):
     seen = {s['exporter'] for s in stats}
     for ip in exp:
         if ip not in seen:
-            stats.append({'exporter': ip, 'version': 0, 'packets': 0, 'records': 0, 'lost': 0, 'no_template': 0, 'errors': 0, 'templates': 0, 'last': 0, 'span': 60})
+            stats.append({'exporter': ip, 'version': 0, 'packets': 0, 'records': 0, 'lost': 0, 'no_template': 0, 'errors': 0, 'templates': 0, 'last': 0, 'span': 60, 'sampling_n': 0})
     for s in stats:
         c = exp.get(s['exporter'], {})
         names = c.get('if_names', {})
@@ -337,7 +337,8 @@ def api_devices(q):
                     'site': ', '.join(x for x in (c.get('city', ''), c.get('country', '')) if x), 'proto': {5: 'NetFlow v5', 9: 'NetFlow v9', 10: 'IPFIX'}.get(int(s['version']), f"v{s['version']}"),
                     'rps': round(recs / span, 1), 'packets': int(s['packets']), 'records': recs, 'lost': int(s['lost']),
                     'loss_pct': round(100 * int(s['lost']) / max(1, int(s['packets']) + int(s['lost'])), 2), 'no_template': int(s['no_template']),
-                    'errors': int(s['errors']), 'templates': int(s['templates']), 'last': int(s['last']), 'sampling': c.get('sampling', '1:1'),
+                    'errors': int(s['errors']), 'templates': int(s['templates']), 'last': int(s['last']),
+                    'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'interfaces': [{'index': int(r['i']), 'name': names.get(str(r['i']), 'local' if r['i'] == 0 and c.get('local_if') == 0 else f"if {r['i']}"),
@@ -473,7 +474,8 @@ class H(BaseHTTPRequestHandler):
         return m.value if m else None
 
     def client_ip(self):
-        return self.client_address[0]
+        ip = self.client_address[0]
+        return ip[7:] if ip.startswith('::ffff:') and '.' in ip else ip
 
     def set_cookie(self, value, max_age):
         tls = isinstance(self.connection, ssl.SSLSocket) or self.headers.get('X-Forwarded-Proto') == 'https'
@@ -605,6 +607,9 @@ def redirect_to_https(sock, port):
         host = host.split(':')[0]
     if not _HOST_RE.match(host or '-'):
         host = sock.getsockname()[0]
+        host = host[7:] if host.startswith('::ffff:') and '.' in host else host
+        if ':' in host:
+            host = f'[{host}]'
     if any(c in path for c in '\r\n ') or len(path) > 2000:
         path = '/'
     body = f'HTTP/1.1 301 Moved Permanently\r\nLocation: https://{host}:{port}{path}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
@@ -620,9 +625,15 @@ class Server(ThreadingHTTPServer):
     TLS handshakes run in the per-connection thread, so slow clients never block accept()."""
     daemon_threads = True
 
-    def __init__(self, addr, handler, ctx=None):
+    def __init__(self, addr, handler, ctx=None, family=socket.AF_INET):
+        self.address_family = family
         super().__init__(addr, handler)
         self.ctx = ctx
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:       # accept IPv4 too (dual-stack)
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
 
     def finish_request(self, request, client_address):
         if not self.ctx:
@@ -661,7 +672,15 @@ def tls_context():
 if __name__ == '__main__':
     AUTH = Auth()
     ctx = tls_context()
-    srv = Server((BIND, PORT), H, ctx)
+    if BIND in ('', '0.0.0.0', '::') or ':' in BIND:
+        try:
+            srv = Server(('::' if BIND in ('', '0.0.0.0', '::') else BIND, PORT), H, ctx, socket.AF_INET6)
+        except OSError:                  # IPv6 disabled on this host
+            if ':' in BIND and BIND != '::':
+                raise
+            srv = Server(('0.0.0.0', PORT), H, ctx)
+    else:
+        srv = Server((BIND, PORT), H, ctx)
     print(f'[flowtrack-api] serving on {"https" if ctx else "http"}://{BIND}:{PORT}'
           f'{" (plain HTTP redirects to HTTPS)" if ctx else ""}', flush=True)
     srv.serve_forever()
