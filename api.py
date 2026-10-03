@@ -116,6 +116,10 @@ def scope(q):
                 cond = f'asn = {{f{i}:UInt32}}'
             else:
                 cond = f'positionCaseInsensitive(as_org, {{f{i}:String}}) > 0'
+        elif k == 'iface':
+            if not v.isdigit():
+                raise BadRequest('bad value for iface')
+            cond = f'(in_if = {{f{i}:UInt32}} OR out_if = {{f{i}:UInt32}})'
         elif k in FILTERS:
             col, typ = FILTERS[k]
             if typ != 'String' and not v.isdigit():
@@ -341,6 +345,46 @@ def api_paths(q):
             r[k] = int(r[k])
         r['v'] = float(r['v'])
     return {'rows': rows, 'live': live, 'window_end': wend, 'window': win if live else rng, 'range': rng}
+
+
+def api_devmap(q):
+    """One exporter as a box with ports: interface pairs (paths through the box), the inside hosts behind each
+    inside interface and the outside addresses behind each WAN interface. Same time window rules as api_paths."""
+    where, p, rng, step = scope(q)
+    metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
+    live = q1(q, 'live', '0') == '1'
+    win = max(60, min(q1(q, 'win', '120', int), 900))
+    wend = None
+    if live:
+        last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE {where} AND ts >= now() - INTERVAL 15 MINUTE", p, fmt='JSON')
+        wend = int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+        p['wend'], p['win'] = wend, win
+        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
+    p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
+    paths = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
+            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, count() AS fl, uniqExact(int_ip) AS hosts
+        FROM flows WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 60""", p, fmt='JSON')
+    # an inside host enters the box through: in_if when it sends (up, or the source of an internal record),
+    # out_if when it receives (down, or the destination of an internal record)
+    inside = ch(f"""SELECT host, iface, sum(u) AS up, sum(d) AS dn, sum(u) + sum(d) AS v FROM (
+            SELECT int_ip AS host, if(dir = 'down', out_if, in_if) AS iface, if(dir = 'down', 0, {metric}) AS u, if(dir = 'down', {metric}, 0) AS d
+                FROM flows WHERE {where} AND dir IN ('up', 'down', 'internal')
+            UNION ALL SELECT ext_ip, out_if, 0, {metric} FROM flows WHERE {where} AND dir = 'internal')
+        GROUP BY host, iface ORDER BY v DESC LIMIT {{n:UInt8}} BY iface LIMIT 60""", p, fmt='JSON')
+    outside = ch(f"""SELECT ext_ip AS host, if(dir = 'up', out_if, in_if) AS iface, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
+            sum({metric}) AS v, any(service) AS service, any(country) AS country, any(city) AS city
+        FROM flows WHERE {where} AND dir IN ('up', 'down') GROUP BY host, iface ORDER BY v DESC LIMIT {{n:UInt8}}""", p, fmt='JSON')
+    num = ('in_if', 'out_if', 'iface', 'fl', 'hosts')
+    for rows in (paths, inside, outside):
+        for r in rows:
+            for k, val in list(r.items()):
+                if k in num:
+                    r[k] = int(val)
+                elif k in ('v', 'up', 'dn', 'other'):
+                    r[k] = float(val)
+    for r in inside:
+        r['name'] = NAMES.get(r['host'])
+    return {'paths': paths, 'inside': inside, 'outside': outside, 'live': live, 'window_end': wend, 'window': win if live else rng, 'range': rng}
 
 
 def api_flows(q):
@@ -651,7 +695,7 @@ def post_device_delete(body, user):
 
 
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
-          '/api/flows': api_flows, '/api/paths': api_paths, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
+          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 

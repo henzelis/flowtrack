@@ -359,3 +359,4 @@ tr.unseen td{opacity:.75}
 .col.fillcol{display:flex;flex-direction:column}
 .col.fillcol > .grow{flex:1 1 auto;display:flex;flex-direction:column}
 .col.fillcol > .grow > .chart{flex:1 1 auto;min-height:260px}
+.river.devmap{height:620px}
