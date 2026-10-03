@@ -322,6 +322,7 @@ second, a busy 1 Gbit/s internet edge typically a few thousand. If the Devices p
 - Host names from DHCP leases (FortiGate API) and SNMP interface names / counter cross-checks
 - sFlow v5
 - FortiGate application names from `APPLICATION_TAG`
+- DSCP / traffic class: breakdown and colouring by QoS marking
 - Detections: port scans, IP reputation lists
 - Scheduled reports; configurable retention; ClickHouse backups
 
