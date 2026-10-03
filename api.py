@@ -36,7 +36,7 @@ STEP = {3600: 60, 6 * 3600: 300, 86400: 300, 7 * 86400: 3600, 30 * 86400: 4 * 36
 FILTERS = {
     'ip': ('int_ip', 'String'), 'dst': ('ext_ip', 'String'), 'service': ('service', 'String'), 'l7': ('l7', 'String'),
     'country': ('country', 'String'), 'city': ('city', 'String'), 'port': ('ext_port', 'UInt16'), 'device': ('exporter', 'String'),
-    'dir': ('dir', 'String'), 'proto': ('proto', 'UInt8'),
+    'dir': ('dir', 'String'), 'proto': ('proto', 'UInt8'), 'in_if': ('in_if', 'UInt32'), 'out_if': ('out_if', 'UInt32'),
 }
 DIMS = {'int_ip': 'int_ip', 'ext_ip': 'ext_ip', 'service': 'service', 'l7': 'l7', 'country': 'country', 'city': 'city',
         'asn': 'asn', 'ext_port': 'ext_port', 'exporter': 'exporter', 'dir': 'dir', 'proto': 'proto'}
@@ -317,6 +317,30 @@ def api_river(q):
            if (x['l'] != '__other' or more_l) and (x['r'] != '__other' or more_r)]
     return {'left': [host_obj(ip) for ip in left], 'right': [{'ip': ip, 'name': NAMES.get(ip) if is_private(ip) else '', **{k: info.get(ip, {}).get(k, '') for k in ('service', 'country', 'city')}} for ip in right],
             'more_left': more_l, 'more_right': more_r, 'links': out, 'window_end': p.get('wend'), 'window': win if live else rng, 'live': live, 'range': rng}
+
+
+def api_paths(q):
+    """Traffic through an exporter: (input interface -> output interface) pairs with volume, hosts and services.
+    The device comes from the 'device' filter; live = the last `win` seconds of data, otherwise the range."""
+    where, p, rng, step = scope(q)
+    metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
+    live = q1(q, 'live', '0') == '1'
+    win = max(60, min(q1(q, 'win', '120', int), 900))
+    wend = None
+    if live:
+        last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE {where} AND ts >= now() - INTERVAL 15 MINUTE", p, fmt='JSON')
+        wend = int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+        p['wend'], p['win'] = wend, win
+        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
+    rows = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sum(bytes) AS b, sum(packets) AS pk, count() AS fl,
+            uniqExact(int_ip) AS hosts, topKWeighted(3)(service, bytes) AS services,
+            sumIf(bytes, dir IN ('up', 'down')) AS internet, sumIf(bytes, dir = 'internal') AS internal
+        FROM flows WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 80""", p, fmt='JSON')
+    for r in rows:
+        for k in ('in_if', 'out_if', 'b', 'pk', 'fl', 'hosts', 'internet', 'internal'):
+            r[k] = int(r[k])
+        r['v'] = float(r['v'])
+    return {'rows': rows, 'live': live, 'window_end': wend, 'window': win if live else rng, 'range': rng}
 
 
 def api_flows(q):
@@ -627,7 +651,7 @@ def post_device_delete(body, user):
 
 
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
-          '/api/flows': api_flows, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
+          '/api/flows': api_flows, '/api/paths': api_paths, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 

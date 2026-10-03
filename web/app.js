@@ -30,8 +30,8 @@ const state = {view:'overview', range:'24h', filters:[], heroMode:'map', metric:
 let META = {devices:[]}, ME = null;
 const isAdmin = () => ME && ME.role === 'admin';
 const isInternal = () => state.traffic === 'internal';
-const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto'];
-const FILTER_LABEL = {ip:T('host','хост'), dst:T('ext. IP','зовн. IP'), service:T('service','сервіс'), l7:T('protocol','протокол'), country:T('country','країна'), city:T('city','місто'), port:T('port','порт'), device:T('device','пристрій'), asn:'ASN', dir:T('direction','напрямок'), proto:'L4'};
+const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if'];
+const FILTER_LABEL = {in_if:T('in via','вхід через'), out_if:T('out via','вихід через'), ip:T('host','хост'), dst:T('ext. IP','зовн. IP'), service:T('service','сервіс'), l7:T('protocol','протокол'), country:T('country','країна'), city:T('city','місто'), port:T('port','порт'), device:T('device','пристрій'), asn:'ASN', dir:T('direction','напрямок'), proto:'L4'};
 let renderSeq = 0;
 
 async function api(path, params = {}, extraFilters = []){
@@ -362,7 +362,7 @@ function globe(el, geo){
 
 // ===================== shared UI =====================
 const NAV = [
-  ['overview',T('Overview','Огляд'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows','Потоки'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['talkers',T('Top hosts','Топ хостів'),'M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
+  ['overview',T('Overview','Огляд'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows','Потоки'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device','Через пристрій'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 5 6 5M6 14c3 0 3-10 6-10M6 9h6'], ['talkers',T('Top hosts','Топ хостів'),'M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
   ['apps',T('Services','Сервіси'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports','Порти'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation','Геолокація'),'M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
   ['threats',T('Events','Події'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'], ['devices',T('Devices','Пристрої'),'M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6'],
   ['users',T('Users','Користувачі'),'M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4', 'admin'],
@@ -547,6 +547,125 @@ function vFlows(){
     setTimeout(() => { const el = document.getElementById('cProto'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), T('protocols', 'протоколів')]); });
     return `<div class="donut-wrap"><div class="chart donut" id="cProto"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(dv(r.k))}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`; });
   section('recBox', async () => { const t = await api('flows', {limit:60}); window.__recs = t.rows; return recTable(t.rows); });
+}
+// ===================== through the device: input interface -> device -> output interface =====================
+const ROLE_COLOR = {wan:'#FF9F43', local:'#6E7FA6'};
+const IFPAL = ['#2F7BFF', '#27D3F5', '#8B5CFF', '#FF4FA0', '#2EE59D', '#FFD166', '#5AC8FA', '#F0508C'];
+// the device this page shows: the global device filter, else the one picked here, else the busiest
+function pathDevice(){
+  const df = state.filters.find(f => f.k === 'device' && !f.neg);
+  return df ? df.v : state.pathDev || (META.devices[0] || {}).ip;
+}
+function vPaths(){
+  const v = document.getElementById('view'), live = !!state.pathsLive;
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s9">${ph('nodes', T('Traffic through the device', 'Трафік через пристрій'), T('input interface → device → output interface · width = volume · click a ribbon or an interface to filter', 'вхідний інтерфейс → пристрій → вихідний інтерфейс · ширина = обсяг · клік по стрічці чи інтерфейсу — фільтр'),
+      `<span id="pDevSeg"></span>` + seg('pMetricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('pLiveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], live ? 'live' : 'period'), true)}
+      <div class="legend" id="pLegend" style="margin:-6px 0 10px"></div>
+      <div class="chart" id="cPaths" style="height:560px"></div>
+      <p class="note">${T('All traffic of the device regardless of the Internet / Internal selector. Wi-Fi SSID (VAP) interfaces of FortiGate are not sampled: traffic between two SSIDs does not appear.', 'Увесь трафік пристрою незалежно від перемикача «Інтернет / Внутрішній». Wi-Fi-інтерфейси (VAP) FortiGate не експортують NetFlow: трафік між двома SSID тут не видно.')}</p></section>
+    <div class="col s3">
+      <div id="pKpi" class="col"></div>
+      <section class="glass panel">${ph('search', T('Path', 'Шлях'), T('the selected input → output', 'вибраний вхід → вихід'))}<div id="pInsp"></div></section>
+    </div>
+    <section class="glass panel s7">${ph('conv', T('Paths', 'Шляхи'), T('input → output interface · click to filter', 'вхідний → вихідний інтерфейс · клік — фільтр'))}<div id="pTable" class="loading"></div></section>
+    <section class="glass panel s5">${ph('ip', T('Interfaces', 'Інтерфейси'), T('traffic entering and leaving each interface', 'трафік, що входить і виходить через кожен інтерфейс'))}<div id="pIfs" class="loading"></div></section></div>`;
+  wireSeg('pMetricSeg', m => { if (m === state.metric) return; state.metric = m; render(); });
+  wireSeg('pLiveSeg', m => { const l = m === 'live'; if (l === !!state.pathsLive) return; state.pathsLive = l; render(); });
+  const seq = renderSeq;
+  (async () => {
+    const devs = (await api('devices')).devices; if (seq !== renderSeq) return;
+    const df = state.filters.find(f => f.k === 'device' && !f.neg);
+    if (!df && !devs.some(d => d.ip === state.pathDev)) state.pathDev = ([...devs].sort((a, b) => b.rps - a.rps)[0] || {}).ip;
+    const ip = pathDevice(), dev = devs.find(d => d.ip === ip);
+    // device switcher (only when the global device filter does not decide it)
+    fill('pDevSeg', df ? '' : seg('pDevBtns', devs.map(d => [d.ip, d.name]), ip));
+    wireSeg('pDevBtns', d => { state.pathDev = d; state.filters = state.filters.filter(f => f.k !== 'in_if' && f.k !== 'out_if'); render(); });
+    if (!dev) { fill('cPaths', `<div class="empty">${T('No device has sent data yet', 'Ще жоден пристрій не надіслав дані')}</div>`); return; }
+    const ifs = new Map(dev.interfaces.map(i => [i.index, i]));
+    const extra = df ? [] : [{k:'device', v:ip}];
+    const load = () => api('paths', {t:'all', metric:state.metric, live:live ? 1 : 0, win:120}, extra);
+    const color = new Map();
+    // a fixed colour per interface (role colour for WAN / the device itself, else by its place among the device's interfaces)
+    const plain = [...ifs.values()].filter(i => !ROLE_COLOR[i.role]).map(i => i.index).sort((a, b) => a - b);
+    const ifColor = idx => { if (!color.has(idx)) { const r = (ifs.get(idx) || {}).role; const pos = plain.indexOf(idx);
+      color.set(idx, ROLE_COLOR[r] || IFPAL[(pos >= 0 ? pos : plain.length + color.size) % IFPAL.length]); } return color.get(idx); };
+    const ifName = idx => { const i = ifs.get(idx); return i ? (i.custom_name || i.name) : (idx === 0 ? 'local' : `if ${idx}`); };
+    // an address or network that identifies the interface: entered by hand, else what the flows show
+    const ifAddr = idx => { const i = ifs.get(idx); return i ? ([...(i.addrs || []), ...(i.seen_addrs || [])][0] || '') : ''; };
+    const ifNamed = idx => { const i = ifs.get(idx); return !!(i && i.custom_name) || idx === 0; };
+    const ifRole = idx => { const r = (ifs.get(idx) || {}).role || 'lan'; return r === 'wan' ? 'WAN' : r === 'local' ? T('device itself', 'сам пристрій') : 'LAN'; };
+    const unit = state.metric === 'bytes' ? fmtB : fmtN;
+    let chart = null;
+    const draw = d => {
+      const el = document.getElementById('cPaths'); if (!el) return;
+      const rows = d.rows.filter(r => r.v > 0), total = rows.reduce((a, r) => a + r.v, 0);
+      if (!rows.length) { el.innerHTML = `<div class="empty">${T('No traffic through this device for the selected filters', 'Немає трафіку через цей пристрій для вибраних фільтрів')}</div>`; chart = null; return; }
+      [...new Set(rows.flatMap(r => [r.in_if, r.out_if]))].sort((a, b) => a - b).forEach(ifColor);
+      const ins = new Map(), outs = new Map();
+      rows.forEach(r => { ins.set(r.in_if, (ins.get(r.in_if) || 0) + r.v); outs.set(r.out_if, (outs.get(r.out_if) || 0) + r.v); });
+      const nodes = [...[...ins].map(([i, val]) => ({name:'in:' + i, idx:i, side:'in', val, depth:0, itemStyle:{color:ifColor(i), borderColor:ifColor(i)}})),
+                     ...[...outs].map(([i, val]) => ({name:'out:' + i, idx:i, side:'out', val, depth:1, itemStyle:{color:ifColor(i), borderColor:ifColor(i)}}))];
+      // a sqrt scale keeps small paths visible next to a big one (as on the Flows page)
+      const w = val => state.scale === 'lin' ? val : Math.sqrt(val);
+      const links = rows.map(r => ({source:'in:' + r.in_if, target:'out:' + r.out_if, value:w(r.v), raw:r}));
+      if (!chart || chart.isDisposed()) { el.innerHTML = ''; chart = mkChart(el);
+        chart.on('click', e => {
+          if (e.dataType === 'edge') { putFilter({k:'in_if', v:String(e.data.raw.in_if), neg:false}); putFilter({k:'out_if', v:String(e.data.raw.out_if), neg:false}); }
+          else if (e.dataType === 'node') putFilter({k:e.data.side === 'in' ? 'in_if' : 'out_if', v:String(e.data.idx), neg:false});
+          else return;
+          if (!df) putFilter({k:'device', v:ip, neg:false});
+          render(); }); }
+      const W = el.clientWidth, H = el.clientHeight, side = Math.min(230, Math.max(150, W * .2));
+      chart.setOption({animation:false, tooltip:{...tipBase(), trigger:'item', formatter:p => p.dataType === 'edge'
+          ? `<b>${esc(ifName(p.data.raw.in_if))} → ${esc(ifName(p.data.raw.out_if))}</b><br>${unit(p.data.raw.v)} · ${(100 * p.data.raw.v / total).toFixed(1)}%<br>${T('hosts', 'хостів')}: ${p.data.raw.hosts} · ${esc(p.data.raw.services.map(dv).join(', '))}`
+          : `<b>${esc(ifName(p.data.idx))}</b> (${p.data.idx}) · ${ifRole(p.data.idx)}<br>${p.data.side === 'in' ? T('entering', 'входить') : T('leaving', 'виходить')}: ${unit(p.data.val)}`},
+        graphic:[{type:'rect', left:'center', top:28, z:-1, shape:{width:Math.max(60, W - 2 * side - 2 * 140), height:H - 56, r:18},
+                  style:{fill:'rgba(47,123,255,.07)', stroke:'rgba(110,160,255,.35)', lineWidth:1.2}},
+                 {type:'text', left:'center', top:6, z:10, style:{text:dev.name + (dev.model ? ' · ' + dev.model : ''), fill:C.ink, font:'700 14px Manrope'}}],
+        series:[{type:'sankey', left:side, right:side, top:40, bottom:24, nodeWidth:14, nodeGap:12, nodeAlign:'justify', layoutIterations:0, draggable:false,
+          emphasis:{focus:'adjacency'}, data:nodes, links,
+          lineStyle:{color:'gradient', opacity:.42, curveness:.5},
+          label:{color:C.ink, fontFamily:'JetBrains Mono', fontSize:12, formatter:p => `{n|${ifName(p.data.idx)}}${ifNamed(p.data.idx) ? ` {i|${p.data.idx}}` : ''}\n${ifAddr(p.data.idx) ? `{a|${ifAddr(p.data.idx)}}\n` : ''}{v|${unit(p.data.val)}}`,
+            rich:{n:{fontWeight:700, color:C.ink}, i:{color:C.ink3, fontSize:11}, a:{color:C.ink3, fontSize:10.5, lineHeight:15}, v:{color:C.ink2, fontSize:11, lineHeight:16}}},
+          levels:[{depth:0, label:{position:'left'}}, {depth:1, label:{position:'right'}}]}]}, true);
+      fill('pLegend', `<span>${T('in', 'вхід')} →</span><span style="margin-left:auto">→ ${T('out', 'вихід')}</span>` + (d.live && d.window_end ? `<span class="mono">${T(`2-min window to ${hms(d.window_end)}`, `вікно 2 хв до ${hms(d.window_end)}`)}</span>` : `<span class="mono">${rangeLabel()}</span>`));
+      // KPIs, tables
+      const by = f => rows.reduce((a, r) => a + (f(r) ? r.b : 0), 0), totB = by(() => true);
+      const isWan = i => (ifs.get(i) || {}).role === 'wan', isLocal = i => (ifs.get(i) || {}).role === 'local';
+      const kc = (ic, k, val, sub) => `<section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span class="v">${val}</span>${sub ? `<span class="nat" style="grid-column:2">${sub}</span>` : ''}</section>`;
+      fill('pKpi', kc('pulse', T('Through the device', 'Через пристрій'), fmtB(totB), `${rows.length} ${T('paths', 'шляхів')}`)
+        + kc('globe', T('Internet', 'Інтернет'), fmtB(by(r => isWan(r.in_if) || isWan(r.out_if))), `${pct(by(r => isWan(r.in_if) || isWan(r.out_if)), totB)}`)
+        + kc('nodes', T('Between inside networks', 'Між внутрішніми мережами'), fmtB(by(r => !isWan(r.in_if) && !isWan(r.out_if) && !isLocal(r.in_if) && !isLocal(r.out_if))), '')
+        + kc('dev', T('To / from the device itself', 'До / від самого пристрою'), fmtB(by(r => isLocal(r.in_if) || isLocal(r.out_if))), ''));
+      const pill = i => `<span class="idot" style="background:${ifColor(i)};box-shadow:0 0 8px ${ifColor(i)}"></span><b class="mono">${esc(ifName(i))}</b>${ifNamed(i) ? ` <span class="nat">${i}</span>` : ''}`;
+      const max = rows.length ? rows[0].v : 1;
+      const tb = fill('pTable', `<div class="tw"><table class="compact"><thead><tr><th>${T('Input', 'Вхід')}</th><th></th><th>${T('Output', 'Вихід')}</th><th style="width:26%">${T('Volume', 'Обсяг')}</th><th class="num">%</th><th class="num">Flows</th><th class="num">${T('Hosts', 'Хостів')}</th><th>${T('Main services', 'Головні сервіси')}</th></tr></thead><tbody>
+        ${rows.slice(0, 15).map(r => `<tr class="click" data-path="${r.in_if}|${r.out_if}"><td>${pill(r.in_if)}</td><td class="nat">→</td><td>${pill(r.out_if)}</td>
+          <td><b class="mono">${unit(r.v)}</b><div class="vbar"><i style="width:${(100 * r.v / max).toFixed(1)}%;background:linear-gradient(90deg,${ifColor(r.in_if)},${ifColor(r.out_if)})"></i></div></td>
+          <td class="num mono">${pct(r.v, total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${r.hosts}</td><td class="nat">${esc(r.services.map(dv).join(', '))}</td></tr>`).join('')}</tbody></table></div>`);
+      if (tb) { tb.classList.remove('loading'); tb.querySelectorAll('tr[data-path]').forEach(tr => tr.onclick = () => { const [a, b] = tr.dataset.path.split('|');
+        putFilter({k:'in_if', v:a, neg:false}); putFilter({k:'out_if', v:b, neg:false}); if (!df) putFilter({k:'device', v:ip, neg:false}); render(); }); }
+      const allIf = [...new Set([...ins.keys(), ...outs.keys()])].sort((a, b) => (outs.get(b) || 0) + (ins.get(b) || 0) - (outs.get(a) || 0) - (ins.get(a) || 0));
+      const ib = fill('pIfs', `<div class="tw"><table class="compact"><thead><tr><th>${T('Interface', 'Інтерфейс')}</th><th>${T('Role', 'Роль')}</th><th class="num">${T('Entering', 'Входить')}</th><th class="num">${T('Leaving', 'Виходить')}</th><th>${T('Addresses', 'Адреси')}</th></tr></thead><tbody>
+        ${allIf.map(i => { const x = ifs.get(i) || {addrs:[], seen_addrs:[]};
+          return `<tr><td>${pill(i)}</td><td><span class="tag">${ifRole(i)}</span></td><td class="num mono">${unit(ins.get(i) || 0)}</td><td class="num mono">${unit(outs.get(i) || 0)}</td><td class="nat mono">${esc([...(x.addrs || []), ...(x.seen_addrs || [])].slice(0, 2).join(', ') || '—')}</td></tr>`; }).join('')}</tbody></table></div>`);
+      if (ib) ib.classList.remove('loading');
+    };
+    // inspector of the selected path (interface filters)
+    const fi = state.filters.find(f => f.k === 'in_if' && !f.neg), fo = state.filters.find(f => f.k === 'out_if' && !f.neg);
+    if (fi || fo) {
+      const [hosts, svc, dst] = await Promise.all([api('top', {dim:'int_ip', limit:5, t:'all'}, extra), api('top', {dim:'service', limit:5, t:'all'}, extra), api('top', {dim:'ext_ip', limit:5, t:'all'}, extra)]);
+      if (seq !== renderSeq) return;
+      const list = (rows, name) => rows.map(r => `<div class="brow" style="cursor:default"><span class="n">${esc(name(r))}</span><span class="t">${fmtB(tot(r))}</span><span class="p"></span></div>`).join('') || '—';
+      fill('pInsp', `<div class="insp"><div class="who"><b>${esc(fi ? ifName(+fi.v) : '*')} → ${esc(fo ? ifName(+fo.v) : '*')}</b><span>${esc(dev.name)}</span></div>
+        <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">${T('Hosts', 'Хости')}</h4><div class="blist">${list(hosts.rows, r => r.name || r.k)}</div></div>
+        <div><h4 style="margin:6px 0;font-size:12.5px;color:var(--ink2)">${T('Services', 'Сервіси')}</h4><div class="blist">${list(svc.rows, r => dv(r.k))}</div></div>
+        <div><h4 style="margin:6px 0;font-size:12.5px;color:var(--ink2)">${T('Destinations', 'Призначення')}</h4><div class="blist">${list(dst.rows, r => r.k)}</div></div></div>`);
+    } else fill('pInsp', `<p class="note" style="margin:0">${T('Click a ribbon to see who and what uses that path. The path then filters every page.', 'Клікніть стрічку, щоб побачити, хто і що йде цим шляхом. Шлях стане фільтром для всіх сторінок.')}</p>`);
+    try { draw(await load()); } catch (e) { fill('cPaths', errBox(e)); }
+    if (live) every(10000, () => load().then(d => { if (seq === renderSeq) draw(d); }).catch(() => {}));
+  })().catch(e => fill('cPaths', errBox(e)));
 }
 function recTable(rows){
   return `<div class="tw"><table><thead><tr><th>${T('Time', 'Час')}</th><th>${T('Exporter', 'Експортер')}</th><th>${T('Inside address', 'Внутрішня адреса')}</th><th></th><th>${T('Outside address', 'Зовнішня адреса')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Service', 'Сервіс')}</th><th>${T('Country', 'Країна')}</th><th class="num">${T('Bytes', 'Байти')}</th><th class="num">${T('Packets', 'Пакети')}</th><th class="num">${T('Dur.', 'Трив.')}</th></tr></thead><tbody>
@@ -1008,11 +1127,11 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, devices:vDevices, users:vUsers};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, devices:vDevices, users:vUsers};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
-  document.getElementById('chips').innerHTML = state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : f.v)}<button aria-label="${T('Remove filter', 'Прибрати фільтр')}" data-i="${i}">×</button></span>`).join('')
+  document.getElementById('chips').innerHTML = state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter', 'Прибрати фільтр')}" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all', 'Скинути всі')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
