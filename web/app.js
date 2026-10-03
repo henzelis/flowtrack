@@ -1,18 +1,40 @@
 'use strict';
 // FlowTrack web UI — talks to /api/* (see api.py). No build step.
 
+// ===================== language =====================
+// English or Ukrainian. Every text is written in both languages side by side: T('English', 'Українська').
+// The choice is kept in localStorage and in the ft_lang cookie (the API answers errors and events in it).
+const LANG = (() => { try { const s = localStorage.getItem('ft-lang'); if (s === 'en' || s === 'uk') return s; } catch (e) {}
+  return /^uk/i.test(navigator.language || '') ? 'uk' : 'en'; })();
+const T = (en, uk) => LANG === 'uk' ? uk : en;
+const LOC = T('en-GB', 'uk-UA');
+document.documentElement.lang = LANG;
+document.cookie = `ft_lang=${LANG}; path=/; max-age=31536000; SameSite=Lax`;
+function setLang(l){ try { localStorage.setItem('ft-lang', l); } catch (e) {} document.cookie = `ft_lang=${l}; path=/; max-age=31536000; SameSite=Lax`; location.reload(); }
+// texts of index.html in the chosen language (the HTML itself is English)
+(function i18nStatic(){
+  if (LANG === 'en') return;
+  const set = (id, prop, v) => { const el = document.getElementById(id); if (!el) return; if (prop === 'textContent') el.textContent = v; else el.setAttribute(prop, v); };
+  set('nav', 'aria-label', 'Розділи'); set('collState', 'textContent', 'Колектор'); set('ingK', 'textContent', 'Прийом записів');
+  set('q', 'placeholder', 'Пошук: IP, сервіс, країна, порт…  (ip:10.0.0.5  service:Telegram  -country:US  port:443)'); set('q', 'aria-label', 'Пошук і фільтр');
+  set('devLbl', 'title', 'Пристрій-експортер'); set('devSel', 'aria-label', 'Пристрій'); set('rangeLbl', 'title', 'Період'); set('rangeSel', 'aria-label', 'Період');
+  set('bell', 'aria-label', 'Події');
+  const names = {'1h':'Остання година', '6h':'Останні 6 годин', '24h':'Останні 24 години', '7d':'Останні 7 днів', '30d':'Останні 30 днів'};
+  document.querySelectorAll('#rangeSel option').forEach(o => { if (names[o.value]) o.textContent = names[o.value]; });
+})();
+
 // ===================== state, api =====================
-const state = {view:'overview', range:'24h', filters:[], heroMode:'graph', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null, ifDev:null, ifEdit:null};
+const state = {view:'overview', range:'24h', filters:[], heroMode:'map', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null, ifDev:null, ifEdit:null};
 let META = {devices:[]}, ME = null;
 const isAdmin = () => ME && ME.role === 'admin';
 const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto'];
-const FILTER_LABEL = {ip:'хост', dst:'зовн. IP', service:'сервіс', l7:'протокол', country:'країна', city:'місто', port:'порт', device:'пристрій', asn:'ASN', dir:'напрямок', proto:'L4'};
+const FILTER_LABEL = {ip:T('host','хост'), dst:T('ext. IP','зовн. IP'), service:T('service','сервіс'), l7:T('protocol','протокол'), country:T('country','країна'), city:T('city','місто'), port:T('port','порт'), device:T('device','пристрій'), asn:'ASN', dir:T('direction','напрямок'), proto:'L4'};
 let renderSeq = 0;
 
 async function api(path, params = {}, extraFilters = []){
   const qs = new URLSearchParams({range:state.range, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
   const r = await fetch(`api/${path}?${qs}`);
-  if (r.status === 401) { showLogin('Сесія завершилась — увійдіть знову'); throw new Error('потрібен вхід'); }
+  if (r.status === 401) { showLogin(T('Session ended — sign in again', 'Сесія завершилась — увійдіть знову')); throw new Error(T('login required', 'потрібен вхід')); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
   return body;
@@ -20,7 +42,7 @@ async function api(path, params = {}, extraFilters = []){
 async function apiPost(path, body){
   const r = await fetch(`api/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body || {})});
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401 && path !== 'login') { showLogin('Сесія завершилась — увійдіть знову'); throw new Error('потрібен вхід'); }
+  if (r.status === 401 && path !== 'login') { showLogin(T('Session ended — sign in again', 'Сесія завершилась — увійдіть знову')); throw new Error(T('login required', 'потрібен вхід')); }
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
 }
@@ -36,13 +58,13 @@ function addFilter(k, v, neg){ putFilter({k, v, neg}); state.sel = null; render(
 
 // ===================== formatting =====================
 const fmtB = b => { b = +b || 0; const u = ['B','KB','MB','GB','TB']; let i = 0; while (b >= 1000 && i < 4) { b /= 1000; i++; } return (i >= 2 ? b.toFixed(b < 10 ? 2 : 1) : Math.round(b)) + ' ' + u[i]; };
-const fmtR = bps => { bps = +bps || 0; const u = ['біт/с','Кбіт/с','Мбіт/с','Гбіт/с']; let i = 0; while (bps >= 1000 && i < 3) { bps /= 1000; i++; } return bps.toFixed(bps < 10 && i > 0 ? 1 : 0) + ' ' + u[i]; };
-const fmtN = n => { n = +n || 0; return n >= 1e6 ? (n / 1e6).toFixed(2) + ' M' : n >= 1e4 ? (n / 1e3).toFixed(1) + ' K' : Math.round(n).toLocaleString('uk-UA'); };
-const hhmm = t => new Date(t * 1000).toLocaleTimeString('uk-UA', {hour:'2-digit', minute:'2-digit'});
-const hms = t => new Date(t * 1000).toLocaleTimeString('uk-UA', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
-const dmy = t => new Date(t * 1000).toLocaleDateString('uk-UA', {day:'numeric', month:'2-digit'});
+const fmtR = bps => { bps = +bps || 0; const u = [T('bit/s','біт/с'), T('kbit/s','Кбіт/с'), T('Mbit/s','Мбіт/с'), T('Gbit/s','Гбіт/с')]; let i = 0; while (bps >= 1000 && i < 3) { bps /= 1000; i++; } return bps.toFixed(bps < 10 && i > 0 ? 1 : 0) + ' ' + u[i]; };
+const fmtN = n => { n = +n || 0; return n >= 1e6 ? (n / 1e6).toFixed(2) + ' M' : n >= 1e4 ? (n / 1e3).toFixed(1) + ' K' : Math.round(n).toLocaleString(LOC); };
+const hhmm = t => new Date(t * 1000).toLocaleTimeString(LOC, {hour:'2-digit', minute:'2-digit'});
+const hms = t => new Date(t * 1000).toLocaleTimeString(LOC, {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+const dmy = t => new Date(t * 1000).toLocaleDateString(LOC, {day:'numeric', month:'2-digit'});
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let regionNames; try { regionNames = new Intl.DisplayNames(['uk'], {type:'region'}); } catch (e) { regionNames = null; }
+let regionNames; try { regionNames = new Intl.DisplayNames([LANG], {type:'region'}); } catch (e) { regionNames = null; }
 const ccName = cc => { if (!cc) return '—'; try { return regionNames ? regionNames.of(cc) : cc; } catch (e) { return cc; } };
 const PAL = ['#2F7BFF','#FF4FA0','#FF9F43','#27D3F5','#8B5CFF','#2EE59D','#FFD166','#6E7FA6'];
 const C = {down:'#27D3F5', up:'#FF9F43', int:'#8B5CFF', ext:'#2EE59D', other:'#6E7FA6', ink:'#EAF0FF', ink2:'#A9B7D9', ink3:'#6E7FA6', hair:'rgba(120,160,255,.12)'};
@@ -52,7 +74,7 @@ const tot = r => (+r.up || 0) + (+r.dn || 0);
 const colorCache = new Map();
 const keyColor = k => { if (!colorCache.has(k)) colorCache.set(k, PAL[colorCache.size % (PAL.length - 1)]); return colorCache.get(k); };
 const rangeSecs = () => ({'1h':3600, '6h':21600, '24h':86400, '7d':604800, '30d':2592000})[state.range];
-const rangeLabel = () => ({'1h':'остання година', '6h':'останні 6 годин', '24h':'останні 24 години', '7d':'останні 7 днів', '30d':'останні 30 днів'})[state.range];
+const rangeLabel = () => ({'1h':T('Last hour','остання година'), '6h':T('Last 6 hours','останні 6 годин'), '24h':T('Last 24 hours','останні 24 години'), '7d':T('Last 7 days','останні 7 днів'), '30d':T('Last 30 days','останні 30 днів')})[state.range];
 const devName = ip => (META.devices.find(d => d.ip === ip) || {}).name || ip;
 const ifLabel = (ip, idx) => { const d = META.devices.find(x => x.ip === ip) || {}, n = (d.if_names || {})[String(idx)] || (d.local_if === idx ? 'local' : ''); return n ? `${n} (${idx})` : String(idx); };
 const hostLabel = h => h.name ? `${esc(h.name)}` : esc(h.ip);
@@ -107,7 +129,7 @@ function stackChart(el, series, label, onPick){
   const c = mkChart(el);
   c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
     tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
-    series:order.map(k => { const col = k === '__other' ? C.other : keyColor(k); return {name:k === '__other' ? 'інше' : label(k), id:k, type:'line', stack:'a', smooth:.25, showSymbol:false,
+    series:order.map(k => { const col = k === '__other' ? C.other : keyColor(k); return {name:k === '__other' ? T('Others', 'інше') : label(k), id:k, type:'line', stack:'a', smooth:.25, showSymbol:false,
       lineStyle:{width:1.4, color:col}, itemStyle:{color:col}, areaStyle:{opacity:k === '__other' ? .2 : .35}, emphasis:{focus:'series'}, data:ts.map(t => [t * 1000, (keys.get(k).get(t) || 0) * 8 / step])}; })});
   c.on('click', p => p.seriesId !== '__other' && onPick && onPick(p.seriesId));
 }
@@ -125,7 +147,7 @@ function sparkSvg(vals, color, w = 200, h = 26){
 }
 
 // ===================== river: inside <-> outside exchange =====================
-const metricFmt = v => state.metric === 'bytes' ? fmtB(v) : state.metric === 'packets' ? fmtN(v) + ' пак.' : fmtN(v) + ' flows';
+const metricFmt = v => state.metric === 'bytes' ? fmtB(v) : state.metric === 'packets' ? fmtN(v) + T(' pkt', ' пак.') : fmtN(v) + ' flows';
 const RIVERS = new Set();   // kick() of every mounted river (scale toggles wake them up)
 function createRiver(host, opts){
   const {compact, onSelect, fetchData, refreshMs} = opts;
@@ -155,8 +177,8 @@ function createRiver(host, opts){
   function size(){ kick(); const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; }
   const ro = new ResizeObserver(size); ro.observe(host); size(); onCleanup(() => ro.disconnect());
   const nodeLabel = (side, k) => {
-    if (side === 'L') { if (k === '__other') return ['Інші внутрішні', 'решта адрес']; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? 'внутрішня' : 'публічна (self)')]; }
-    if (k === '__other') return ['Інші зовнішні', 'решта адрес']; const r = info.R.get(k) || {}; return [k, [r.service, r.city || ccName(r.country)].filter(Boolean).join(' · ')];
+    if (side === 'L') { if (k === '__other') return [T('Other inside', 'Інші внутрішні'), T('Remaining addresses', 'решта адрес')]; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? T('Inside', 'внутрішня') : T('Public (self)', 'публічна (self)'))]; }
+    if (k === '__other') return [T('Other outside', 'Інші зовнішні'), T('Remaining addresses', 'решта адрес')]; const r = info.R.get(k) || {}; return [k, [r.service, r.city || ccName(r.country)].filter(Boolean).join(' · ')];
   };
   let bands = [], cards = [];
   function layout(){
@@ -206,8 +228,8 @@ function createRiver(host, opts){
     if (!data) return;
     const L = layout();
     ctx.font = `600 ${compact ? 11.5 : 13}px Manrope, sans-serif`; ctx.fillStyle = C.ink2; ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left'; ctx.fillText('Внутрішні адреси', 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText('Зовнішні адреси', W - 2, L.headH / 2 - 2);
-    if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText('Немає трафіку під цей фільтр за вибраний період', W / 2, H / 2); return; }
+    ctx.textAlign = 'left'; ctx.fillText(T('Inside addresses', 'Внутрішні адреси'), 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText(T('Outside addresses', 'Зовнішні адреси'), W - 2, L.headH / 2 - 2);
+    if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText(T('No traffic under this filter for the selected period', 'Немає трафіку під цей фільтр за вибраний період'), W / 2, H / 2); return; }
     ctx.globalCompositeOperation = 'lighter';
     for (const b of bands) {
       const col = b.dir === 'up' ? C.up : C.down, fl = flash.get(b.key) || 0, a = ease(alphas, b.key + b.dir, related(b) ? 1 : 0.13) * (1 + 0.55 * fl);
@@ -250,10 +272,10 @@ function createRiver(host, opts){
     if (h.type === 'band') {
       const v = cur.get(h.key) || {dn:0, up:0}, [l1] = nodeLabel('L', h.l), [r1, r2] = nodeLabel('R', h.r);
       const rate = x => state.metric === 'bytes' ? ' · ' + fmtR(x * 8 / winSecs()) : '';
-      html = `<b class="mono">${esc(l1)} ⇄ ${esc(r1)}</b><br><span style="color:${C.ink2}">${esc(r2)}</span><br><span style="color:${C.up}">↑ upload ${metricFmt(v.up)}${rate(v.up)}</span><br><span style="color:${C.down}">↓ download ${metricFmt(v.dn)}${rate(v.dn)}</span><br><span style="color:${C.ink3}">клік — виділити</span>`;
+      html = `<b class="mono">${esc(l1)} ⇄ ${esc(r1)}</b><br><span style="color:${C.ink2}">${esc(r2)}</span><br><span style="color:${C.up}">↑ upload ${metricFmt(v.up)}${rate(v.up)}</span><br><span style="color:${C.down}">↓ download ${metricFmt(v.dn)}${rate(v.dn)}</span><br><span style="color:${C.ink3}">${T('Click to select', 'клік — виділити')}</span>`;
     } else {
       const [a, b] = nodeLabel(h.side, h.k), c = cards.find(x => x.side === h.side && x.k === h.k);
-      html = `<b class="mono">${esc(a)}</b><br><span style="color:${C.ink2}">${esc(b)}</span><br>${metricFmt(c ? c.val : 0)}<br><span style="color:${C.ink3}">клік — виділити зв’язки · Shift+клік — фільтр</span>`;
+      html = `<b class="mono">${esc(a)}</b><br><span style="color:${C.ink2}">${esc(b)}</span><br>${metricFmt(c ? c.val : 0)}<br><span style="color:${C.ink3}">${T('Click to highlight links · Shift+click to filter', 'клік — виділити зв’язки · Shift+клік — фільтр')}</span>`;
     }
     tip.innerHTML = html; tip.hidden = false;
     tip.style.left = Math.min(W - tip.offsetWidth - 4, Math.max(4, h.x + 14)) + 'px'; tip.style.top = Math.min(H - tip.offsetHeight - 4, Math.max(4, h.y + 14)) + 'px';
@@ -273,7 +295,7 @@ function createRiver(host, opts){
 const siteGeo = ip => { const d = META.devices.find(x => x.ip === ip); return d && d.lat != null ? [d.lon, d.lat] : null; };
 const siteCity = ip => { const d = META.devices.find(x => x.ip === ip); return d ? (d.city || d.name) : ip; };
 function flatMap(el, geo, onConn){
-  if (!echarts.getMap('world')) { el.innerHTML = '<div class="empty">Не вдалося завантажити контури карти світу</div>'; return; }
+  if (!echarts.getMap('world')) { el.innerHTML = '<div class="empty">' + T('Failed to load world map outlines', 'Не вдалося завантажити контури карти світу') + '</div>'; return; }
   const c = mkChart(el);
   const rows = geo.rows, rmax = rows.length ? tot(rows[0]) : 1;
   const byCountry = new Map(); for (const r of rows) byCountry.set(r.country, (byCountry.get(r.country) || 0) + tot(r));
@@ -314,7 +336,7 @@ function flatMap(el, geo, onConn){
   poll(); every(4000, poll); every(reduceMotion ? 3000 : 1000, tick);
 }
 function globe(el, geo){
-  if (!echarts.getMap('world') || !window['echarts-gl']) { el.innerHTML = '<div class="empty">3D-режим недоступний у цьому браузері</div>'; return; }
+  if (!echarts.getMap('world') || !window['echarts-gl']) { el.innerHTML = '<div class="empty">' + T('3D mode is not available in this browser', '3D-режим недоступний у цьому браузері') + '</div>'; return; }
   try {
     const tex = echarts.init(document.createElement('canvas'), null, {width:2048, height:1024});
     tex.setOption({backgroundColor:'#071431', animation:false, geo:{map:'world', silent:true, left:0, top:0, right:0, bottom:0, boundingCoords:[[-180, 90], [180, -90]], itemStyle:{areaColor:'#123072', borderColor:'#4C93FF', borderWidth:1.2}}});
@@ -330,15 +352,15 @@ function globe(el, geo){
           data:META.devices.filter(d => d.lat != null).map(d => ({name:d.city || d.name, value:[d.lon, d.lat, 0]}))},
         {type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:7, itemStyle:{color:C.ext}, label:{show:true, formatter:'{b}', textStyle:{color:'#DDFBEF', fontSize:12, fontFamily:'Manrope', backgroundColor:'rgba(4,10,28,.6)', padding:[2, 5], borderRadius:4}}, data:[...cities.values()]},
       ]});
-  } catch (e) { el.innerHTML = '<div class="empty">3D-режим недоступний: ' + esc(e.message) + '</div>'; }
+  } catch (e) { el.innerHTML = '<div class="empty">' + T('3D mode is not available: ', '3D-режим недоступний: ') + esc(e.message) + '</div>'; }
 }
 
 // ===================== shared UI =====================
 const NAV = [
-  ['overview','Огляд','M3 9.5L9 4l6 5.5V15H3z'], ['flows','Потоки','M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['talkers','Топ хостів','M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
-  ['apps','Сервіси','M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports','Порти','M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo','Геолокація','M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
-  ['threats','Події','M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'], ['devices','Пристрої','M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6'],
-  ['users','Користувачі','M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4', 'admin'],
+  ['overview',T('Overview','Огляд'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows','Потоки'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['talkers',T('Top hosts','Топ хостів'),'M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
+  ['apps',T('Services','Сервіси'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports','Порти'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation','Геолокація'),'M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
+  ['threats',T('Events','Події'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'], ['devices',T('Devices','Пристрої'),'M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6'],
+  ['users',T('Users','Користувачі'),'M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4', 'admin'],
 ];
 const navIcon = k => NAV.find(n => n[0] === k)[2];
 const icon = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
@@ -349,9 +371,12 @@ const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div cl
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const wireSeg = (id, fn) => document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => fn(b.dataset.v));
 const hostCell = (ip, name) => `<span class="idot int"></span><b class="mono">${esc(name || ip)}</b>${name ? ` <span class="nat">${esc(ip)}</span>` : ''}`;
-const svcBadge = name => { const c = keyColor(name); return `<span class="app-b"><i style="background:${hexA(c, .85)};box-shadow:0 0 8px ${hexA(c, .6)}">${esc((name || '?')[0])}</i>${esc(name)}</span>`; };
+// values stored in English (service / protocol names made by the collector) shown in the UI language
+const DV_UK = {'Local network':'Локальна мережа', 'Unknown':'Невідомо'};
+const dv = v => LANG === 'uk' && v ? (DV_UK[v] || String(v).replace(/ other$/, ' інше')) : v;
+const svcBadge = name => { const c = keyColor(name); return `<span class="app-b"><i style="background:${hexA(c, .85)};box-shadow:0 0 8px ${hexA(c, .6)}">${esc((dv(name) || '?')[0])}</i>${esc(dv(name))}</span>`; };
 const fill = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; return el; };
-const errBox = e => `<div class="err">Не вдалося завантажити: ${esc(e.message)}</div>`;
+const errBox = e => `<div class="err">${T('Failed to load: ', 'Не вдалося завантажити: ')}${esc(e.message)}</div>`;
 function wireFilters(root){
   root.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); addFilter(b.dataset.f, b.dataset.v, e.shiftKey); }));
   root.querySelectorAll('[data-host]').forEach(tr => tr.addEventListener('click', () => openHost(tr.dataset.host)));
@@ -365,38 +390,38 @@ async function section(id, fn){
 const convRows = (rows, total) => rows.length ? '<div class="blist">' + rows.map(x => { const max = tot(rows[0]) || 1;
   return `<button class="brow" data-f="dst" data-v="${esc(x.ext_ip)}"><span class="n">${esc(x.name || x.int_ip)}<span class="arr">→</span>${esc(x.ext_ip)}</span><span class="t">${fmtB(tot(x))}</span><span class="p">${pct(tot(x), total)}</span>
     <span class="bar2" style="width:${(100 * tot(x) / max).toFixed(1)}%"><i class="u" style="width:${(100 * x.up / (tot(x) || 1)).toFixed(1)}%"></i><i class="d" style="flex:1"></i></span></button>`; }).join('') + '</div>'
-  : '<div class="empty">Немає трафіку під цей фільтр</div>';
+  : `<div class="empty">${T('No traffic under this filter', 'Немає трафіку під цей фільтр')}</div>`;
 
 // ===================== views =====================
 async function kpiCards(){
   const [s, ser] = await Promise.all([api('summary'), api('series')]);
   // trend vs the previous equal period; until enough history exists, say since when data is collected and when the comparison appears
   const since = s.oldest ? (Date.now() / 1000 - s.oldest > 86400 ? dmy(s.oldest) + ' ' : '') + hhmm(s.oldest) : '';
-  const ready = s.oldest ? s.oldest + 2 * s.range : 0, readyTxt = ready ? new Date(ready * 1000).toLocaleString('uk-UA', {day:'numeric', month:'long', hour:'2-digit', minute:'2-digit'}) : '';
-  const noPrev = `<span class="tr" style="color:var(--ink3)" title="Порівняння з попереднім таким самим періодом з’явиться, коли назбирається вдвічі більше даних${readyTxt ? ' — орієнтовно ' + readyTxt : ''}">${since ? 'дані з ' + since : 'немає даних'}</span>`;
-  const trend = (a, b) => !s.has_prev || !b ? noPrev : `<span class="tr ${a < b ? 'dn' : ''}" title="порівняно з попереднім таким самим періодом">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
+  const ready = s.oldest ? s.oldest + 2 * s.range : 0, readyTxt = ready ? new Date(ready * 1000).toLocaleString(LOC, {day:'numeric', month:'long', hour:'2-digit', minute:'2-digit'}) : '';
+  const noPrev = `<span class="tr" style="color:var(--ink3)" title="${T('Comparison with the previous equal period will appear once twice as much data is collected', 'Порівняння з попереднім таким самим періодом з’явиться, коли назбирається вдвічі більше даних')}${readyTxt ? T(' — approx. ', ' — орієнтовно ') + readyTxt : ''}">${since ? T('data since ', 'дані з ') + since : T('no data', 'немає даних')}</span>`;
+  const trend = (a, b) => !s.has_prev || !b ? noPrev : `<span class="tr ${a < b ? 'dn' : ''}" title="${T('compared to the previous equal period', 'порівняно з попереднім таким самим періодом')}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
   const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]);
   const card = (ic, k, v, tr, sp, col) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sparkSvg(sp, col)}</div>`;
-  return card('pulse', 'Загальний трафік', fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
-    + card('nodes', 'Оброблено flow', fmtN(s.flows), trend(s.flows, s.p_flows), fl, C.ext)
-    + card('ip', 'Унікальні IP', fmtN(s.ips), trend(s.ips, s.p_ips), fl.map(Math.sqrt), '#4C93FF')
-    + card('grid', 'Топ сервіс', esc(s.top_service || '—'), s.top_service ? `<span class="tr" style="color:var(--ink2)">${pct(s.top_service_bytes, s.bytes)}</span>` : '', vals.map(Math.sqrt), C.int);
+  return card('pulse', T('Total traffic', 'Загальний трафік'), fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
+    + card('nodes', T('Flows processed', 'Оброблено flow'), fmtN(s.flows), trend(s.flows, s.p_flows), fl, C.ext)
+    + card('ip', T('Unique IPs', 'Унікальні IP'), fmtN(s.ips), trend(s.ips, s.p_ips), fl.map(Math.sqrt), '#4C93FF')
+    + card('grid', T('Top service', 'Топ сервіс'), esc(s.top_service || '—'), s.top_service ? `<span class="tr" style="color:var(--ink2)">${pct(s.top_service_bytes, s.bytes)}</span>` : '', vals.map(Math.sqrt), C.int);
 }
 let heroScope = null;
 function mountHero(){
   if (heroScope) heroScope.dispose();
   heroScope = childScope();
   const g = state.heroMode === 'graph';
-  fill('heroSec', `${ph('flow', 'Мережевий трафік', g ? '<span id="heroLbl" class="tnum">наживо · вікно 2 хв · оновлюється…</span>' : 'з’єднання за вибраний період · нові лінії з’являються наживо',
-      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', 'Стиснений', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими'], ['lin', 'Лінійний', 'Ширина пропорційна обсягу']], state.scale)}</span>` + seg('heroSeg', [['graph', 'Graph'], ['map', 'Map'], ['3d', '3D']], state.heroMode)
-      + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>внутр.</span><span><i style="background:${C.ext}"></i>зовн.</span></span>`)}
+  fill('heroSec', `${ph('flow', T('Network traffic', 'Мережевий трафік'), g ? `<span id="heroLbl" class="tnum">${T('live · window 2 min · updating…', 'наживо · вікно 2 хв · оновлюється…')}</span>` : T('connections for the selected period · new lines appear live', 'з’єднання за вибраний період · нові лінії з’являються наживо'),
+      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stand out next to large ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale)}</span>` + seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode)
+      + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('inside', 'внутр.')}</span><span><i style="background:${C.ext}"></i>${T('outside', 'зовн.')}</span></span>`)}
     <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div>`);
   wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
   const hb = document.getElementById('heroBody'), myScope = heroScope;
   heroScope.run(() => {
     if (g) createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
-      onData:() => fill('heroLbl', `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}${scaleNote()}`)});
+      onData:() => fill('heroLbl', `${T(`live · window 2 min · updated ${hms(Math.floor(Date.now() / 1000))}`, `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}`)}${scaleNote()}`)});
   });
   if (!g) {
     api('geo').then(geo => { if (!hb.isConnected || heroScope !== myScope) return; myScope.run(() => state.heroMode === 'map' ? flatMap(hb, geo) : globe(hb, geo)); }).catch(e => fill('heroBody', errBox(e)));
@@ -405,10 +430,10 @@ function mountHero(){
       if (heroScope !== myScope) return null;
       const a = h.rows[0], b = d.rows[0], c = s.rows[0];
       return `<div class="overlay"><div class="ovl">
-        <div><span class="ico">${icon(ICO.users, 15)}</span><span>Топ джерело</span><b>${esc(a ? a.name || a.k : '—')}</b><small>${a ? fmtB(tot(a)) : ''}</small></div>
-        <div><span class="ico">${icon(ICO.globe, 15)}</span><span>Топ призначення</span><b>${esc(b ? b.k : '—')}</b><small>${b ? [b.city, fmtB(tot(b))].filter(Boolean).join(' · ') : ''}</small></div>
-        <div><span class="ico">${icon(ICO.grid, 15)}</span><span>Топ сервіс</span><b>${esc(c ? c.k : '—')}</b><small>${c ? pct(tot(c), s.total) : ''}</small></div></div>
-        <div class="livebadge"><b>Наживо</b>нові з’єднання</div></div>`;
+        <div><span class="ico">${icon(ICO.users, 15)}</span><span>${T('Top source', 'Топ джерело')}</span><b>${esc(a ? a.name || a.k : '—')}</b><small>${a ? fmtB(tot(a)) : ''}</small></div>
+        <div><span class="ico">${icon(ICO.globe, 15)}</span><span>${T('Top destination', 'Топ призначення')}</span><b>${esc(b ? b.k : '—')}</b><small>${b ? [b.city, fmtB(tot(b))].filter(Boolean).join(' · ') : ''}</small></div>
+        <div><span class="ico">${icon(ICO.grid, 15)}</span><span>${T('Top service', 'Топ сервіс')}</span><b>${esc(c ? c.k : '—')}</b><small>${c ? pct(tot(c), s.total) : ''}</small></div></div>
+        <div class="livebadge"><b>${T('Live', 'Наживо')}</b>${T('new connections', 'нові з’єднання')}</div></div>`;
     });
   }
 }
@@ -417,27 +442,27 @@ function vOverview(){
   v.innerHTML = `<div class="grid"><div id="kpis" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
     <section class="glass panel s8 hero" id="heroSec"></section>
     <div class="col s4">
-      <section class="glass panel">${ph('pie', 'Топ сервісів', 'за обсягом трафіку')}<div id="svcBox" class="loading"></div></section>
-      <section class="glass panel">${ph('users', 'Топ хостів', 'внутрішні адреси')}<div id="hostBox" class="loading"></div></section>
+      <section class="glass panel">${ph('pie', T('Top services', 'Топ сервісів'), T('by traffic volume', 'за обсягом трафіку'))}<div id="svcBox" class="loading"></div></section>
+      <section class="glass panel">${ph('users', T('Top hosts', 'Топ хостів'), T('inside addresses', 'внутрішні адреси'))}<div id="hostBox" class="loading"></div></section>
     </div>
-    <section class="glass panel s4">${ph('chart', 'Динаміка трафіку', rangeLabel())}<div class="chart" id="cTrend"></div></section>
-    <section class="glass panel s4">${ph('conv', 'Топ розмов', 'внутрішня → зовнішня адреса')}<div id="convBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('list', 'Останні потоки', 'нова мережева активність', '<button class="lnk" id="toFlows">Усі</button>')}<div id="recentBox" class="loading"></div></section></div>`;
+    <section class="glass panel s4">${ph('chart', T('Traffic trend', 'Динаміка трафіку'), rangeLabel())}<div class="chart" id="cTrend"></div></section>
+    <section class="glass panel s4">${ph('conv', T('Top conversations', 'Топ розмов'), T('inside → outside address', 'внутрішня → зовнішня адреса'))}<div id="convBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('list', T('Recent flows', 'Останні потоки'), T('new network activity', 'нова мережева активність'), `<button class="lnk" id="toFlows">${T('All', 'Усі')}</button>`)}<div id="recentBox" class="loading"></div></section></div>`;
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
   mountHero();
   section('svcBox', async () => {
     const t = await api('top', {dim:'service', limit:5}); const rest = t.total - t.rows.reduce((s, r) => s + tot(r), 0);
-    const rows = [...t.rows, ...(rest > 0 ? [{k:'Інші', up:rest, dn:0}] : [])];
-    setTimeout(() => { const el = document.getElementById('cDonut'); if (el) donut(el, rows, k => k === 'Інші' ? C.other : keyColor(k), [fmtB(t.total), 'весь трафік']); });
-    return `<div class="donut-wrap"><div class="chart donut" id="cDonut"></div><div class="dl">${rows.map(r => `<i class="idot" style="background:${r.k === 'Інші' ? C.other : keyColor(r.k)}"></i>${r.k === 'Інші' ? '<span>Інші</span>' : `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.k)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`;
+    const rows = [...t.rows, ...(rest > 0 ? [{k:T('Others', 'Інші'), up:rest, dn:0}] : [])];
+    setTimeout(() => { const el = document.getElementById('cDonut'); if (el) donut(el, rows, k => k === T('Others', 'Інші') ? C.other : keyColor(k), [fmtB(t.total), T('total traffic', 'весь трафік')]); });
+    return `<div class="donut-wrap"><div class="chart donut" id="cDonut"></div><div class="dl">${rows.map(r => `<i class="idot" style="background:${r.k === T('Others', 'Інші') ? C.other : keyColor(r.k)}"></i>${r.k === T('Others', 'Інші') ? `<span>${T('Others', 'Інші')}</span>` : `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.k)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`;
   });
   section('hostBox', async () => { const t = await api('top', {dim:'int_ip', limit:5});
-    return `<div class="tw"><table class="compact"><thead><tr><th>#</th><th>Хост</th><th class="num">Трафік</th><th class="num">%</th><th></th></tr></thead><tbody>${t.rows.map((r, i) => `<tr class="click" data-host="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="two-line"><b class="mono">${esc(r.name || r.k)}</b>${r.name ? `<span class="nat">${esc(r.k)}</span>` : ''}</div></td><td class="num mono">${fmtB(tot(r))}</td><td class="num mono">${pct(tot(r), t.total)}</td><td class="chev">›</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>#</th><th>${T('Host', 'Хост')}</th><th class="num">${T('Traffic', 'Трафік')}</th><th class="num">%</th><th></th></tr></thead><tbody>${t.rows.map((r, i) => `<tr class="click" data-host="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="two-line"><b class="mono">${esc(r.name || r.k)}</b>${r.name ? `<span class="nat">${esc(r.k)}</span>` : ''}</div></td><td class="num mono">${fmtB(tot(r))}</td><td class="num mono">${pct(tot(r), t.total)}</td><td class="chev">›</td></tr>`).join('')}</tbody></table></div>`; });
   api('series').then(s => { const el = document.getElementById('cTrend'); if (el) trendChart(el, s); }).catch(e => fill('cTrend', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:5}); return convRows(t.rows, t.total); });
   section('recentBox', async () => { const t = await api('flows', {limit:7});
-    return `<div class="tw"><table class="compact"><thead><tr><th>Час</th><th>Внутр. → зовн. · сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : '←'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(f.service)}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Немає записів</div></td></tr>'}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time', 'Час')}</th><th>${T('Inside → outside · service', 'Внутр. → зовн. · сервіс')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : '←'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(f.service)}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records', 'Немає записів')}</div></td></tr>`}</tbody></table></div>`; });
 }
 
 // filters that describe a river selection (a host, an outside address, or a conversation band); none for «Інші»
@@ -449,39 +474,39 @@ function selFilters(sel){
   return out;
 }
 async function inspectorHtml(sel){
-  if (!sel) return `<p class="note" style="margin:0">Наведіть на стрічку чи вузол, щоб побачити обсяг. Клік додає вибране у фільтри й показує деталі тут.</p>`;
+  if (!sel) return `<p class="note" style="margin:0">${T('Hover a ribbon or node to see the volume. A click adds it to the filters and shows the details here.', 'Наведіть на стрічку чи вузол, щоб побачити обсяг. Клік додає вибране у фільтри й показує деталі тут.')}</p>`;
   const extra = selFilters(sel);
   let title, subtitle = '';
   const isOther = k => k === '__other';
-  if (sel.type === 'band') { title = `${isOther(sel.l) ? 'Інші' : sel.l} ⇄ ${isOther(sel.r) ? 'Інші' : sel.r}`; subtitle = 'розмова'; }
-  else if (sel.side === 'L') title = isOther(sel.k) ? 'Інші внутрішні' : sel.k;
-  else title = isOther(sel.k) ? 'Інші зовнішні' : sel.k;
-  if (!extra.length) return `<div class="insp"><div class="who"><b>${esc(title)}</b></div><p class="note" style="margin:0">Згорнута група — виберіть конкретну адресу.</p></div>`;
+  if (sel.type === 'band') { title = `${isOther(sel.l) ? T('Others', 'Інші') : sel.l} ⇄ ${isOther(sel.r) ? T('Others', 'Інші') : sel.r}`; subtitle = T('conversation', 'розмова'); }
+  else if (sel.side === 'L') title = isOther(sel.k) ? T('Other inside', 'Інші внутрішні') : sel.k;
+  else title = isOther(sel.k) ? T('Other outside', 'Інші зовнішні') : sel.k;
+  if (!extra.length) return `<div class="insp"><div class="who"><b>${esc(title)}</b></div><p class="note" style="margin:0">${T('A collapsed group — pick a specific address.', 'Згорнута група — виберіть конкретну адресу.')}</p></div>`;
   const [s, svc, l7, ext] = await Promise.all([api('summary', {}, extra), api('top', {dim:'service', limit:4}, extra), api('top', {dim:'l7', limit:4}, extra), api('top', {dim:'ext_ip', limit:1}, extra)]);
   const e0 = ext.rows[0];
   if (sel.type !== 'band' && sel.side === 'R' && e0) subtitle = [e0.as_org && `AS${e0.asn} ${e0.as_org}`, [e0.city, ccName(e0.country)].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
   return `<div class="insp"><div class="who"><b>${esc(title)}</b><span>${esc(subtitle)}</span></div>
     <div class="dk"><div><span>↑ upload</span><b class="u">${fmtB(s.up)}</b></div><div><span>↓ download</span><b class="d">${fmtB(s.down)}</b></div><div><span>flows</span><b>${fmtN(s.flows)}</b></div></div>
-    <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">Сервіси</h4><div class="tagrow">${svc.rows.map(g => `<span class="tag">${esc(g.k)} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
-    <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">Протоколи</h4><div class="tagrow">${l7.rows.map(g => `<span class="tag mono">${esc(g.k)}</span>`).join('') || '—'}</div></div>
+    <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">${T('Services', 'Сервіси')}</h4><div class="tagrow">${svc.rows.map(g => `<span class="tag">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
+    <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">${T('Protocols', 'Протоколи')}</h4><div class="tagrow">${l7.rows.map(g => `<span class="tag mono">${esc(dv(g.k))}</span>`).join('') || '—'}</div></div>
     <div class="chart" id="cInsp" style="height:120px" data-extra="${esc(JSON.stringify(extra))}"></div></div>`;
 }
 function vFlows(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s9">${ph('flow', 'Обмін між внутрішніми та зовнішніми адресами', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»',
-      seg('metricSeg', [['bytes', 'Байти'], ['packets', 'Пакети'], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', 'Стиснений', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими'], ['lin', 'Лінійний', 'Ширина пропорційна обсягу']], state.scale) + seg('liveSeg', [['live', 'Наживо'], ['period', 'За період']], state.flowLive ? 'live' : 'period'), true)}
-      <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>download (зовн. → внутр.)</span><span><i class="bar" style="background:${C.up}"></i>upload (внутр. → зовн.)</span><span><i style="background:${C.int}"></i>внутрішня адреса</span><span><i style="background:${C.ext}"></i>зовнішня адреса</span><span id="winLbl" class="mono" style="margin-left:auto"></span></div>
+    <section class="glass panel s9">${ph('flow', T('Exchange between inside and outside addresses', 'Обмін між внутрішніми та зовнішніми адресами'), T('Colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»'),
+      seg('metricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) + seg('liveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], state.flowLive ? 'live' : 'period'), true)}
+      <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>${T('download (outside → inside)', 'download (зовн. → внутр.)')}</span><span><i class="bar" style="background:${C.up}"></i>${T('upload (inside → outside)', 'upload (внутр. → зовн.)')}</span><span><i style="background:${C.int}"></i>${T('inside address', 'внутрішня адреса')}</span><span><i style="background:${C.ext}"></i>${T('outside address', 'зовнішня адреса')}</span><span id="winLbl" class="mono" style="margin-left:auto"></span></div>
       <div class="river big" id="river"></div></section>
     <div class="col s3">
-      <section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO.pulse, 22)}</span><span class="k">Загальний трафік</span><span class="v" id="kTot">—</span></section>
-      <section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO.nodes, 22)}</span><span class="k">Flow-записи</span><span class="v" id="kFl">—</span></section>
-      <section class="glass panel">${ph('search', 'Інспектор', 'деталі вибраного')}<div id="insp"></div></section>
+      <section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO.pulse, 22)}</span><span class="k">${T('Total traffic', 'Загальний трафік')}</span><span class="v" id="kTot">—</span></section>
+      <section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO.nodes, 22)}</span><span class="k">${T('Flow records', 'Flow-записи')}</span><span class="v" id="kFl">—</span></section>
+      <section class="glass panel">${ph('search', T('Inspector', 'Інспектор'), T('details of the selection', 'деталі вибраного'))}<div id="insp"></div></section>
     </div>
-    <section class="glass panel s4">${ph('chart', 'Обсяг трафіку', 'download / upload')}<div class="chart" id="cVol"></div></section>
-    <section class="glass panel s4">${ph('conv', 'Топ розмов', 'з сервісом')}<div id="convBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('pie', 'Протоколи', 'рівень L7 за портом')}<div id="protoBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('list', 'Записи потоків', 'сирі записи, по одному на напрямок сесії · клік розгортає')}<div id="recBox" class="loading"></div></section></div>`;
+    <section class="glass panel s4">${ph('chart', T('Traffic volume', 'Обсяг трафіку'), 'download / upload')}<div class="chart" id="cVol"></div></section>
+    <section class="glass panel s4">${ph('conv', T('Top conversations', 'Топ розмов'), T('with the service', 'з сервісом'))}<div id="convBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('pie', T('Protocols', 'Протоколи'), T('L7 by port', 'рівень L7 за портом'))}<div id="protoBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('Flow records', 'Записи потоків'), T('raw records, one per session direction · click to expand', 'сирі записи, по одному на напрямок сесії · клік розгортає'))}<div id="recBox" class="loading"></div></section></div>`;
   const showInsp = async sel => {
     const seq = renderSeq; let html; try { html = await inspectorHtml(sel); } catch (e) { html = errBox(e); }
     if (seq !== renderSeq) return; fill('insp', html);
@@ -494,7 +519,7 @@ function vFlows(){
     if (!ex.length) return showInsp(sel);
     ex.forEach(f => putFilter({...f, neg:false})); state.sel = sel; render(); };
   let riverScope = null;
-  const winLbl = d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}` : rangeLabel()) + scaleNote(); };
+  const winLbl = d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? T(`2-min window to ${hms(d.window_end)} · updated ${hms(Math.floor(Date.now() / 1000))}`, `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}`) : rangeLabel()) + scaleNote(); };
   let lastData = null;
   const mountRiver = () => {
     if (riverScope) riverScope.dispose();
@@ -509,23 +534,23 @@ function vFlows(){
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:6});
-    return `<div class="tw"><table class="compact"><thead><tr><th>Внутр.</th><th>Зовн.</th><th>Сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="Фільтр за цією розмовою"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Inside', 'Внутр.')}</th><th>${T('Outside', 'Зовн.')}</th><th>${T('Service', 'Сервіс')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="${T('Filter by this conversation', 'Фільтр за цією розмовою')}"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
   document.getElementById('convBox').addEventListener('click', e => { const tr = e.target.closest('tr[data-conv]'); if (!tr) return;
     const [ip, dst] = tr.dataset.conv.split('|'); putFilter({k:'ip', v:ip, neg:false}); putFilter({k:'dst', v:dst, neg:false}); state.sel = null; render(); });
   section('protoBox', async () => { const t = await api('top', {dim:'l7', limit:6});
-    setTimeout(() => { const el = document.getElementById('cProto'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
-    return `<div class="donut-wrap"><div class="chart donut" id="cProto"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`; });
+    setTimeout(() => { const el = document.getElementById('cProto'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), T('protocols', 'протоколів')]); });
+    return `<div class="donut-wrap"><div class="chart donut" id="cProto"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(dv(r.k))}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`; });
   section('recBox', async () => { const t = await api('flows', {limit:60}); window.__recs = t.rows; return recTable(t.rows); });
 }
 function recTable(rows){
-  return `<div class="tw"><table><thead><tr><th>Час</th><th>Експортер</th><th>Внутрішня адреса</th><th></th><th>Зовнішня адреса</th><th>Протокол</th><th>Сервіс</th><th>Країна</th><th class="num">Байти</th><th class="num">Пакети</th><th class="num">Трив.</th></tr></thead><tbody>
+  return `<div class="tw"><table><thead><tr><th>${T('Time', 'Час')}</th><th>${T('Exporter', 'Експортер')}</th><th>${T('Inside address', 'Внутрішня адреса')}</th><th></th><th>${T('Outside address', 'Зовнішня адреса')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Service', 'Сервіс')}</th><th>${T('Country', 'Країна')}</th><th class="num">${T('Bytes', 'Байти')}</th><th class="num">${T('Packets', 'Пакети')}</th><th class="num">${T('Dur.', 'Трив.')}</th></tr></thead><tbody>
     ${rows.map((f, i) => `<tr class="click" data-rec="${i}"><td class="mono">${hms(f.t)}</td><td class="ipl">${esc(devName(f.exporter))}</td>
       <td class="ipl"><button class="link" data-f="ip" data-v="${esc(f.int_ip)}">${esc(f.name || f.int_ip)}</button> <span class="nat">:${f.int_port}</span></td><td class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : f.dir === 'down' ? '←' : '↔'}</td>
-      <td class="ipl"><button class="link" data-f="dst" data-v="${esc(f.ext_ip)}">${esc(f.ext_ip)}</button> <span class="nat">:${f.ext_port}</span></td><td><span class="tag">${esc(f.l7)}</span></td><td>${svcBadge(f.service)}</td>
-      <td>${f.country ? `<button class="link" data-f="country" data-v="${esc(f.country)}">${esc(f.country)}</button>` : '—'}</td><td class="num mono">${fmtB(f.bytes)}</td><td class="num mono">${fmtN(f.packets)}</td><td class="num mono">${Math.max(0, f.t - f.t0).toFixed(0)} с</td></tr>
-      ${state.openFlow === i ? `<tr class="detail"><td colspan="11"><div class="kv"><div><span>Хост</span><b>${esc(f.name || '—')} · ${esc(f.int_ip)}</b></div><div><span>NAT (після трансляції)</span><b>${f.nat_ip ? esc(f.nat_ip) + ':' + f.nat_port : '—'}</b></div>
-        <div><span>ASN</span><b>${f.asn ? 'AS' + f.asn + ' ' + esc(f.as_org) : '—'}</b></div><div><span>Місто</span><b>${esc([f.city, ccName(f.country)].filter(Boolean).join(', ') || '—')}</b></div>
-        <div><span>Інтерфейси</span><b>${esc(ifLabel(f.exporter, f.in_if))} → ${esc(ifLabel(f.exporter, f.out_if))}</b></div><div><span>Вибірка</span><b>${f.sampling > 1 ? '1:' + f.sampling + ' (обсяг перераховано)' : '1:1 (без вибірки)'}</b></div><div><span>L4</span><b>${({1:'ICMP', 6:'TCP', 17:'UDP', 50:'ESP', 47:'GRE'})[f.proto] || f.proto}</b></div></div></td></tr>` : ''}`).join('') || '<tr><td colspan="11"><div class="empty">Немає записів під цей фільтр</div></td></tr>'}
+      <td class="ipl"><button class="link" data-f="dst" data-v="${esc(f.ext_ip)}">${esc(f.ext_ip)}</button> <span class="nat">:${f.ext_port}</span></td><td><span class="tag">${esc(dv(f.l7))}</span></td><td>${svcBadge(f.service)}</td>
+      <td>${f.country ? `<button class="link" data-f="country" data-v="${esc(f.country)}">${esc(f.country)}</button>` : '—'}</td><td class="num mono">${fmtB(f.bytes)}</td><td class="num mono">${fmtN(f.packets)}</td><td class="num mono">${Math.max(0, f.t - f.t0).toFixed(0)} ${T('s', 'с')}</td></tr>
+      ${state.openFlow === i ? `<tr class="detail"><td colspan="11"><div class="kv"><div><span>${T('Host', 'Хост')}</span><b>${esc(f.name || '—')} · ${esc(f.int_ip)}</b></div><div><span>${T('NAT (after translation)', 'NAT (після трансляції)')}</span><b>${f.nat_ip ? esc(f.nat_ip) + ':' + f.nat_port : '—'}</b></div>
+        <div><span>ASN</span><b>${f.asn ? 'AS' + f.asn + ' ' + esc(f.as_org) : '—'}</b></div><div><span>${T('City', 'Місто')}</span><b>${esc([f.city, ccName(f.country)].filter(Boolean).join(', ') || '—')}</b></div>
+        <div><span>${T('Interfaces', 'Інтерфейси')}</span><b>${esc(ifLabel(f.exporter, f.in_if))} → ${esc(ifLabel(f.exporter, f.out_if))}</b></div><div><span>${T('Sampling', 'Вибірка')}</span><b>${f.sampling > 1 ? '1:' + f.sampling + T(' (volume scaled up)', ' (обсяг перераховано)') : T('1:1 (not sampled)', '1:1 (без вибірки)')}</b></div><div><span>L4</span><b>${({1:'ICMP', 6:'TCP', 17:'UDP', 50:'ESP', 47:'GRE'})[f.proto] || f.proto}</b></div></div></td></tr>` : ''}`).join('') || `<tr><td colspan="11"><div class="empty">${T('No records for this filter', 'Немає записів під цей фільтр')}</div></td></tr>`}
     </tbody></table></div>`;
 }
 document.addEventListener('click', e => { const tr = e.target.closest && e.target.closest('tr[data-rec]'); if (!tr || e.target.closest('[data-f]')) return; const i = +tr.dataset.rec; state.openFlow = state.openFlow === i ? null : i; const box = document.getElementById('recBox'); if (box && window.__recs) { box.innerHTML = recTable(window.__recs); wireFilters(box); } });
@@ -542,29 +567,29 @@ function vTalkers(){
   v.innerHTML = `<div class="grid">
     <div id="tKpi" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
     <div class="col s8 fillcol">
-      <section class="glass panel">${ph('users', 'Топ хостів', 'за загальним обсягом · клік по рядку додає хост у фільтри', '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
-      <section class="glass panel grow">${ph('chart', 'Тренд топ-хостів', 'топ-5 і решта')}<div class="chart" id="cTop5"></div></section>
+      <section class="glass panel">${ph('users', T('Top hosts', 'Топ хостів'), T('by total volume · click a row to add the host to the filters', 'за загальним обсягом · клік по рядку додає хост у фільтри'), '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
+      <section class="glass panel grow">${ph('chart', T('Top hosts trend', 'Тренд топ-хостів'), T('top 5 and the rest', 'топ-5 і решта'))}<div class="chart" id="cTop5"></div></section>
     </div>
     <div class="col s4">
-      <section class="glass panel">${ph('pie', 'Трафік топ-хостів', 'частка від усього обсягу')}<div id="tDonut" class="loading"></div></section>
-      <section class="glass panel">${ph('grid', 'За сервісами', 'частка трафіку · клік — фільтр')}<div id="tSvc" class="loading"></div></section>
-      <section class="glass panel">${ph('globe', 'Куди йде трафік', 'країни призначення')}<div id="tGeo" class="loading"></div></section>
-      <section class="glass panel">${ph('search', 'Швидкі дії', '<span id="qaFor">—</span>')}<div class="qa" id="qa"></div></section>
+      <section class="glass panel">${ph('pie', T('Top hosts traffic', 'Трафік топ-хостів'), T('share of the total volume', 'частка від усього обсягу'))}<div id="tDonut" class="loading"></div></section>
+      <section class="glass panel">${ph('grid', T('By service', 'За сервісами'), T('share of traffic · click to filter', 'частка трафіку · клік — фільтр'))}<div id="tSvc" class="loading"></div></section>
+      <section class="glass panel">${ph('globe', T('Where the traffic goes', 'Куди йде трафік'), T('destination countries', 'країни призначення'))}<div id="tGeo" class="loading"></div></section>
+      <section class="glass panel">${ph('search', T('Quick actions', 'Швидкі дії'), '<span id="qaFor">—</span>')}<div class="qa" id="qa"></div></section>
     </div>
-    <section class="glass panel s12">${ph('list', 'Топ хостів детально', 'головний сервіс і протокол кожного · клік — фільтр', '<button class="lnk" id="toFlows2">Потоки →</button>')}<div id="tDetail" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('list', T('Top hosts in detail', 'Топ хостів детально'), T('main service and protocol of each · click to filter', 'головний сервіс і протокол кожного · клік — фільтр'), `<button class="lnk" id="toFlows2">${T('Flows →', 'Потоки →')}</button>`)}<div id="tDetail" class="loading"></div></section></div>`;
   document.getElementById('toFlows2').onclick = () => { state.view = 'flows'; render(); };
   const limit = state.talkersAll ? 50 : 10, secs = rangeSecs();
-  fill('tMore', state.talkersAll ? 'Показати топ-10' : 'Показати топ-50');
+  fill('tMore', state.talkersAll ? T('Show top 10', 'Показати топ-10') : T('Show top 50', 'Показати топ-50'));
   document.getElementById('tMore').onclick = () => { state.talkersAll = !state.talkersAll; render(); };
   const colorOf = new Map();
   let selected = null, topRows = [];
   const drawQa = () => {
-    const h = selected; fill('qaFor', h ? `для ${esc(h.name || h.k)}` : 'немає даних');
+    const h = selected; fill('qaFor', h ? T(`for ${esc(h.name || h.k)}`, `для ${esc(h.name || h.k)}`) : T('no data', 'немає даних'));
     const box = fill('qa', h ? [
-      ['flow', 'Деталі потоків', 'сторінка Потоки з фільтром', () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
-      ['users', 'Картка хоста', 'сервіси, протоколи, напрямки', () => openHost(h.k)],
-      ['globe', 'Геолокація', 'карта з’єднань цього хоста', () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
-      ['list', 'Експорт CSV', 'таблиця топ-хостів', () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
+      ['flow', T('Flow details', 'Деталі потоків'), T('the Flows page with a filter', 'сторінка Потоки з фільтром'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
+      ['users', T('Host card', 'Картка хоста'), T('services, protocols, destinations', 'сервіси, протоколи, напрямки'), () => openHost(h.k)],
+      ['globe', T('Geolocation', 'Геолокація'), T('connection map of this host', 'карта з’єднань цього хоста'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
+      ['list', T('Export CSV', 'Експорт CSV'), T('the top hosts table', 'таблиця топ-хостів'), () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
         topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))],
     ].map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join('') : '');
     if (box && h) { const acts = [() => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
@@ -573,13 +598,13 @@ function vTalkers(){
   };
   section('tKpi', async () => {
     const [s, ser, t] = await Promise.all([api('summary'), api('series'), api('top', {dim:'int_ip', limit:1})]);
-    const trend = (a, b) => !s.has_prev || !b ? `<span class="tr" style="color:var(--ink3)">дані з ${hhmm(s.oldest)}</span>` : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
+    const trend = (a, b) => !s.has_prev || !b ? `<span class="tr" style="color:var(--ink3)">${T(`data since ${hhmm(s.oldest)}`, `дані з ${hhmm(s.oldest)}`)}</span>` : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
     const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]), top = t.rows[0];
     const card = (ic, k, v, tr, sp, col, sub) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sub ? `<span class="s" style="grid-column:2/-1;font-size:12.5px;color:var(--ink2)">${sub}</span>` : ''}${sp ? sparkSvg(sp, col) : ''}</div>`;
-    return card('pulse', 'Загальний трафік', fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
-      + card('ip', 'Топ хост (за обсягом)', esc(top ? top.name || top.k : '—'), '', null, '', top ? `${esc(top.name ? top.k + ' · ' : '')}${fmtB(tot(top))} (${pct(tot(top), t.total)})` : '')
-      + card('users', 'Унікальні хости', fmtN(s.hosts), trend(s.hosts, s.p_hosts), fl.map(Math.sqrt), C.int)
-      + card('nodes', 'Усього flow', fmtN(s.flows), trend(s.flows, s.p_flows), fl, C.ext);
+    return card('pulse', T('Total traffic', 'Загальний трафік'), fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
+      + card('ip', T('Top host (by volume)', 'Топ хост (за обсягом)'), esc(top ? top.name || top.k : '—'), '', null, '', top ? `${esc(top.name ? top.k + ' · ' : '')}${fmtB(tot(top))} (${pct(tot(top), t.total)})` : '')
+      + card('users', T('Unique hosts', 'Унікальні хости'), fmtN(s.hosts), trend(s.hosts, s.p_hosts), fl.map(Math.sqrt), C.int)
+      + card('nodes', T('Total flows', 'Усього flow'), fmtN(s.flows), trend(s.flows, s.p_flows), fl, C.ext);
   });
   Promise.all([api('top', {dim:'int_ip', limit}), api('series', {by:'int_ip', top:Math.min(limit, 20)})]).then(([t, ser]) => {
     topRows = t.rows; window.__tTotal = t.total;
@@ -588,20 +613,20 @@ function vTalkers(){
     selected = t.rows.find(r => r.k === fip) || t.rows[0] || null; drawQa();
     const sp = new Map(); for (const [ts, k, b] of ser.rows) { if (!sp.has(k)) sp.set(k, new Map()); sp.get(k).set(ts, b); }
     const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1;
-    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>Хост / IP</th><th style="width:26%">Обсяг</th><th class="num">%</th><th class="num">Flows</th><th class="num">Сер. швидкість</th><th>Тренд</th><th></th></tr></thead><tbody>
+    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>${T('Host / IP', 'Хост / IP')}</th><th style="width:26%">${T('Volume', 'Обсяг')}</th><th class="num">%</th><th class="num">Flows</th><th class="num">${T('Avg rate', 'Сер. швидкість')}</th><th>${T('Trend', 'Тренд')}</th><th></th></tr></thead><tbody>
       ${t.rows.map((r, i) => { const c = colorOf.get(r.k);
-        return `<tr class="click${r.k === fip ? ' is-picked' : ''}" data-pick="${esc(r.k)}" title="Додати у фільтри"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? 'без імені' : 'публічна адреса'))}</span></span></div></td>
+        return `<tr class="click${r.k === fip ? ' is-picked' : ''}" data-pick="${esc(r.k)}" title="${T('Add to filters', 'Додати у фільтри')}"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? T('no name', 'без імені') : T('public address', 'публічна адреса')))}</span></span></div></td>
           <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div></td>
           <td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
-          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="Картка хоста">›</button></td></tr>`; }).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`);
+          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="${T('Host card', 'Картка хоста')}">›</button></td></tr>`; }).join('') || `<tr><td colspan="8"><div class="empty">${T('No data', 'Немає даних')}</div></td></tr>`}</tbody></table></div>`);
     if (box) { box.classList.remove('loading');
       box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => addFilter('ip', tr.dataset.pick));
       box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation(); openHost(b.dataset.open); }); }
     // donut: top 5 + rest, same colours as the table
     const top5 = t.rows.slice(0, 5), rest = t.total - top5.reduce((a, r) => a + tot(r), 0);
-    const drows = [...top5.map(r => ({k:r.k, label:r.name || r.k, up:r.up, dn:r.dn})), ...(rest > 0 ? [{k:'__other', label:'Інші', up:rest, dn:0}] : [])];
-    const db = fill('tDonut', `<div class="donut-wrap"><div class="chart donut" id="cTDonut"></div><div class="dl">${drows.map(r => `<i class="idot" style="background:${r.k === '__other' ? C.other : colorOf.get(r.k)}"></i>${r.k === '__other' ? '<span>Інші</span>' : `<button class="link mono" data-f="ip" data-v="${esc(r.k)}">${esc(r.label)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t"></span>`).join('')}</div></div>`);
-    if (db) { db.classList.remove('loading'); wireFilters(db); donut(document.getElementById('cTDonut'), drows.map(r => ({...r, k:r.label})), k => { const r = drows.find(x => x.label === k); return r.k === '__other' ? C.other : colorOf.get(r.k); }, [fmtB(t.total), 'весь трафік']); }
+    const drows = [...top5.map(r => ({k:r.k, label:r.name || r.k, up:r.up, dn:r.dn})), ...(rest > 0 ? [{k:'__other', label:T('Others', 'Інші'), up:rest, dn:0}] : [])];
+    const db = fill('tDonut', `<div class="donut-wrap"><div class="chart donut" id="cTDonut"></div><div class="dl">${drows.map(r => `<i class="idot" style="background:${r.k === '__other' ? C.other : colorOf.get(r.k)}"></i>${r.k === '__other' ? `<span>${T('Others', 'Інші')}</span>` : `<button class="link mono" data-f="ip" data-v="${esc(r.k)}">${esc(r.label)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t"></span>`).join('')}</div></div>`);
+    if (db) { db.classList.remove('loading'); wireFilters(db); donut(document.getElementById('cTDonut'), drows.map(r => ({...r, k:r.label})), k => { const r = drows.find(x => x.label === k); return r.k === '__other' ? C.other : colorOf.get(r.k); }, [fmtB(t.total), T('all traffic', 'весь трафік')]); }
     // stacked trend: top 5 + others, same colours
     api('series', {by:'int_ip', top:5}).then(s5 => { const el = document.getElementById('cTop5'); if (!el) return;
       const {ts: t5, step} = grid(s5), keys = new Map(); for (const [x, k, b] of s5.rows) { if (!keys.has(k)) keys.set(k, new Map()); keys.get(k).set(x, b); }
@@ -610,68 +635,68 @@ function vTalkers(){
       c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
         tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
         series:order.map(k => { const col = k === '__other' ? C.other : (colorOf.get(k) || C.other), r = t.rows.find(x => x.k === k);
-          return {name:k === '__other' ? 'інші' : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
+          return {name:k === '__other' ? T('others', 'інші') : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
             areaStyle:{color:new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset:0, color:hexA(col, .45)}, {offset:1, color:hexA(col, .05)}])}, data:t5.map(x => [x * 1000, (keys.get(k).get(x) || 0) * 8 / step])}; })});
     }).catch(e => fill('cTop5', errBox(e)));
   }).catch(e => fill('tBox', errBox(e)));
   section('tSvc', async () => { const p = await api('top', {dim:'service', limit:6}); const rows = p.rows.slice(0, 5), rest = p.total - rows.reduce((a, r) => a + tot(r), 0);
-    const all = [...rows.map(r => ({label:r.k, v:tot(r), k:r.k})), ...(rest > 0 ? [{label:'Інші', v:rest}] : [])];
+    const all = [...rows.map(r => ({label:r.k, v:tot(r), k:r.k})), ...(rest > 0 ? [{label:T('Others', 'Інші'), v:rest}] : [])];
     return `<div class="pbars">${all.map(r => { const c = r.k ? keyColor(r.k) : C.other;
-      return `<span>${r.k ? `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.label)}</button>` : r.label}</span><div class="vbar"><i style="width:${Math.max(1, 100 * r.v / (p.total || 1)).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .6)},${c})"></i></div><b class="mono">${pct(r.v, p.total)}</b>`; }).join('') || '<div class="empty">Немає даних</div>'}</div>`; });
+      return `<span>${r.k ? `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.label)}</button>` : r.label}</span><div class="vbar"><i style="width:${Math.max(1, 100 * r.v / (p.total || 1)).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .6)},${c})"></i></div><b class="mono">${pct(r.v, p.total)}</b>`; }).join('') || `<div class="empty">${T('No data', 'Немає даних')}</div>`}</div>`; });
   section('tGeo', async () => { const [cc, city] = await Promise.all([api('top', {dim:'country', limit:5}), api('top', {dim:'city', limit:25})]);
     const rest = cc.total - cc.rows.reduce((a, r) => a + tot(r), 0), cols = ['#27D3F5', '#2F7BFF', '#2EE59D', '#8B5CFF', '#FFB547'];
     setTimeout(() => { const el = document.getElementById('cMini'); if (!el || !echarts.getMap('world')) return; const c = mkChart(el), cmax = city.rows.length ? tot(city.rows[0]) : 1;
       c.setOption({animation:false, geo:{map:'world', silent:true, roam:false, left:0, right:0, top:0, bottom:0, itemStyle:{areaColor:'rgba(30,56,120,.45)', borderColor:'rgba(110,160,255,.25)', borderWidth:.4}},
         series:[{type:'scatter', coordinateSystem:'geo', symbolSize:d => 4 + 10 * Math.sqrt(d[2] / cmax), itemStyle:{color:'#27D3F5', shadowBlur:10, shadowColor:'#27D3F5'},
           data:city.rows.filter(r => r.la || r.lo).map(r => [r.lo, r.la, tot(r)])}]}); });
-    return `<div class="geomini"><div class="chart" id="cMini" style="height:120px"></div><div class="dl">${cc.rows.map((r, i) => `<i class="idot" style="background:${cols[i]}"></i><button class="link" data-f="country" data-v="${esc(r.k)}">${esc(r.k ? ccName(r.k) : 'Локальні')}</button><span class="p">${pct(tot(r), cc.total)}</span><span class="t"></span>`).join('')}${rest > 0 ? `<i class="idot" style="background:${C.other}"></i><span>Інші</span><span class="p">${pct(rest, cc.total)}</span><span class="t"></span>` : ''}</div></div>`; });
+    return `<div class="geomini"><div class="chart" id="cMini" style="height:120px"></div><div class="dl">${cc.rows.map((r, i) => `<i class="idot" style="background:${cols[i]}"></i><button class="link" data-f="country" data-v="${esc(r.k)}">${esc(r.k ? ccName(r.k) : T('Local', 'Локальні'))}</button><span class="p">${pct(tot(r), cc.total)}</span><span class="t"></span>`).join('')}${rest > 0 ? `<i class="idot" style="background:${C.other}"></i><span>${T('Others', 'Інші')}</span><span class="p">${pct(rest, cc.total)}</span><span class="t"></span>` : ''}</div></div>`; });
   section('tDetail', async () => { const d = await api('top', {dim:'host_svc', limit:6});
-    return `<div class="tw"><table class="compact"><thead><tr><th>Хост</th><th>Головний сервіс</th><th>Протокол</th><th class="num">Обсяг</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
-      return `<tr class="click" data-f="ip" data-v="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(r.l7)}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Host', 'Хост')}</th><th>${T('Main service', 'Головний сервіс')}</th><th>${T('Protocol', 'Протокол')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
+      return `<tr class="click" data-f="ip" data-v="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(dv(r.l7))}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
 }
 function vPorts(){
   const v = document.getElementById('view'), all = !!state.portsAll;
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s12">${ph('chart', 'Порти в часі', 'топ-7 · клік по лінії — фільтр за портом')}<div class="chart" id="cPorts"></div></section>
-    <section class="glass panel s8">${ph('list', 'Топ портів', 'клік — фільтр за портом', '<button class="lnk" id="pMore"></button>')}<div id="pTbl" class="loading"></div></section>
-    <section class="glass panel s4">${ph('pie', 'Протоколи L7', 'за портом')}<div id="pL7" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('chart', T('Ports over time', 'Порти в часі'), T('top 7 · click a line to filter by port', 'топ-7 · клік по лінії — фільтр за портом'))}<div class="chart" id="cPorts"></div></section>
+    <section class="glass panel s8">${ph('list', T('Top ports', 'Топ портів'), T('click to filter by port', 'клік — фільтр за портом'), '<button class="lnk" id="pMore"></button>')}<div id="pTbl" class="loading"></div></section>
+    <section class="glass panel s4">${ph('pie', T('L7 protocols', 'Протоколи L7'), T('by port', 'за портом'))}<div id="pL7" class="loading"></div></section></div>`;
   api('series', {by:'ext_port', top:7}).then(s => { const el = document.getElementById('cPorts'); if (el) stackChart(el, s, k => ':' + k, k => addFilter('port', k)); }).catch(e => fill('cPorts', errBox(e)));
   section('pTbl', async () => { const t = await api('top', {dim:'ext_port', limit:all ? 100 : 11}), rows = all ? t.rows : t.rows.slice(0, 10), max = rows.length ? tot(rows[0]) : 1;
     moreToggle('pMore', 'portsAll', all, t.rows.length > 10);
-    return `<div class="tw"><table><thead><tr><th>Порт</th><th>Протокол</th><th>Типовий сервіс</th><th style="width:24%">Обсяг</th><th class="num">%</th><th class="num">Хостів</th><th class="num">Зовн. адрес</th><th class="num">Flows</th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(r.l7)}</span></td><td>${svcBadge(r.service)}</td>
-        <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,#1aa7d6,#27D3F5)"></i></div></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td><td class="num mono">${fmtN(r.peers)}</td><td class="num mono">${fmtN(r.fl)}</td></tr>`).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`; });
+    return `<div class="tw"><table><thead><tr><th>${T('Port', 'Порт')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Typical service', 'Типовий сервіс')}</th><th style="width:24%">${T('Volume', 'Обсяг')}</th><th class="num">%</th><th class="num">${T('Hosts', 'Хостів')}</th><th class="num">${T('Outside addresses', 'Зовн. адрес')}</th><th class="num">Flows</th></tr></thead><tbody>
+      ${rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(dv(r.l7))}</span></td><td>${svcBadge(r.service)}</td>
+        <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,#1aa7d6,#27D3F5)"></i></div></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td><td class="num mono">${fmtN(r.peers)}</td><td class="num mono">${fmtN(r.fl)}</td></tr>`).join('') || `<tr><td colspan="8"><div class="empty">${T('No data', 'Немає даних')}</div></td></tr>`}</tbody></table></div>`; });
   section('pL7', async () => { const t = await api('top', {dim:'l7', limit:8});
-    setTimeout(() => { const el = document.getElementById('cPL7'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
-    return `<div class="chart" id="cPL7" style="height:200px"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
+    setTimeout(() => { const el = document.getElementById('cPL7'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), T('protocols', 'протоколів')]); });
+    return `<div class="chart" id="cPL7" style="height:200px"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(dv(r.k))}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
 }
 // "show all" / "top 10" link in a panel header; hidden when there is nothing more to show
 function moreToggle(id, key, all, hasMore){
   const b = document.getElementById(id); if (!b) return;
-  b.hidden = !all && !hasMore; b.textContent = all ? 'Показати топ-10' : 'Показати всі';
+  b.hidden = !all && !hasMore; b.textContent = all ? T('Show top 10', 'Показати топ-10') : T('Show all', 'Показати всі');
   b.onclick = () => { state[key] = !all; render(); };
 }
 function vApps(){
   const v = document.getElementById('view'), all = !!state.appsAll;
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('chart', 'Сервіси в часі', 'сервіс визначається за ASN адреси призначення та портом')}<div class="chart" id="cApps"></div></section>
-    <section class="glass panel s8">${ph('grid', 'Сервіси', 'клік — фільтр за сервісом', '<button class="lnk" id="aMore"></button>')}<div id="aBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('pie', 'Протоколи', 'L7 за портом')}<div id="pBox" class="loading"></div></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('chart', T('Services over time', 'Сервіси в часі'), T('the service comes from the destination ASN and port', 'сервіс визначається за ASN адреси призначення та портом'))}<div class="chart" id="cApps"></div></section>
+    <section class="glass panel s8">${ph('grid', T('Services', 'Сервіси'), T('click to filter by service', 'клік — фільтр за сервісом'), '<button class="lnk" id="aMore"></button>')}<div id="aBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('pie', T('Protocols', 'Протоколи'), T('L7 by port', 'L7 за портом'))}<div id="pBox" class="loading"></div></section></div>`;
   api('series', {by:'service', top:7}).then(s => { const el = document.getElementById('cApps'); if (el) stackChart(el, s, k => k, k => addFilter('service', k)); }).catch(e => fill('cApps', errBox(e)));
   section('aBox', async () => { const t = await api('top', {dim:'service', limit:all ? 100 : 11}), rows = all ? t.rows : t.rows.slice(0, 10);
     moreToggle('aMore', 'appsAll', all, t.rows.length > 10);
-    return `<div class="tw"><table><thead><tr><th>Сервіс</th><th>Протокол</th><th class="num">↓</th><th class="num">↑</th><th class="num">Разом</th><th class="num">%</th><th class="num">Хостів</th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="click" data-f="service" data-v="${esc(r.k)}"><td><button class="link" data-f="service" data-v="${esc(r.k)}">${svcBadge(r.k)}</button></td><td class="ipl">${esc(r.l7)}</td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table><thead><tr><th>${T('Service', 'Сервіс')}</th><th>${T('Protocol', 'Протокол')}</th><th class="num">↓</th><th class="num">↑</th><th class="num">${T('Total', 'Разом')}</th><th class="num">%</th><th class="num">${T('Hosts', 'Хостів')}</th></tr></thead><tbody>
+      ${rows.map(r => `<tr class="click" data-f="service" data-v="${esc(r.k)}"><td><button class="link" data-f="service" data-v="${esc(r.k)}">${svcBadge(r.k)}</button></td><td class="ipl">${esc(dv(r.l7))}</td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td></tr>`).join('')}</tbody></table></div>`; });
   section('pBox', async () => { const t = await api('top', {dim:'l7', limit:10});
-    setTimeout(() => { const el = document.getElementById('cL7'); if (el) donut(el, t.rows.slice(0, 8), k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
-    return `<div class="chart" id="cL7" style="height:220px"></div><div class="dl">${t.rows.slice(0, 8).map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
+    setTimeout(() => { const el = document.getElementById('cL7'); if (el) donut(el, t.rows.slice(0, 8), k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), T('protocols', 'протоколів')]); });
+    return `<div class="chart" id="cL7" style="height:220px"></div><div class="dl">${t.rows.slice(0, 8).map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(dv(r.k))}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
 }
 function vGeo(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('globe', 'Карта з’єднань', 'GeoIP призначення · лінія з’являється, коли надходить новий flow · колір = напрямок',
-      `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>майданчики</span><span><i style="background:${C.ext}"></i>призначення</span></span>`)}<div class="chart map" id="cMap"></div></section>
-    <section class="glass panel s4">${ph('pulse', 'З’єднання наживо', 'нові flow із геолокацією')}<div class="ticker" id="ticker"><div class="empty">Чекаю на нові записи (експорт іде раз на ~хвилину)…</div></div></section>
-    <section class="glass panel s4">${ph('globe', 'Країни', 'за адресою призначення')}<div id="ccBox" class="loading"></div></section>
-    <section class="glass panel s8">${ph('nodes', 'Автономні системи', 'хто насправді обслуговує трафік')}<div id="asBox" class="loading"></div></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('globe', T('Connection map', 'Карта з’єднань'), T('destination GeoIP · a line appears when a new flow arrives · colour = direction', 'GeoIP призначення · лінія з’являється, коли надходить новий flow · колір = напрямок'),
+      `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('sites', 'майданчики')}</span><span><i style="background:${C.ext}"></i>${T('destinations', 'призначення')}</span></span>`)}<div class="chart map" id="cMap"></div></section>
+    <section class="glass panel s4">${ph('pulse', T('Live connections', 'З’єднання наживо'), T('new flows with geolocation', 'нові flow із геолокацією'))}<div class="ticker" id="ticker"><div class="empty">${T('Waiting for new records (exporters send about once a minute)…', 'Чекаю на нові записи (експорт іде раз на ~хвилину)…')}</div></div></section>
+    <section class="glass panel s4">${ph('globe', T('Countries', 'Країни'), T('by destination address', 'за адресою призначення'))}<div id="ccBox" class="loading"></div></section>
+    <section class="glass panel s8">${ph('nodes', T('Autonomous systems', 'Автономні системи'), T('who actually serves the traffic', 'хто насправді обслуговує трафік'))}<div id="asBox" class="loading"></div></section></div>`;
   const tk = document.getElementById('ticker');
   api('geo').then(g => { const el = document.getElementById('cMap'); if (!el) return; flatMap(el, g, r => {
     if (tk.querySelector('.empty')) tk.innerHTML = '';
@@ -680,22 +705,22 @@ function vGeo(){
     d.innerHTML = `<span class="mono" style="color:var(--ink3)">${hms(r.t)}</span><span><b class="${up ? 'u' : 'd'}">${up ? '↑' : '↓'}</b> ${esc(up ? site : place)} → ${esc(up ? place : site)}<br><span class="nat ipl">${esc(r.name || r.int_ip)} ${up ? '→' : '←'} ${esc(r.ext_ip)}:${r.ext_port} · ${esc(r.service)}</span></span><span class="mono">${fmtB(r.bytes)}</span>`;
     tk.prepend(d); while (tk.children.length > 14) tk.lastChild.remove(); }); }).catch(e => fill('cMap', errBox(e)));
   section('ccBox', async () => { const t = await api('top', {dim:'country', limit:20}); const max = t.rows.length ? tot(t.rows[0]) : 1;
-    return `<div class="blist">${t.rows.map(r => `<button class="brow" data-f="country" data-v="${esc(r.k)}"><span class="n"><span class="tag mono">${esc(r.k || '—')}</span>&nbsp; ${esc(r.k ? ccName(r.k) : 'Локальні / невідомі')}</span><span class="t">${fmtB(tot(r))}</span><span class="p">${pct(tot(r), t.total)}</span>
+    return `<div class="blist">${t.rows.map(r => `<button class="brow" data-f="country" data-v="${esc(r.k)}"><span class="n"><span class="tag mono">${esc(r.k || '—')}</span>&nbsp; ${esc(r.k ? ccName(r.k) : T('Local / unknown', 'Локальні / невідомі'))}</span><span class="t">${fmtB(tot(r))}</span><span class="p">${pct(tot(r), t.total)}</span>
       <span class="bar2" style="width:${(100 * tot(r) / max).toFixed(1)}%"><i class="u" style="width:${(100 * r.up / (tot(r) || 1)).toFixed(1)}%"></i><i class="d" style="flex:1"></i></span></button>`).join('')}</div>`; });
   section('asBox', async () => { const t = await api('top', {dim:'asn', limit:25});
-    return `<div class="tw"><table><thead><tr><th>ASN</th><th>Країна</th><th class="num">↓</th><th class="num">↑</th><th class="num">Разом</th><th class="num">%</th></tr></thead><tbody>
-      ${t.rows.map(r => `<tr><td>${r.k !== '0' ? `<button class="link" data-f="asn" data-v="${esc(r.k)}">AS${esc(r.k)} ${esc(r.as_org)}</button>` : 'локальні адреси'}</td><td><span class="tag mono">${esc(r.country || '—')}</span></td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table><thead><tr><th>ASN</th><th>${T('Country', 'Країна')}</th><th class="num">↓</th><th class="num">↑</th><th class="num">${T('Total', 'Разом')}</th><th class="num">%</th></tr></thead><tbody>
+      ${t.rows.map(r => `<tr><td>${r.k !== '0' ? `<button class="link" data-f="asn" data-v="${esc(r.k)}">AS${esc(r.k)} ${esc(r.as_org)}</button>` : T('local addresses', 'локальні адреси')}</td><td><span class="tag mono">${esc(r.country || '—')}</span></td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td></tr>`).join('')}</tbody></table></div>`; });
 }
 function vThreats(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', 'Події та аномалії', 'обчислюються з потоків за останню добу')}<div id="alBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('search', 'Що відстежується')}<div class="kv">
-      <div><span>Тривале вивантаження</span><b>&gt;5 Мбіт/с · 45 хв із 3 год</b></div><div><span>Сплески</span><b>×8 від медіани хоста</b></div><div><span>Нові країни</span><b>перший контакт за тиждень</b></div>
-      <div><span>Здоров’я експорту</span><b>пропуски sequence</b></div></div><p class="note">Сканування портів, репутація IP і сповіщення в Telegram — наступні кроки.</p></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies', 'Події та аномалії'), T('computed from the flows of the last day', 'обчислюються з потоків за останню добу'))}<div id="alBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('search', T('What is watched', 'Що відстежується'))}<div class="kv">
+      <div><span>${T('Sustained upload', 'Тривале вивантаження')}</span><b>${T('&gt;5 Mbit/s · 45 min out of 3 h', '&gt;5 Мбіт/с · 45 хв із 3 год')}</b></div><div><span>${T('Bursts', 'Сплески')}</span><b>${T('×8 the host median', '×8 від медіани хоста')}</b></div><div><span>${T('New countries', 'Нові країни')}</span><b>${T('first contact this week', 'перший контакт за тиждень')}</b></div>
+      <div><span>${T('Export health', 'Здоров’я експорту')}</span><b>${T('sequence gaps', 'пропуски sequence')}</b></div></div><p class="note">${T('Port scans, IP reputation and Telegram notifications are next.', 'Сканування портів, репутація IP і сповіщення в Telegram — наступні кроки.')}</p></section></div>`;
   section('alBox', async () => { const a = (await api('alerts')).alerts;
-    if (!a.length) return '<div class="empty">Подій немає — усе спокійно</div>';
+    if (!a.length) return `<div class="empty">${T('No events — all quiet', 'Подій немає — усе спокійно')}</div>`;
     return '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
-      <div class="meta"><span class="pill ${x.sev}">${{warn:'увага', crit:'аномалія', info:'інфо'}[x.sev]}</span><span class="mono">${esc(String(x.when).slice(11, 16) || x.when)}</span>${x.ip ? `<button class="btn" data-f="ip" data-v="${esc(x.ip)}">Фільтр</button>` : ''}</div></div>`).join('') + '</div>'; });
+      <div class="meta"><span class="pill ${x.sev}">${{warn:T('warning', 'увага'), crit:T('anomaly', 'аномалія'), info:T('info', 'інфо')}[x.sev]}</span><span class="mono">${esc(String(x.when).slice(11, 16) || x.when)}</span>${x.ip ? `<button class="btn" data-f="ip" data-v="${esc(x.ip)}">${T('Filter', 'Фільтр')}</button>` : ''}</div></div>`).join('') + '</div>'; });
 }
 const VENDORS = {
   Fortinet:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\nend`,
@@ -706,8 +731,8 @@ const VENDORS = {
 };
 function vDevices(){
   const v = document.getElementById('view'); state.ifEdit = null;
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', 'Пристрої-експортери', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв', isAdmin() ? '<button class="btn primary" id="addDev">+ Підключити пристрій</button>' : '<span class="nat">додавати пристрої може адміністратор</span>')}<div id="dBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('ip', 'Інтерфейси', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download')}<div id="ifBox" class="loading"></div></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', T('Exporter devices', 'Пристрої-експортери'), T('NetFlow v5/v9 and IPFIX from any vendor · statistics for 15 min', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв'), isAdmin() ? `<button class="btn primary" id="addDev">${T('+ Connect a device', '+ Підключити пристрій')}</button>` : `<span class="nat">${T('an administrator can add devices', 'додавати пристрої може адміністратор')}</span>`)}<div id="dBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('ip', T('Interfaces', 'Інтерфейси'), T('indexes the collector saw in 24 h · the WAN role defines what is upload and download', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download'))}<div id="ifBox" class="loading"></div></section></div>`;
   if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
   section('dBox', async () => { const res = await api('devices'), d = res.devices; window.__devs = d;
     // the interfaces panel shows one device: the one picked in the table, else the global device filter, else the first
@@ -715,14 +740,14 @@ function vDevices(){
     if (!d.some(x => x.ip === state.ifDev)) state.ifDev = (d.find(x => df && x.ip === df.v) || d.find(x => x.interfaces.length) || d[0] || {}).ip;
     setTimeout(() => {
       showIfaces(d);
-      document.querySelectorAll('#dBox tr[data-pick]').forEach(tr => tr.onclick = () => { if (tr.dataset.pick === state.ifDev) return; if (state.ifEdit && !confirm('Скасувати незбережені зміни інтерфейсів?')) return; state.ifEdit = null; state.ifDev = tr.dataset.pick; showIfaces(d); });
+      document.querySelectorAll('#dBox tr[data-pick]').forEach(tr => tr.onclick = () => { if (tr.dataset.pick === state.ifDev) return; if (state.ifEdit && !confirm(T('Discard unsaved interface changes?', 'Скасувати незбережені зміни інтерфейсів?'))) return; state.ifEdit = null; state.ifDev = tr.dataset.pick; showIfaces(d); });
       document.querySelectorAll('[data-edit]').forEach(b => b.onclick = e => { e.stopPropagation(); openDevice(d.find(x => x.ip === b.dataset.edit)); });
     });
-    return `<div class="tw"><table><thead><tr><th>Стан</th><th>Пристрій</th><th>Виробник / модель</th><th>Протокол</th><th>Майданчик</th><th>IP експорту</th><th class="num">Записів/с</th><th class="num">Шаблони</th><th>Вибірка</th><th class="num">Втрати</th><th class="num">Без шаблону</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
+    return `<div class="tw"><table><thead><tr><th>${T('Status', 'Стан')}</th><th>${T('Device', 'Пристрій')}</th><th>${T('Vendor / model', 'Виробник / модель')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Site', 'Майданчик')}</th><th>${T('Export IP', 'IP експорту')}</th><th class="num">${T('Records/s', 'Записів/с')}</th><th class="num">${T('Templates', 'Шаблони')}</th><th>${T('Sampling', 'Вибірка')}</th><th class="num">${T('Loss', 'Втрати')}</th><th class="num">${T('No template', 'Без шаблону')}</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
       ${d.map(x => { const never = !x.last, stale = Date.now() / 1000 - x.last > 180, st = never ? 'warn' : stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
-        return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? 'ще не надсилав даних' : stale ? 'немає даних понад 3 хв' : 'онлайн'}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ' <span class="tag">не описаний</span>'}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? 'очікую' : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
+        return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? T('has not sent data yet', 'ще не надсилав даних') : stale ? T('no data for over 3 min', 'немає даних понад 3 хв') : T('online', 'онлайн')}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ` <span class="tag">${T('not described', 'не описаний')}</span>`}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? T('waiting', 'очікую') : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
           <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td>
-          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div>${collectorBar(res.collector, res.listen)}<p class="note">Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
+          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">${T('Edit', 'Змінити')}</button></td>` : ''}</tr>`; }).join('') || `<tr><td colspan="12"><div class="empty">${T('No device has sent data yet', 'Ще жоден пристрій не надіслав дані')}</div></td></tr>`}</tbody></table></div>${collectorBar(res.collector, res.listen)}<p class="note">${T('Click a row to see the device’s interfaces below. To filter by device, use the device list at the top.', 'Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.')}${isAdmin() ? T(' The collector picks up description changes within a minute.', ' Зміни опису колектор підхоплює протягом хвилини.') : ''}</p>`; });
 }
 // where devices must send NetFlow: the collector's own interface address when it listens on specific interfaces
 // (the web UI may be on another one), otherwise the address this page was opened with
@@ -730,36 +755,36 @@ function collectorTarget(){
   const nf = (META.listen || {}).netflow, addrs = nf ? nf.listen.flatMap(x => x.addrs) : [];
   return [addrs.find(a => !a.includes(':')) || addrs[0] || location.hostname, nf ? nf.port : 2055];
 }
-const listenText = l => !l ? '—' : l.listen.map(x => (x.iface || 'усі інтерфейси') + (x.addrs.length ? ` (${x.addrs.join(', ')})` : '')).join('; ');
+const listenText = l => !l ? '—' : l.listen.map(x => x.iface ? x.iface + (x.addrs.length ? ` (${x.addrs.join(', ')})` : '') : x.addrs.join(', ') || T('all interfaces', 'усі інтерфейси')).join('; ');
 // receiver health: workers, socket buffer and every place a packet can be lost on the way to the database
 function collectorBar(c, listen){
   const nf = listen && listen.netflow, web = listen && listen.web;
-  const where = (nf || web) ? `<div class="collbar-where">${nf ? `<span>Прийом NetFlow/IPFIX: <b class="mono">UDP ${nf.port} · ${esc(listenText(nf))}</b></span>` : ''}${web ? `<span>Вебінтерфейс: <b class="mono">TCP ${web.port} · ${esc(listenText(web))}</b></span>` : ''}</div>` : '';
+  const where = (nf || web) ? `<div class="collbar-where">${nf ? `<span>${T('NetFlow/IPFIX received on', 'Прийом NetFlow/IPFIX')}: <b class="mono">UDP ${nf.port} · ${esc(listenText(nf))}</b></span>` : ''}${web ? `<span>${T('Web interface', 'Вебінтерфейс')}: <b class="mono">TCP ${web.port} · ${esc(listenText(web))}</b></span>` : ''}</div>` : '';
   if (!c) return where ? `<div class="collbar">${where}</div>` : '';
   const lost = c.socket_drops + c.queue_drops, pct = 100 * lost / Math.max(1, c.packets + lost), fill = c.rcvbuf ? Math.round(100 * c.rx_queue_peak / c.rcvbuf) : 0;
   const cell = (k, v, tip, bad) => `<div title="${esc(tip)}"><span>${k}</span><b class="mono"${bad ? ' style="color:var(--warn)"' : ''}>${v}</b></div>`;
-  return `<div class="collbar"><div class="collbar-h"><b>Колектор</b><span class="nat">за ${c.minutes} хв</span></div>
-    ${cell('Воркери', c.workers, 'Процеси, що декодують пакети (FT_WORKERS у /etc/flowtrack/env)', !c.workers)}
-    ${cell('Пакетів прийнято', c.packets.toLocaleString('uk-UA'), 'Датаграми, прочитані із сокета')}
-    ${cell('Відкинуто сокетом', c.socket_drops.toLocaleString('uk-UA'), 'Ядро відкинуло пакети: буфер сокета був повний (колектор не встигав або сплеск більший за буфер)', c.socket_drops)}
-    ${cell('Відкинуто чергою', c.queue_drops.toLocaleString('uk-UA'), 'Воркери не встигали забирати пакети', c.queue_drops)}
-    ${cell('Втрачено записів', c.dropped_rows.toLocaleString('uk-UA'), 'Записи, які не вдалося зберегти: ClickHouse був недоступний занадто довго', c.dropped_rows)}
-    ${cell('Буфер сокета', `${fmtB(c.rcvbuf)} · пік ${fill}%`, 'Розмір буфера прийому і найбільше його заповнення (net.core.rmem_max обмежує розмір)', fill > 50)}
-    ${cell('Втрати', (lost ? pct.toFixed(pct < 0.01 ? 3 : 2) : '0') + '%', 'Частка пакетів, які колектор не обробив', lost)}${where}</div>`;
+  return `<div class="collbar"><div class="collbar-h"><b>${T('Collector', 'Колектор')}</b><span class="nat">${T(`last ${c.minutes} min`, `за ${c.minutes} хв`)}</span></div>
+    ${cell(T('Workers', 'Воркери'), c.workers, T('Processes that decode packets (FT_WORKERS in /etc/flowtrack/env)', 'Процеси, що декодують пакети (FT_WORKERS у /etc/flowtrack/env)'), !c.workers)}
+    ${cell(T('Packets received', 'Пакетів прийнято'), c.packets.toLocaleString(LOC), T('Datagrams read from the socket', 'Датаграми, прочитані із сокета'))}
+    ${cell(T('Dropped by socket', 'Відкинуто сокетом'), c.socket_drops.toLocaleString(LOC), T('The kernel dropped packets: the socket buffer was full (the collector fell behind or a burst exceeded the buffer)', 'Ядро відкинуло пакети: буфер сокета був повний (колектор не встигав або сплеск більший за буфер)'), c.socket_drops)}
+    ${cell(T('Dropped by queue', 'Відкинуто чергою'), c.queue_drops.toLocaleString(LOC), T('The workers could not take packets in time', 'Воркери не встигали забирати пакети'), c.queue_drops)}
+    ${cell(T('Records lost', 'Втрачено записів'), c.dropped_rows.toLocaleString(LOC), T('Records that could not be stored: ClickHouse was unavailable for too long', 'Записи, які не вдалося зберегти: ClickHouse був недоступний занадто довго'), c.dropped_rows)}
+    ${cell(T('Socket buffer', 'Буфер сокета'), T(`${fmtB(c.rcvbuf)} · peak ${fill}%`, `${fmtB(c.rcvbuf)} · пік ${fill}%`), T('Receive buffer size and its highest fill (net.core.rmem_max limits the size)', 'Розмір буфера прийому і найбільше його заповнення (net.core.rmem_max обмежує розмір)'), fill > 50)}
+    ${cell(T('Loss', 'Втрати'), (lost ? pct.toFixed(pct < 0.01 ? 3 : 2) : '0') + '%', T('Share of packets the collector did not process', 'Частка пакетів, які колектор не обробив'), lost)}${where}</div>`;
 }
 // generic centered dialog; returns {root, close}
-const ROLE_UI = {lan:'LAN', wan:'WAN (інтернет)', local:'Сам пристрій'};
+const ROLE_UI = {lan:'LAN', wan:T('WAN (internet)', 'WAN (інтернет)'), local:T('The device itself', 'Сам пристрій')};
 function showIfaces(devices){
   document.querySelectorAll('#dBox tr[data-pick]').forEach(tr => tr.classList.toggle('picked', tr.dataset.pick === state.ifDev));
   const x = devices.find(d => d.ip === state.ifDev), box = document.getElementById('ifBox'); if (!box) return;
   box.classList.remove('loading');
-  if (!x) { box.innerHTML = '<div class="empty">Ще жоден пристрій не надіслав дані</div>'; return; }
+  if (!x) { box.innerHTML = `<div class="empty">${T('No device has sent data yet', 'Ще жоден пристрій не надіслав дані')}</div>`; return; }
   box.innerHTML = ifaceTable(x, state.ifEdit === x.ip);
   wireIfaces(box, x, devices);
 }
 const addrHtml = i => {
   const own = i.addrs.map(a => `<b class="mono">${esc(a)}</b>`), seen = i.seen_addrs.filter(a => !i.addrs.some(o => o === a || o.split('/')[0] === a));
-  const auto = seen.map(a => `<span class="mono nat" title="${a.includes('/') ? 'мережа, з якої приходить трафік у цей інтерфейс (за 24 год)' : 'адреса NAT, з якою трафік виходить через цей інтерфейс (за 24 год)'}">${esc(a)}</span>`);
+  const auto = seen.map(a => `<span class="mono nat" title="${a.includes('/') ? T('network that sends traffic into this interface (24 h)', 'мережа, з якої приходить трафік у цей інтерфейс (за 24 год)') : T('NAT address traffic leaves this interface with (24 h)', 'адреса NAT, з якою трафік виходить через цей інтерфейс (за 24 год)')}">${esc(a)}</span>`);
   return [...own, ...auto].join('<br>') || '<span class="nat">—</span>';
 };
 function ifaceTable(x, edit){
@@ -768,22 +793,22 @@ function ifaceTable(x, edit){
   const ranked = [...x.interfaces].filter(i => i.bytes > 0.02 * total).sort((a, b) => b.ext_share - a.ext_share);
   const best = ranked[0] && ranked[0].ext_share >= 0.3 && ranked[0].ext_share >= 3 * ((ranked[1] || {}).ext_share || 0) ? ranked[0].index : null;
   const rows = x.interfaces.map(i => {
-    const hint = i.index === best && i.role !== 'wan' ? `<span class="pill info" title="${Math.round(i.ext_share * 100)}% трафіку цього інтерфейсу — з/до публічних адрес; у решти значно менше">схоже на WAN</span>` : '';
-    const name = edit ? `<input class="ifname" data-idx="${i.index}" value="${esc(i.custom_name)}" placeholder="${esc(i.role === 'local' ? 'local' : 'if ' + i.index)}" maxlength="32" aria-label="Назва інтерфейсу ${i.index}">`
+    const hint = i.index === best && i.role !== 'wan' ? `<span class="pill info" title="${T(`${Math.round(i.ext_share * 100)}% of this interface’s traffic is from/to public addresses; much less on the others`, `${Math.round(i.ext_share * 100)}% трафіку цього інтерфейсу — з/до публічних адрес; у решти значно менше`)}">${T('looks like WAN', 'схоже на WAN')}</span>` : '';
+    const name = edit ? `<input class="ifname" data-idx="${i.index}" value="${esc(i.custom_name)}" placeholder="${esc(i.role === 'local' ? 'local' : 'if ' + i.index)}" maxlength="32" aria-label="${T(`Interface ${i.index} name`, `Назва інтерфейсу ${i.index}`)}">`
                       : `<b class="ipl">${esc(i.name)}</b>`;
-    const role = edit ? `<select class="ifrole" data-idx="${i.index}" aria-label="Роль інтерфейсу ${i.index}">${Object.entries(ROLE_UI).map(([k, l]) => `<option value="${k}"${k === i.role ? ' selected' : ''}>${l}</option>`).join('')}</select>`
-                      : (i.role === 'wan' ? '<span class="pill warn">WAN</span>' : i.role === 'local' ? '<span class="tag">сам пристрій</span>' : '<span class="tag">LAN</span>');
-    const addrs = edit ? `<input class="ifaddr" data-idx="${i.index}" value="${esc(i.addrs.join(', '))}" placeholder="IP або IP/маска, через кому" aria-label="IP-адреси інтерфейсу ${i.index}">${i.seen_addrs.length ? `<div class="nat ifseen">у даних: ${i.seen_addrs.map(esc).join(', ')}</div>` : ''}`
+    const role = edit ? `<select class="ifrole" data-idx="${i.index}" aria-label="${T(`Interface ${i.index} role`, `Роль інтерфейсу ${i.index}`)}">${Object.entries(ROLE_UI).map(([k, l]) => `<option value="${k}"${k === i.role ? ' selected' : ''}>${l}</option>`).join('')}</select>`
+                      : (i.role === 'wan' ? '<span class="pill warn">WAN</span>' : i.role === 'local' ? `<span class="tag">${T('the device itself', 'сам пристрій')}</span>` : '<span class="tag">LAN</span>');
+    const addrs = edit ? `<input class="ifaddr" data-idx="${i.index}" value="${esc(i.addrs.join(', '))}" placeholder="${T('IP or IP/mask, comma-separated', 'IP або IP/маска, через кому')}" aria-label="${T(`Interface ${i.index} IP addresses`, `IP-адреси інтерфейсу ${i.index}`)}">${i.seen_addrs.length ? `<div class="nat ifseen">${T('in the data', 'у даних')}: ${i.seen_addrs.map(esc).join(', ')}</div>` : ''}`
                        : addrHtml(i);
-    const unseen = i.unseen ? ` <span class="pill warn" title="Індекс є в налаштуваннях, але в даних за 24 год не траплявся — можливо, його вказано помилково">не бачили за 24 год</span>` : '';
+    const unseen = i.unseen ? ` <span class="pill warn" title="${T('The index is in the settings but did not appear in the data for 24 h — it may be wrong', 'Індекс є в налаштуваннях, але в даних за 24 год не траплявся — можливо, його вказано помилково')}">${T('not seen in 24 h', 'не бачили за 24 год')}</span>` : '';
     return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td></tr>`;
   }).join('');
-  const btns = !admin || !x.interfaces.length ? '' : edit ? '<span class="nat ifmsg"></span><button class="btn ifcancel">Скасувати</button><button class="btn primary ifsave" disabled>Зберегти</button>'
-                                                           : '<span class="nat ifmsg"></span><button class="btn ifedit">Змінити</button>';
+  const btns = !admin || !x.interfaces.length ? '' : edit ? `<span class="nat ifmsg"></span><button class="btn ifcancel">${T('Cancel', 'Скасувати')}</button><button class="btn primary ifsave" disabled>${T('Save', 'Зберегти')}</button>`
+                                                           : `<span class="nat ifmsg"></span><button class="btn ifedit">${T('Edit', 'Змінити')}</button>`;
   return `<div class="ifdev${edit ? ' editing' : ''}" data-dev="${esc(x.ip)}"><div class="ifdev-h"><h4 class="mono">${esc(x.name)} <span class="nat">${esc(x.ip)}${x.vendor ? ' · ' + esc(x.vendor) : ''}</span></h4>${btns}</div>
-    ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">Індекс</th><th>Назва</th><th>IP-адреси</th><th>Роль</th><th class="num">Трафік за 24 год</th><th class="num" title="Частка трафіку із зовнішніми адресами">Зовн.</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="note">Жирним — адреси, вказані вручну; сірим — те, що видно з потоків за 24 год: адреса NAT, з якою трафік виходить в інтернет (так зазвичай виглядає WAN), і мережі, з яких трафік приходить в інтерфейс.</p>`
-      : '<div class="empty">Колектор ще не бачив інтерфейсів цього пристрою (за 24 год)</div>'}</div>`;
+    ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">${T('Index', 'Індекс')}</th><th>${T('Name', 'Назва')}</th><th>${T('IP addresses', 'IP-адреси')}</th><th>${T('Role', 'Роль')}</th><th class="num">${T('Traffic, 24 h', 'Трафік за 24 год')}</th><th class="num" title="${T('Share of traffic with outside addresses', 'Частка трафіку із зовнішніми адресами')}">${T('Ext.', 'Зовн.')}</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="note">${T('Bold: addresses entered by hand; grey: what the flows of the last 24 h show — the NAT address traffic leaves to the internet with (this is how a WAN usually looks) and the networks that send traffic into the interface.', 'Жирним — адреси, вказані вручну; сірим — те, що видно з потоків за 24 год: адреса NAT, з якою трафік виходить в інтернет (так зазвичай виглядає WAN), і мережі, з яких трафік приходить в інтерфейс.')}</p>`
+      : `<div class="empty">${T('The collector has not seen interfaces of this device yet (24 h)', 'Колектор ще не бачив інтерфейсів цього пристрою (за 24 год)')}</div>`}</div>`;
 }
 function wireIfaces(box, x, devices){
   const card = box.querySelector('.ifdev'), msg = card.querySelector('.ifmsg');
@@ -791,27 +816,27 @@ function wireIfaces(box, x, devices){
   const edit = card.querySelector('.ifedit'); if (edit) edit.onclick = () => { state.ifEdit = x.ip; showIfaces(devices); const f = box.querySelector('.ifname'); if (f) f.focus(); };
   const cancel = card.querySelector('.ifcancel'); if (cancel) cancel.onclick = () => { state.ifEdit = null; showIfaces(devices); };
   const save = card.querySelector('.ifsave'); if (!save) return;
-  card.querySelectorAll('input,select').forEach(el => el.addEventListener('input', () => { save.disabled = false; say('є незбережені зміни', 'var(--warn)'); }));
+  card.querySelectorAll('input,select').forEach(el => el.addEventListener('input', () => { save.disabled = false; say(T('unsaved changes', 'є незбережені зміни'), 'var(--warn)'); }));
   card.addEventListener('keydown', e => { if (e.key === 'Escape') cancel.click(); else if (e.key === 'Enter' && e.target.matches('input') && !save.disabled) save.click(); });
   save.onclick = async () => {
     const roles = [...card.querySelectorAll('.ifrole')], val = (cls, idx) => card.querySelector(`.${cls}[data-idx="${idx}"]`).value.trim();
-    if (roles.filter(r => r.value === 'local').length > 1) { say('Роль «Сам пристрій» може мати лише один інтерфейс', 'var(--crit)'); return; }
+    if (roles.filter(r => r.value === 'local').length > 1) { say(T('Only one interface can have the role «The device itself»', 'Роль «Сам пристрій» може мати лише один інтерфейс'), 'var(--crit)'); return; }
     const interfaces = roles.map(r => ({index:+r.dataset.idx, role:r.value, name:val('ifname', r.dataset.idx), addrs:val('ifaddr', r.dataset.idx).split(/[\s,;]+/).filter(Boolean)}));
-    save.disabled = true; say('Зберігаю…');
+    save.disabled = true; say(T('Saving…', 'Зберігаю…'));
     try {
       await apiPost('devices/interfaces', {ip:x.ip, interfaces});
       META = await fetch('api/meta').then(r => r.json());
       const fresh = (await api('devices')).devices, i = devices.findIndex(d => d.ip === x.ip), nx = fresh.find(d => d.ip === x.ip);
       if (i >= 0 && nx) devices[i] = nx;
       state.ifEdit = null; showIfaces(devices);
-      const m = document.querySelector('#ifBox .ifmsg'); if (m) { m.textContent = 'Збережено · колектор застосує ролі протягом хвилини'; m.style.color = 'var(--ok)'; }
+      const m = document.querySelector('#ifBox .ifmsg'); if (m) { m.textContent = T('Saved · the collector applies roles within a minute', 'Збережено · колектор застосує ролі протягом хвилини'); m.style.color = 'var(--ok)'; }
     } catch (e) { save.disabled = false; say(e.message, 'var(--crit)'); }
   };
 }
 function openModal(title, sub, body, wide){
   const root = document.getElementById('drawerRoot');
   root.innerHTML = `<div class="scrim" id="scrim"></div><div class="modal glass${wide ? '' : ' narrow'}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-    <header><div><h3>${esc(title)}</h3>${sub ? `<span class="nat">${sub}</span>` : ''}</div><button class="btn x" id="dx">Закрити</button></header>${body}</div>`;
+    <header><div><h3>${esc(title)}</h3>${sub ? `<span class="nat">${sub}</span>` : ''}</div><button class="btn x" id="dx">${T('Close', 'Закрити')}</button></header>${body}</div>`;
   const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
@@ -824,18 +849,18 @@ function openDevice(dev){
   let vendor = c.vendor && VENDORS[c.vendor] ? c.vendor : (c.vendor || 'Fortinet');
   const [me, nfPort] = collectorTarget();
   const draw = () => {
-    const m = openModal(editing ? `Пристрій ${dev.name}` : 'Підключити пристрій', editing ? esc(dev.ip) : 'Налаштуйте експорт на пристрої та опишіть його тут', `
+    const m = openModal(editing ? T(`Device ${dev.name}`, `Пристрій ${dev.name}`) : T('Connect a device', 'Підключити пристрій'), editing ? esc(dev.ip) : T('Set up export on the device and describe it here', 'Налаштуйте експорт на пристрої та опишіть його тут'), `
       <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
-      <div class="cols"><div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc((VENDORS[vendor] || VENDORS.Fortinet)(me, nfPort))}</pre></div>
-      <form class="form" id="devForm"><h4 style="margin:0">2. Опис для FlowTrack</h4>
-        <div class="two"><label>IP, з якого йде експорт<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>Назва<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
-        <div class="two"><label>Модель<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>Вибірка (sampling)<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
-        <div class="two"><label>snmp-index WAN-інтерфейсів (через кому)<input id="fWan" value="${esc((c.wan_ifs || []).join(', '))}" placeholder="1"></label><label>Індекс «сам пристрій» (FortiOS: 0)<input id="fLocal" value="${c.local_if ?? ''}" placeholder="0"></label></div>
-        <label>Публічні IP пристрою (через кому)<input id="fPub" value="${esc((c.public_ips || []).join(', '))}" placeholder="198.51.100.10"></label>
-        <div class="two"><label>Місто<input id="fCity" value="${esc(c.city || '')}" placeholder="Amsterdam"></label><label>Код країни<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="NL"></label></div>
-        <div class="two"><label>Широта<input id="fLat" value="${c.lat ?? ''}" placeholder="52.37"></label><label>Довгота<input id="fLon" value="${c.lon ?? ''}" placeholder="4.90"></label></div>
+      <div class="cols"><div><h4>${T('1. Configuration on the device', '1. Конфігурація на пристрої')}</h4><pre class="codebox">${esc((VENDORS[vendor] || VENDORS.Fortinet)(me, nfPort))}</pre></div>
+      <form class="form" id="devForm"><h4 style="margin:0">${T('2. Description for FlowTrack', '2. Опис для FlowTrack')}</h4>
+        <div class="two"><label>${T('IP the export comes from', 'IP, з якого йде експорт')}<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>${T('Name', 'Назва')}<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
+        <div class="two"><label>${T('Model', 'Модель')}<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>${T('Sampling', 'Вибірка (sampling)')}<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
+        <div class="two"><label>${T('snmp-index of WAN interfaces (comma-separated)', 'snmp-index WAN-інтерфейсів (через кому)')}<input id="fWan" value="${esc((c.wan_ifs || []).join(', '))}" placeholder="1"></label><label>${T('Index of «the device itself» (FortiOS: 0)', 'Індекс «сам пристрій» (FortiOS: 0)')}<input id="fLocal" value="${c.local_if ?? ''}" placeholder="0"></label></div>
+        <label>${T('Public IPs of the device (comma-separated)', 'Публічні IP пристрою (через кому)')}<input id="fPub" value="${esc((c.public_ips || []).join(', '))}" placeholder="198.51.100.10"></label>
+        <div class="two"><label>${T('City', 'Місто')}<input id="fCity" value="${esc(c.city || '')}" placeholder="Amsterdam"></label><label>${T('Country code', 'Код країни')}<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="NL"></label></div>
+        <div class="two"><label>${T('Latitude', 'Широта')}<input id="fLat" value="${c.lat ?? ''}" placeholder="52.37"></label><label>${T('Longitude', 'Довгота')}<input id="fLon" value="${c.lon ?? ''}" placeholder="4.90"></label></div>
         <p class="err" id="fErr" hidden></p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? 'Зберегти' : 'Додати пристрій'}</button>${editing && dev.configured ? '<button class="btn" type="button" id="fDel">Видалити опис</button>' : ''}<span class="nat" id="fDelAsk" hidden>Точно видалити? <button class="btn" type="button" id="fDelYes">Так, видалити</button></span></div></form></div>`, true);
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? T('Save', 'Зберегти') : T('Add device', 'Додати пристрій')}</button>${editing && dev.configured ? `<button class="btn" type="button" id="fDel">${T('Delete description', 'Видалити опис')}</button>` : ''}<span class="nat" id="fDelAsk" hidden>${T('Really delete?', 'Точно видалити?')} <button class="btn" type="button" id="fDelYes">${T('Yes, delete', 'Так, видалити')}</button></span></div></form></div>`, true);
     m.root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; keep(); draw(); restore(); });
     const list = id => document.getElementById(id).value.split(',').map(x => x.trim()).filter(Boolean);
     document.getElementById('devForm').addEventListener('submit', async e => { e.preventDefault(); formErr('fErr');
@@ -858,29 +883,29 @@ function openDevice(dev){
 }
 
 // ===================== users (admin) =====================
-const ROLE_LABEL = {admin:'Адміністратор', viewer:'Перегляд'};
+const ROLE_LABEL = {admin:T('Administrator', 'Адміністратор'), viewer:T('Viewer', 'Перегляд')};
 function vUsers(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', 'Користувачі', 'адміністратор керує всім; «Перегляд» — лише читання, без змін пристроїв і користувачів', '<button class="btn primary" id="addUser">+ Новий користувач</button>')}<div id="uBox" class="loading"></div></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', T('Users', 'Користувачі'), T('an administrator manages everything; «Viewer» is read-only, no changes to devices or users', 'адміністратор керує всім; «Перегляд» — лише читання, без змін пристроїв і користувачів'), `<button class="btn primary" id="addUser">${T('+ New user', '+ Новий користувач')}</button>`)}<div id="uBox" class="loading"></div></section></div>`;
   document.getElementById('addUser').onclick = () => openUser(null);
   section('uBox', async () => { const r = await fetch('api/users'); if (!r.ok) throw new Error((await r.json()).error || r.status); const users = (await r.json()).users;
     setTimeout(() => document.querySelectorAll('[data-user]').forEach(b => b.onclick = () => openUser(users.find(u => u.name === b.dataset.user))));
-    const when = t => t ? new Date(t * 1000).toLocaleString('uk-UA', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : 'ще не входив';
-    return `<div class="tw"><table><thead><tr><th>Логін</th><th>Роль</th><th>Створено</th><th>Останній вхід</th><th></th></tr></thead><tbody>
-      ${users.map(u => `<tr><td><b class="mono">${esc(u.name)}</b>${u.name === ME.name ? ' <span class="tag">це ви</span>' : ''}${u.default_password ? ' <span class="pill warn">стандартний пароль</span>' : ''}</td><td>${u.role === 'admin' ? '<span class="pill info">Адміністратор</span>' : '<span class="tag">Перегляд</span>'}</td>
-        <td class="nat">${when(u.created)}</td><td class="nat">${when(u.last_login)}</td><td><button class="btn" data-user="${esc(u.name)}">Змінити</button></td></tr>`).join('')}</tbody></table></div>`; });
+    const when = t => t ? new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : T('never signed in', 'ще не входив');
+    return `<div class="tw"><table><thead><tr><th>${T('Username', 'Логін')}</th><th>${T('Role', 'Роль')}</th><th>${T('Created', 'Створено')}</th><th>${T('Last sign-in', 'Останній вхід')}</th><th></th></tr></thead><tbody>
+      ${users.map(u => `<tr><td><b class="mono">${esc(u.name)}</b>${u.name === ME.name ? ` <span class="tag">${T('you', 'це ви')}</span>` : ''}${u.default_password ? ` <span class="pill warn">${T('default password', 'стандартний пароль')}</span>` : ''}</td><td>${u.role === 'admin' ? `<span class="pill info">${T('Administrator', 'Адміністратор')}</span>` : `<span class="tag">${T('Viewer', 'Перегляд')}</span>`}</td>
+        <td class="nat">${when(u.created)}</td><td class="nat">${when(u.last_login)}</td><td><button class="btn" data-user="${esc(u.name)}">${T('Edit', 'Змінити')}</button></td></tr>`).join('')}</tbody></table></div>`; });
 }
 function genPassword(){ const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const b = new Uint32Array(14); crypto.getRandomValues(b); return [...b].map(x => a[x % a.length]).join(''); }
 function openUser(u){
   const editing = !!u, self = editing && u.name === ME.name;
-  const m = openModal(editing ? `Користувач ${u.name}` : 'Новий користувач', '', `<form class="form" id="uForm">
-    <label>Логін<input id="uName" ${editing ? `value="${esc(u.name)}" readonly` : 'required placeholder="olena"'} autocomplete="off"></label>
-    <label>Роль<select id="uRole" ${self ? 'disabled' : ''}><option value="viewer">Перегляд — лише читання</option><option value="admin">Адміністратор — повний доступ</option></select></label>
-    <label>${editing ? 'Новий пароль (залиште порожнім, щоб не змінювати)' : 'Пароль'}<input id="uPass" type="text" autocomplete="new-password" ${editing ? '' : 'required'} minlength="8" placeholder="щонайменше 8 символів"></label>
-    <button class="lnk" type="button" id="uGen" style="justify-self:start">Згенерувати пароль</button>
+  const m = openModal(editing ? T(`User ${u.name}`, `Користувач ${u.name}`) : T('New user', 'Новий користувач'), '', `<form class="form" id="uForm">
+    <label>${T('Username', 'Логін')}<input id="uName" ${editing ? `value="${esc(u.name)}" readonly` : 'required placeholder="olena"'} autocomplete="off"></label>
+    <label>${T('Role', 'Роль')}<select id="uRole" ${self ? 'disabled' : ''}><option value="viewer">${T('Viewer — read-only', 'Перегляд — лише читання')}</option><option value="admin">${T('Administrator — full access', 'Адміністратор — повний доступ')}</option></select></label>
+    <label>${editing ? T('New password (leave empty to keep it)', 'Новий пароль (залиште порожнім, щоб не змінювати)') : T('Password', 'Пароль')}<input id="uPass" type="text" autocomplete="new-password" ${editing ? '' : 'required'} minlength="8" placeholder="${T('at least 8 characters', 'щонайменше 8 символів')}"></label>
+    <button class="lnk" type="button" id="uGen" style="justify-self:start">${T('Generate a password', 'Згенерувати пароль')}</button>
     <p class="err" id="uErr" hidden></p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? 'Зберегти' : 'Створити'}</button>${editing && !self ? '<button class="btn" type="button" id="uDel">Видалити користувача</button><span class="nat" id="uDelAsk" hidden>Точно? <button class="btn" type="button" id="uDelYes">Так, видалити</button></span>' : ''}</div>
-    ${self ? '<p class="note" style="margin:0">Власний пароль зручніше змінити в меню користувача — там потрібен поточний пароль.</p>' : ''}</form>`);
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? T('Save', 'Зберегти') : T('Create', 'Створити')}</button>${editing && !self ? `<button class="btn" type="button" id="uDel">${T('Delete user', 'Видалити користувача')}</button><span class="nat" id="uDelAsk" hidden>${T('Sure?', 'Точно?')} <button class="btn" type="button" id="uDelYes">${T('Yes, delete', 'Так, видалити')}</button></span>` : ''}</div>
+    ${self ? `<p class="note" style="margin:0">${T('Change your own password in the user menu — it asks for the current password.', 'Власний пароль зручніше змінити в меню користувача — там потрібен поточний пароль.')}</p>` : ''}</form>`);
   document.getElementById('uRole').value = editing ? u.role : 'viewer';
   document.getElementById('uGen').onclick = () => { document.getElementById('uPass').value = genPassword(); };
   document.getElementById('uForm').addEventListener('submit', async e => { e.preventDefault(); formErr('uErr');
@@ -898,13 +923,14 @@ function openUser(u){
 // ===================== session: login, user menu, password =====================
 function renderUser(){
   const w = document.getElementById('userWrap'); if (!w || !ME) return;
-  w.innerHTML = `${ME.default_password ? '<button class="pill warn" id="pwWarn" style="border:0;cursor:pointer" title="Змініть стандартний пароль">змініть пароль</button>' : ''}
+  w.innerHTML = `${ME.default_password ? `<button class="pill warn" id="pwWarn" style="border:0;cursor:pointer" title="${T('Change the default password', 'Змініть стандартний пароль')}">${T('change password', 'змініть пароль')}</button>` : ''}
     <button class="user" id="userBtn" aria-haspopup="menu" aria-expanded="false"><span class="avatar">${esc(ME.name[0].toUpperCase())}</span><span class="who"><b>${esc(ME.name)}</b><small>${ROLE_LABEL[ME.role]}</small></span></button>
-    <div class="menu glass" id="userMenu" role="menu" hidden><button role="menuitem" id="miPass">Змінити пароль</button>${isAdmin() ? '<button role="menuitem" id="miUsers">Користувачі</button>' : ''}<button role="menuitem" id="miOut">Вийти</button></div>`;
+    <div class="menu glass" id="userMenu" role="menu" hidden><button role="menuitem" id="miPass">${T('Change password', 'Змінити пароль')}</button>${isAdmin() ? `<button role="menuitem" id="miUsers">${T('Users', 'Користувачі')}</button>` : ''}<button role="menuitem" id="miLang" lang="${T('uk', 'en')}">${T('Українська', 'English')}</button><button role="menuitem" id="miOut">${T('Sign out', 'Вийти')}</button></div>`;
   const btn = document.getElementById('userBtn'), menu = document.getElementById('userMenu');
   btn.onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); };
   menu.addEventListener('click', () => closeUserMenu());
   document.getElementById('miPass').onclick = openPassword;
+  document.getElementById('miLang').onclick = () => setLang(T('uk', 'en'));
   const pw = document.getElementById('pwWarn'); if (pw) pw.onclick = openPassword;
   const mu = document.getElementById('miUsers'); if (mu) mu.onclick = () => { state.view = 'users'; render(); };
   document.getElementById('miOut').onclick = async () => { try { await apiPost('logout', {}); } catch (e) {} ME = null; showLogin(); };
@@ -914,16 +940,16 @@ function closeUserMenu(){ const m = document.getElementById('userMenu'), b = doc
 document.addEventListener('click', e => { if (!e.target.closest || !e.target.closest('#userWrap')) closeUserMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeUserMenu(); });
 function openPassword(){
-  const m = openModal('Змінити пароль', ME.default_password ? 'Зараз використовується стандартний пароль' : '', `<form class="form" id="pForm">
-    <label>Поточний пароль<input id="pCur" type="password" required autocomplete="current-password"></label>
-    <label>Новий пароль<input id="pNew" type="password" required minlength="8" autocomplete="new-password" placeholder="щонайменше 8 символів"></label>
-    <label>Повторіть новий пароль<input id="pNew2" type="password" required minlength="8" autocomplete="new-password"></label>
-    <p class="err" id="pErr" hidden></p><p class="note" id="pOk" hidden style="color:var(--ok)">Пароль змінено. Інші сесії цього користувача завершено.</p>
-    <div><button class="btn primary" type="submit">Змінити пароль</button></div></form>`);
+  const m = openModal(T('Change password', 'Змінити пароль'), ME.default_password ? T('The default password is in use now', 'Зараз використовується стандартний пароль') : '', `<form class="form" id="pForm">
+    <label>${T('Current password', 'Поточний пароль')}<input id="pCur" type="password" required autocomplete="current-password"></label>
+    <label>${T('New password', 'Новий пароль')}<input id="pNew" type="password" required minlength="8" autocomplete="new-password" placeholder="${T('at least 8 characters', 'щонайменше 8 символів')}"></label>
+    <label>${T('Repeat the new password', 'Повторіть новий пароль')}<input id="pNew2" type="password" required minlength="8" autocomplete="new-password"></label>
+    <p class="err" id="pErr" hidden></p><p class="note" id="pOk" hidden style="color:var(--ok)">${T('Password changed. Other sessions of this user were signed out.', 'Пароль змінено. Інші сесії цього користувача завершено.')}</p>
+    <div><button class="btn primary" type="submit">${T('Change password', 'Змінити пароль')}</button></div></form>`);
   document.getElementById('pCur').focus();
   document.getElementById('pForm').addEventListener('submit', async e => { e.preventDefault(); formErr('pErr');
     const n1 = document.getElementById('pNew').value, n2 = document.getElementById('pNew2').value;
-    if (n1 !== n2) return formErr('pErr', 'Нові паролі не збігаються');
+    if (n1 !== n2) return formErr('pErr', T('The new passwords do not match', 'Нові паролі не збігаються'));
     try { ME = await apiPost('me/password', {current:document.getElementById('pCur').value, new:n1}); document.getElementById('pOk').hidden = false; renderUser(); setTimeout(m.close, 1400); }
     catch (err) { formErr('pErr', err.message); } });
 }
@@ -934,12 +960,12 @@ function showLogin(msg){
   document.querySelector('.app').hidden = true;
   const box = document.createElement('div'); box.className = 'login-wrap'; box.id = 'loginWrap';
   box.innerHTML = `<form class="glass login" id="loginForm">
-    <div class="brand" style="padding:0"><svg width="40" height="34" viewBox="0 0 40 34" aria-hidden="true"><path d="M3 10c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#27D3F5" stroke-width="4.5" stroke-linecap="round"/><path d="M3 22c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#2F7BFF" stroke-width="4.5" stroke-linecap="round"/></svg><div><b>FlowTrack</b><small>Вхід до панелі</small></div></div>
+    <div class="brand" style="padding:0"><svg width="40" height="34" viewBox="0 0 40 34" aria-hidden="true"><path d="M3 10c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#27D3F5" stroke-width="4.5" stroke-linecap="round"/><path d="M3 22c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#2F7BFF" stroke-width="4.5" stroke-linecap="round"/></svg><div><b>FlowTrack</b><small>${T('Sign in', 'Вхід до панелі')}</small></div></div>
     ${msg ? `<p class="note" style="margin:0">${esc(msg)}</p>` : ''}
-    <label>Логін<input id="lUser" required autocomplete="username" autofocus></label>
-    <label>Пароль<input id="lPass" type="password" required autocomplete="current-password"></label>
+    <label>${T('Username', 'Логін')}<input id="lUser" required autocomplete="username" autofocus></label>
+    <label>${T('Password', 'Пароль')}<input id="lPass" type="password" required autocomplete="current-password"></label>
     <p class="err" id="lErr" hidden></p>
-    <button class="btn primary" type="submit" style="justify-self:stretch;text-align:center;padding:9px">Увійти</button></form>`;
+    <button class="btn primary" type="submit" style="justify-self:stretch;text-align:center;padding:9px">${T('Sign in', 'Увійти')}</button></form>`;
   document.body.appendChild(box);
   document.getElementById('lUser').focus();
   document.getElementById('loginForm').addEventListener('submit', async e => { e.preventDefault(); formErr('lErr');
@@ -952,19 +978,19 @@ function showLogin(msg){
 
 async function openHost(ip){
   const root = document.getElementById('drawerRoot');
-  root.innerHTML = `<div class="scrim" id="scrim"></div><aside class="drawer glass" role="dialog" aria-modal="true" aria-label="Хост ${esc(ip)}"><div class="loading" style="min-height:200px"></div></aside>`;
+  root.innerHTML = `<div class="scrim" id="scrim"></div><aside class="drawer glass" role="dialog" aria-modal="true" aria-label="${T('Host', 'Хост')} ${esc(ip)}"><div class="loading" style="min-height:200px"></div></aside>`;
   const close = () => { if (hc) { hc.dispose(); const i = charts.indexOf(hc); if (i >= 0) charts.splice(i, 1); } root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   let hc = null; document.addEventListener('keydown', onKey); document.getElementById('scrim').onclick = close;
   let d; try { d = await api('host', {ip}); } catch (e) { root.querySelector('.drawer').innerHTML = errBox(e); return; }
   const s = d.summary;
-  root.querySelector('.drawer').innerHTML = `<header><div><h3>${esc(d.host.name || ip)}</h3><div class="ipl" style="color:var(--ink2)">${esc(ip)} · ${d.host.private ? 'внутрішня адреса' : 'публічна адреса'}</div></div><button class="btn x" id="dx">Закрити</button></header>
+  root.querySelector('.drawer').innerHTML = `<header><div><h3>${esc(d.host.name || ip)}</h3><div class="ipl" style="color:var(--ink2)">${esc(ip)} · ${d.host.private ? T('inside address', 'внутрішня адреса') : T('public address', 'публічна адреса')}</div></div><button class="btn x" id="dx">${T('Close', 'Закрити')}</button></header>
     <div class="dk"><div><span>↓ download</span><b class="d">${fmtB(s.down)}</b></div><div><span>↑ upload</span><b class="u">${fmtB(s.up)}</b></div><div><span>flows</span><b>${fmtN(s.flows)}</b></div></div>
-    <div><h4>Трафік · ${rangeLabel()}</h4><div class="chart short" id="cHost"></div></div>
-    <div><h4>Сервіси</h4><div class="tagrow">${d.services.rows.map(g => `<span class="tag">${esc(g.k)} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
-    <div><h4>Протоколи</h4><div class="tagrow">${d.ports.rows.map(g => `<span class="tag mono">${esc(g.k)} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
-    <div><h4>Куди ходить</h4><div class="blist">${d.dests.rows.map(g => `<div class="brow" style="cursor:default"><span class="n"><span class="idot ext"></span>${esc(g.k)} <span class="nat">${esc([g.service, g.city || ccName(g.country)].filter(Boolean).join(' · '))}</span></span><span class="t">${fmtB(tot(g))}</span><span class="p"></span></div>`).join('')}</div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="dfilter">Фільтрувати все за цим хостом</button></div>`;
+    <div><h4>${T('Traffic', 'Трафік')} · ${rangeLabel()}</h4><div class="chart short" id="cHost"></div></div>
+    <div><h4>${T('Services', 'Сервіси')}</h4><div class="tagrow">${d.services.rows.map(g => `<span class="tag">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
+    <div><h4>${T('Protocols', 'Протоколи')}</h4><div class="tagrow">${d.ports.rows.map(g => `<span class="tag mono">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
+    <div><h4>${T('Where it goes', 'Куди ходить')}</h4><div class="blist">${d.dests.rows.map(g => `<div class="brow" style="cursor:default"><span class="n"><span class="idot ext"></span>${esc(g.k)} <span class="nat">${esc([g.service, g.city || ccName(g.country)].filter(Boolean).join(' · '))}</span></span><span class="t">${fmtB(tot(g))}</span><span class="p"></span></div>`).join('')}</div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="dfilter">${T('Filter everything by this host', 'Фільтрувати все за цим хостом')}</button></div>`;
   const before = charts.length; trendChart(document.getElementById('cHost'), d.series, true); hc = charts[before];
   document.getElementById('dx').onclick = close;
   document.getElementById('dfilter').onclick = () => { close(); addFilter('ip', ip); };
@@ -976,12 +1002,12 @@ const VIEWS = {overview:vOverview, flows:vFlows, talkers:vTalkers, apps:vApps, p
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
-  document.getElementById('chips').innerHTML = state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : f.v)}<button aria-label="Прибрати фільтр" data-i="${i}">×</button></span>`).join('')
-    + (state.filters.length ? '<button class="lnk" id="clearF">Скинути всі</button>' : '');
+  document.getElementById('chips').innerHTML = state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : f.v)}<button aria-label="${T('Remove filter', 'Прибрати фільтр')}" data-i="${i}">×</button></span>`).join('')
+    + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all', 'Скинути всі')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
   const ds = document.getElementById('devSel'), df = state.filters.find(f => f.k === 'device' && !f.neg);
-  ds.innerHTML = `<option value="">Усі пристрої (${META.devices.length})</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
+  ds.innerHTML = `<option value="">${T(`All devices (${META.devices.length})`, `Усі пристрої (${META.devices.length})`)}</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = df ? df.v : '';
   document.getElementById('rangeSel').value = state.range;
 }
@@ -1015,16 +1041,16 @@ async function health(){
   try {
     const d = (await fetch('api/devices').then(r => r.json())).devices || [];
     const rps = d.reduce((s, x) => s + x.rps, 0), online = d.filter(x => Date.now() / 1000 - x.last < 180).length;
-    document.getElementById('collState').textContent = d.length ? (online ? 'Колектор онлайн' : 'Немає даних') : 'Чекаю на експорт';
+    document.getElementById('collState').textContent = d.length ? (online ? T('Collector online', 'Колектор онлайн') : T('No data', 'Немає даних')) : T('Waiting for export', 'Чекаю на експорт');
     document.getElementById('collDot').className = 'dot' + (online ? '' : ' crit');
-    document.getElementById('expCount').textContent = `${online}/${d.length} експортер${d.length === 1 ? '' : 'и'}`;
+    document.getElementById('expCount').textContent = T(`${online}/${d.length} exporter${d.length === 1 ? '' : 's'}`, `${online}/${d.length} експортер${d.length === 1 ? '' : 'и'}`);
     ingHist.push(rps); if (ingHist.length > 40) ingHist.shift();
-    document.getElementById('ingV').innerHTML = `${rps.toFixed(1)} <small>записів/с</small>`;
+    document.getElementById('ingV').innerHTML = T(`${rps.toFixed(1)} <small>rec/s</small>`, `${rps.toFixed(1)} <small>записів/с</small>`);
     document.getElementById('ingM').style.width = Math.max(2, Math.min(100, 100 * rps / 2000)).toFixed(1) + '%';
     const max = Math.max(...ingHist, 1); document.getElementById('ingS').innerHTML = `<polyline points="${ingHist.map((x, i) => `${(i / 39 * 200).toFixed(1)},${(28 - x / max * 24).toFixed(1)}`).join(' ')}" fill="none" stroke="${C.down}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
     const al = (await fetch('api/alerts').then(r => r.json())).alerts || [];
     document.getElementById('bellBadge').hidden = !al.some(a => a.sev !== 'info');
-  } catch (e) { document.getElementById('collState').textContent = 'API недоступне'; document.getElementById('collDot').className = 'dot crit'; }
+  } catch (e) { document.getElementById('collState').textContent = T('API unavailable', 'API недоступне'); document.getElementById('collDot').className = 'dot crit'; }
 }
 
 (async () => {

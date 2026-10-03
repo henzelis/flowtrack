@@ -10,6 +10,17 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
  Juniper · pmacct …         NAT, L7)      exporter health
 ```
 
+## Screenshots
+
+*Demo data (a small office and a branch); no real network is shown.*
+
+![Overview](docs/screenshots/overview.png)
+
+| | |
+|---|---|
+| ![Flows](docs/screenshots/flows.png) **Flows** — who exchanges how much with whom; click to filter | ![Top hosts](docs/screenshots/hosts.png) **Top hosts** — volume, trend, services and destinations |
+| ![Geolocation](docs/screenshots/geo.png) **Geolocation** — live connection map, countries, ASNs | ![Devices](docs/screenshots/devices.png) **Devices** — exporters, interfaces, collector health |
+
 ## Features
 
 **Collection**
@@ -47,6 +58,7 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   (sustained upload, bursts, new countries, export loss), *Devices* (exporters and interfaces).
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
 - Login with two roles: **admin** (users, devices) and **viewer** (read-only).
+- English and Ukrainian, switchable per browser (the user menu); the browser language picks the default.
 
 ## Quick start
 
@@ -269,7 +281,6 @@ second, a busy 1 Gbit/s internet edge typically a few thousand. If the Devices p
 ## Roadmap
 
 **Next — scale and reach**
-- English web interface and a language switch; screenshots in this README
 - Automated tests and CI (GitHub Actions), API tokens for scripts and monitoring
 
 **Features**

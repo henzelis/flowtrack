@@ -16,6 +16,8 @@ import threading
 import time
 from collections import defaultdict, deque
 
+from common import tr
+
 STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
 USERS_FILE = os.path.join(STATE_DIR, 'users.json')
 SESSIONS_FILE = os.path.join(STATE_DIR, 'sessions.json')
@@ -27,7 +29,10 @@ DEFAULT_USER, DEFAULT_PASSWORD = 'admin', 'flowtrack'
 
 
 class AuthError(Exception):
-    """Message is safe to show to the user."""
+    """Message is safe to show to the user; status is the HTTP status for it."""
+    def __init__(self, msg, status=400):
+        super().__init__(msg)
+        self.status = status
 
 
 def _write_json(path, obj):
@@ -86,9 +91,9 @@ class Auth:
     @staticmethod
     def _check_new_password(password):
         if not isinstance(password, str) or len(password) < MIN_PASSWORD:
-            raise AuthError(f'Пароль має містити щонайменше {MIN_PASSWORD} символів')
+            raise AuthError(tr(f'The password must be at least {MIN_PASSWORD} characters long', f'Пароль має містити щонайменше {MIN_PASSWORD} символів'))
         if len(password) > 256:
-            raise AuthError('Пароль задовгий')
+            raise AuthError(tr('The password is too long', 'Пароль задовгий'))
 
     def public(self, name):
         u = self.users[name]
@@ -103,13 +108,13 @@ class Auth:
             while q and now - q[0] > 300:
                 q.popleft()
             if len(q) >= 5:
-                raise AuthError('Забагато невдалих спроб. Спробуйте за кілька хвилин.')
+                raise AuthError(tr('Too many failed attempts. Try again in a few minutes.', 'Забагато невдалих спроб. Спробуйте за кілька хвилин.'), 429)
             u = self.users.get(name) if isinstance(name, str) else None
             # always run scrypt so response time does not reveal whether the user exists
             calc = _hash(password if isinstance(password, str) else '', bytes.fromhex(u['salt']) if u else b'0' * 16)
             if not u or not hmac.compare_digest(calc, u['hash']):
                 q.append(now)
-                raise AuthError('Невірний логін або пароль')
+                raise AuthError(tr('Wrong username or password', 'Невірний логін або пароль'))
             q.clear()
             token = secrets.token_urlsafe(32)
             self.sessions[_tok_id(token)] = {'user': name, 'exp': now + SESSION_TTL, 'created': int(now)}
@@ -146,10 +151,10 @@ class Auth:
         with self.lock:
             u = self.users[name]
             if not hmac.compare_digest(_hash(current or '', bytes.fromhex(u['salt'])), u['hash']):
-                raise AuthError('Поточний пароль невірний')
+                raise AuthError(tr('The current password is wrong', 'Поточний пароль невірний'))
             self._check_new_password(new)
             if new == current:
-                raise AuthError('Новий пароль збігається з поточним')
+                raise AuthError(tr('The new password is the same as the current one', 'Новий пароль збігається з поточним'))
             self._set_password(name, new)
             self._drop_sessions(name, keep=_tok_id(token))   # sign out other devices
 
@@ -161,11 +166,11 @@ class Auth:
     def create_user(self, name, role, password):
         with self.lock:
             if not isinstance(name, str) or not NAME_RE.match(name):
-                raise AuthError('Логін: 2–32 символи, латиниця, цифри, крапка, дефіс, підкреслення')
+                raise AuthError(tr('Username: 2–32 characters: Latin letters, digits, dot, hyphen, underscore', 'Логін: 2–32 символи, латиниця, цифри, крапка, дефіс, підкреслення'))
             if name in self.users:
-                raise AuthError('Такий користувач уже існує')
+                raise AuthError(tr('This user already exists', 'Такий користувач уже існує'))
             if role not in ROLES:
-                raise AuthError('Невідома роль')
+                raise AuthError(tr('Unknown role', 'Невідома роль'))
             self._check_new_password(password)
             self._set_password(name, password, role=role)
 
@@ -175,14 +180,14 @@ class Auth:
     def update_user(self, actor, name, role=None, password=None):
         with self.lock:
             if name not in self.users:
-                raise AuthError('Користувача не знайдено')
+                raise AuthError(tr('User not found', 'Користувача не знайдено'))
             if role is not None:
                 if role not in ROLES:
-                    raise AuthError('Невідома роль')
+                    raise AuthError(tr('Unknown role', 'Невідома роль'))
                 if role != 'admin' and self.users[name]['role'] == 'admin' and len(self._admins()) == 1:
-                    raise AuthError('Має лишитися хоча б один адміністратор')
+                    raise AuthError(tr('At least one administrator must remain', 'Має лишитися хоча б один адміністратор'))
                 if name == actor and role != 'admin':
-                    raise AuthError('Не можна зняти права адміністратора із самого себе')
+                    raise AuthError(tr('You cannot remove your own administrator rights', 'Не можна зняти права адміністратора із самого себе'))
                 self.users[name]['role'] = role
                 self._save_users()
             if password is not None:
@@ -194,11 +199,11 @@ class Auth:
     def delete_user(self, actor, name):
         with self.lock:
             if name not in self.users:
-                raise AuthError('Користувача не знайдено')
+                raise AuthError(tr('User not found', 'Користувача не знайдено'))
             if name == actor:
-                raise AuthError('Не можна видалити самого себе')
+                raise AuthError(tr('You cannot delete yourself', 'Не можна видалити самого себе'))
             if self.users[name]['role'] == 'admin' and len(self._admins()) == 1:
-                raise AuthError('Має лишитися хоча б один адміністратор')
+                raise AuthError(tr('At least one administrator must remain', 'Має лишитися хоча б один адміністратор'))
             del self.users[name]
             self._save_users()
             self._drop_sessions(name)

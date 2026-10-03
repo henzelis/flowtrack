@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 from common import (STATE_DIR, CHError, ch, describe_listeners, exporters_mtime, iface_addrs, is_private, listen_signature,  # noqa: E402
-                    load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter)
+                    listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_WEB_PORT', '3030'))
@@ -453,34 +453,43 @@ def api_alerts(q):
                   WHERE ts >= now() - INTERVAL 3 HOUR AND dir = 'up' GROUP BY int_ip, ext_ip, service, ext_port, m HAVING b * 8 / 60 > 5000000)
             GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON'):
         out.append({'sev': 'warn', 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
-                    'title': 'Тривале вивантаження', 'text': f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Мбіт/с протягом {r['mins']} хв за останні 3 год.",
+                    'title': tr('Sustained upload', 'Тривале вивантаження'),
+                    'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Mbit/s for {r['mins']} min in the last 3 h.",
+                               f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Мбіт/с протягом {r['mins']} хв за останні 3 год."),
                     'when': r['since']})
     for r in ch("""SELECT exporter, sum(lost) AS lost_n, sum(packets) AS packets_n FROM exporter_stats WHERE ts >= now() - INTERVAL 1 HOUR GROUP BY exporter HAVING lost_n > 0""", fmt='JSON'):
         r['lost'], r['packets'] = r['lost_n'], r['packets_n']
         pct = 100 * int(r['lost']) / max(1, int(r['packets']) + int(r['lost']))
-        out.append({'sev': 'warn' if pct < 2 else 'crit', 'kind': 'export_loss', 'device': r['exporter'], 'title': 'Втрати експорту',
-                    'text': f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: втрачено {r['lost']} пакетів ({pct:.2f}%) за годину. Перевірте канал до колектора.", 'when': 'за годину'})
+        out.append({'sev': 'warn' if pct < 2 else 'crit', 'kind': 'export_loss', 'device': r['exporter'], 'title': tr('Export loss', 'Втрати експорту'),
+                    'text': tr(f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: {r['lost']} packets ({pct:.2f}%) lost in the last hour. Check the path to the collector.",
+                               f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: втрачено {r['lost']} пакетів ({pct:.2f}%) за годину. Перевірте канал до колектора."),
+                    'when': tr('last hour', 'за годину')})
     col = collector_health(60)
     if col and col['socket_drops'] + col['queue_drops']:
         lost = col['socket_drops'] + col['queue_drops']
         pct = 100 * lost / max(1, col['packets'] + lost)
-        out.append({'sev': 'warn' if pct < 1 else 'crit', 'kind': 'collector_drops', 'title': 'Колектор не встигає',
-                    'text': f"За годину відкинуто {lost} пакетів ({pct:.2f}%): буфер сокета — {col['socket_drops']}, черга воркерів — {col['queue_drops']}. "
-                            f"Збільште FT_WORKERS у /etc/flowtrack/env (зараз {col['workers']}) або net.core.rmem_max.", 'when': 'за годину'})
+        out.append({'sev': 'warn' if pct < 1 else 'crit', 'kind': 'collector_drops', 'title': tr('Collector falling behind', 'Колектор не встигає'),
+                    'text': tr(f"{lost} packets ({pct:.2f}%) dropped in the last hour: socket buffer {col['socket_drops']}, worker queues {col['queue_drops']}. "
+                               f"Raise FT_WORKERS in /etc/flowtrack/env (now {col['workers']}) or net.core.rmem_max.",
+                               f"За годину відкинуто {lost} пакетів ({pct:.2f}%): буфер сокета — {col['socket_drops']}, черга воркерів — {col['queue_drops']}. "
+                               f"Збільште FT_WORKERS у /etc/flowtrack/env (зараз {col['workers']}) або net.core.rmem_max."), 'when': tr('last hour', 'за годину')})
     if col and col['dropped_rows']:
-        out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': 'Записи не збережено',
-                    'text': f"За годину {col['dropped_rows']} записів не потрапили в базу: ClickHouse був недоступний довше, ніж вміщує буфер колектора.", 'when': 'за годину'})
+        out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': tr('Records not stored', 'Записи не збережено'),
+                    'text': tr(f"{col['dropped_rows']} records did not reach the database in the last hour: ClickHouse was unavailable longer than the collector buffer lasts.",
+                               f"За годину {col['dropped_rows']} записів не потрапили в базу: ClickHouse був недоступний довше, ніж вміщує буфер колектора."), 'when': tr('last hour', 'за годину')})
     for r in ch("""SELECT int_ip, country, min(ts) AS first FROM flows WHERE ts >= now() - INTERVAL 1 DAY AND country != '' GROUP BY int_ip, country
             HAVING (int_ip, country) NOT IN (SELECT int_ip, country FROM flows WHERE ts < now() - INTERVAL 1 DAY AND ts >= now() - INTERVAL 7 DAY GROUP BY int_ip, country)
                AND (SELECT min(ts) FROM flows) < now() - INTERVAL 2 DAY
             ORDER BY first DESC LIMIT 5""", fmt='JSON'):
-        out.append({'sev': 'info', 'kind': 'new_country', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': 'Новий напрямок',
-                    'text': f"{NAMES.get(r['int_ip']) or r['int_ip']} вперше за тиждень звернувся до країни {r['country']}.", 'when': r['first']})
+        out.append({'sev': 'info', 'kind': 'new_country', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('New destination', 'Новий напрямок'),
+                    'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']} contacted {r['country']} for the first time this week.",
+                               f"{NAMES.get(r['int_ip']) or r['int_ip']} вперше за тиждень звернувся до країни {r['country']}."), 'when': r['first']})
     for r in ch("""WITH per AS (SELECT int_ip, toStartOfFiveMinutes(ts) AS m, sum(bytes) AS b FROM flows WHERE ts >= now() - INTERVAL 1 DAY GROUP BY int_ip, m)
             SELECT int_ip, max(b) AS peak, quantile(0.5)(b) AS med, argMax(m, b) AS at FROM per GROUP BY int_ip
             HAVING count() > 24 AND peak > 100000000 AND peak > 8 * med AND at >= now() - INTERVAL 3 HOUR ORDER BY peak DESC LIMIT 5""", fmt='JSON'):
-        out.append({'sev': 'info', 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': 'Сплеск трафіку',
-                    'text': f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB за 5 хв — у {float(r['peak']) / max(1.0, float(r['med'])):.0f}× вище медіани за добу.", 'when': r['at']})
+        out.append({'sev': 'info', 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('Traffic burst', 'Сплеск трафіку'),
+                    'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB in 5 min — {float(r['peak']) / max(1.0, float(r['med'])):.0f}× the daily median.",
+                               f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB за 5 хв — у {float(r['peak']) / max(1.0, float(r['med'])):.0f}× вище медіани за добу."), 'when': r['at']})
     return {'alerts': out}
 
 
@@ -488,7 +497,7 @@ def _str(v, n, field):
     if v is None or v == '':
         return ''
     if not isinstance(v, str) or len(v) > n:
-        raise BadRequest(f'поле {field}: до {n} символів')
+        raise BadRequest(tr(f'{field}: up to {n} characters', f'{field}: до {n} символів'))
     return v.strip()
 
 
@@ -496,12 +505,12 @@ def device_from_body(b):
     try:
         ip = str(ipaddress.ip_address(str(b.get('ip', '')).strip()))
     except ValueError:
-        raise BadRequest('Некоректна IP-адреса експорту')
-    cfg = {'name': _str(b.get('name'), 64, 'назва') or ip, 'vendor': _str(b.get('vendor'), 64, 'виробник'), 'model': _str(b.get('model'), 64, 'модель'),
-           'city': _str(b.get('city'), 64, 'місто'), 'sampling': _str(b.get('sampling'), 16, 'вибірка') or '1:1'}
-    cc = _str(b.get('country'), 2, 'країна').upper()
+        raise BadRequest(tr('Invalid exporter IP address', 'Некоректна IP-адреса експорту'))
+    cfg = {'name': _str(b.get('name'), 64, tr('name', 'назва')) or ip, 'vendor': _str(b.get('vendor'), 64, tr('vendor', 'виробник')), 'model': _str(b.get('model'), 64, tr('model', 'модель')),
+           'city': _str(b.get('city'), 64, tr('city', 'місто')), 'sampling': _str(b.get('sampling'), 16, tr('sampling', 'вибірка')) or '1:1'}
+    cc = _str(b.get('country'), 2, tr('country', 'країна')).upper()
     if cc and not cc.isalpha():
-        raise BadRequest('Код країни — дві латинські літери')
+        raise BadRequest(tr('Country code: two Latin letters', 'Код країни — дві латинські літери'))
     cfg['country'] = cc
     try:
         cfg['wan_ifs'] = sorted({int(x) for x in (b.get('wan_ifs') or []) if 0 <= int(x) < 2**32})
@@ -512,13 +521,13 @@ def device_from_body(b):
             if cfg[k] is not None and abs(cfg[k]) > lim:
                 raise ValueError
     except (TypeError, ValueError):
-        raise BadRequest('Інтерфейси — цілі числа; широта/довгота — числа в межах ±90/±180')
+        raise BadRequest(tr('Interfaces are whole numbers; latitude/longitude are numbers within ±90/±180', 'Інтерфейси — цілі числа; широта/довгота — числа в межах ±90/±180'))
     pubs = []
     for x in (b.get('public_ips') or [])[:16]:
         try:
             pubs.append(str(ipaddress.ip_address(str(x).strip())))
         except ValueError:
-            raise BadRequest(f'Некоректна публічна IP: {x}')
+            raise BadRequest(tr(f'Invalid public IP: {x}', f'Некоректна публічна IP: {x}'))
     cfg['public_ips'] = pubs
     old = exporters_cfg().get(ip, {})
     for k in ('if_names', 'if_addrs'):
@@ -538,33 +547,33 @@ def post_device_interfaces(body, user):
     try:
         ip = str(ipaddress.ip_address(str(body.get('ip', '')).strip()))
     except ValueError:
-        raise BadRequest('Некоректна IP-адреса пристрою')
+        raise BadRequest(tr('Invalid device IP address', 'Некоректна IP-адреса пристрою'))
     items = body.get('interfaces')
     if not isinstance(items, list) or len(items) > 1024:
-        raise BadRequest('Очікується список інтерфейсів')
+        raise BadRequest(tr('A list of interfaces is expected', 'Очікується список інтерфейсів'))
     names, addrs, wan, local = {}, {}, [], None
     for it in items:
         try:
             idx = int(it.get('index'))
         except (TypeError, ValueError, AttributeError):
-            raise BadRequest('Індекс інтерфейсу має бути числом')
+            raise BadRequest(tr('The interface index must be a number', 'Індекс інтерфейсу має бути числом'))
         if not 0 <= idx < 2**32:
-            raise BadRequest('Індекс інтерфейсу поза межами')
+            raise BadRequest(tr('Interface index out of range', 'Індекс інтерфейсу поза межами'))
         name = str(it.get('name') or '').strip()
         if len(name) > 32 or any(ord(ch_) < 32 for ch_ in name):
-            raise BadRequest(f'Назва інтерфейсу {idx}: до 32 символів, без керівних символів')
+            raise BadRequest(tr(f'Interface {idx} name: up to 32 characters, no control characters', f'Назва інтерфейсу {idx}: до 32 символів, без керівних символів'))
         if name:
             names[str(idx)] = name
         raw = it.get('addrs') or []
         if isinstance(raw, str):
             raw = raw.replace(',', ' ').split()
         if not isinstance(raw, list) or len(raw) > 8:
-            raise BadRequest(f'Інтерфейс {idx}: до 8 адрес')
+            raise BadRequest(tr(f'Interface {idx}: up to 8 addresses', f'Інтерфейс {idx}: до 8 адрес'))
         try:
             # 'a.b.c.d/nn' keeps its prefix (interface address with mask), a bare address stays bare
             ok = [str(ipaddress.ip_interface(a) if '/' in a else ipaddress.ip_address(a)) for a in (str(x).strip() for x in raw) if a]
         except ValueError as e:
-            raise BadRequest(f'Інтерфейс {idx}: некоректна адреса ({e})')
+            raise BadRequest(tr(f'Interface {idx}: invalid address ({e})', f'Інтерфейс {idx}: некоректна адреса ({e})'))
         if ok:
             addrs[str(idx)] = ok
         role = it.get('role', 'lan')
@@ -572,10 +581,10 @@ def post_device_interfaces(body, user):
             wan.append(idx)
         elif role == 'local':
             if local is not None:
-                raise BadRequest('Роль «сам пристрій» може мати лише один інтерфейс')
+                raise BadRequest(tr('Only one interface can have the role «the device itself»', 'Роль «сам пристрій» може мати лише один інтерфейс'))
             local = idx
         elif role != 'lan':
-            raise BadRequest('Роль: lan, wan або local')
+            raise BadRequest(tr('Role: lan, wan or local', 'Роль: lan, wan або local'))
     merged = exporters_cfg().get(ip, {})
     entry = load_ui_exporter(ip)
     entry.update({'if_names': names, 'if_addrs': addrs, 'wan_ifs': sorted(set(wan)), 'local_if': local})
@@ -588,7 +597,7 @@ def post_device_interfaces(body, user):
 def post_device_delete(body, user):
     ip = str(body.get('ip', ''))
     if ip not in exporters_cfg():
-        raise BadRequest('Пристрій не налаштований')
+        raise BadRequest(tr('The device is not configured', 'Пристрій не налаштований'))
     save_ui_exporter(ip, None)
     NAMES.reload()
     return {'ok': True}
@@ -612,14 +621,23 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def token(self):
+    def cookie(self, name):
         c = SimpleCookie()
         try:
             c.load(self.headers.get('Cookie', ''))
         except Exception:
             return None
-        m = c.get(COOKIE)
+        m = c.get(name)
         return m.value if m else None
+
+    def token(self):
+        return self.cookie(COOKIE)
+
+    def parse_request(self):
+        ok = super().parse_request()
+        if ok:
+            set_lang(self.cookie('ft_lang'))      # errors and events in the language of the UI
+        return ok
 
     def client_ip(self):
         ip = self.client_address[0]
@@ -657,7 +675,7 @@ class H(BaseHTTPRequestHandler):
                 return self.json(200, AUTH.public(user))
             if u.path in ADMIN_GET:
                 if AUTH.users[user]['role'] != 'admin':
-                    return self.json(403, {'error': 'Потрібні права адміністратора'})
+                    return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
                 return self.json(200, {'users': AUTH.list_users()})
         fn = ROUTES.get(u.path)
         if fn:
@@ -721,16 +739,16 @@ class H(BaseHTTPRequestHandler):
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
             if AUTH.users[user]['role'] != 'admin':
-                return self.json(403, {'error': 'Потрібні права адміністратора'})
+                return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
             res = admin_routes[u.path]()
             return self.json(200, res if isinstance(res, dict) else {'ok': True})
         except AuthError as e:
-            return self.json(429 if 'спроб' in str(e) else 400, {'error': str(e)})
+            return self.json(e.status, {'error': str(e)})
         except BadRequest as e:
             return self.json(400, {'error': str(e)})
         except OSError as e:
             print(f'[flowtrack-api] POST {u.path}: {e}', flush=True)
-            return self.json(500, {'error': 'не вдалося зберегти'})
+            return self.json(500, {'error': tr('could not save', 'не вдалося зберегти')})
 
 
 _HOST_RE = re.compile(r'^[A-Za-z0-9.\-]+$|^\[[0-9A-Fa-f:.]+\]$')
@@ -829,7 +847,7 @@ if __name__ == '__main__':
         sys.exit(1)
     WEB_LISTEN = describe_listeners(LISTENERS)
     servers = [Server(sock, H, ctx) for sock, _ in LISTENERS]
-    where = '; '.join((x['iface'] or 'all interfaces') + (f" ({', '.join(x['addrs'])})" if x['addrs'] else '') for x in WEB_LISTEN)
+    where = '; '.join(listen_label(x) for x in WEB_LISTEN)
     print(f'[flowtrack-api] serving {"https" if ctx else "http"} on TCP {PORT}: {where}'
           f'{" (plain HTTP redirects to HTTPS)" if ctx else ""}', flush=True)
     def watch_addresses(start=listen_signature(BIND)):

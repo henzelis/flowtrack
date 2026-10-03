@@ -26,7 +26,7 @@ from netflow.v9 import V9OptionsTemplateRecord, V9TemplateField, V9TemplateNotRe
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (STATE_DIR, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, exporters_mtime,  # noqa: E402
-                    ipstr, is_private, listen_signature, load_exporters, open_listeners, service_name)
+                    ipstr, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -664,8 +664,7 @@ class Receiver:
             self.start_worker(i)
         self.pending, self.npending = [[] for _ in range(self.n)], 0
         listen = describe_listeners(self.listeners)
-        where = '; '.join((f"{x['iface']} " if x['iface'] else 'all interfaces ') + (f"({', '.join(x['addrs'])})" if x['addrs'] else '(IPv4 + IPv6)')
-                          for x in listen)
+        where = '; '.join(listen_label(x) for x in listen)
         log(f'listening on UDP {PORT}: {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
             f'forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
         write_state({'port': PORT, 'bind': BIND, 'listen': listen, 'workers': self.n, 'started': int(time.time())})

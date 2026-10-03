@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -78,6 +79,20 @@ def load_json(name, default):
             return json.load(f)
     except FileNotFoundError:
         return default
+
+
+# ---------------------------------------------------------------- language
+# Texts shown to people come in English and Ukrainian: tr('English', 'Українська'). The web server sets the
+# language per request from the ft_lang cookie; everything else (logs, stored data) is English.
+_lang = threading.local()
+
+
+def set_lang(lang):
+    _lang.value = 'uk' if lang == 'uk' else 'en'
+
+
+def tr(en, uk):
+    return uk if getattr(_lang, 'value', 'en') == 'uk' else en
 
 
 # ---------------------------------------------------------------- listening sockets
@@ -178,12 +193,20 @@ def listen_signature(spec):
         return None
 
 
+def listen_label(item):
+    """'ens19 (203.0.113.5)', '203.0.113.5' or 'all interfaces' for one describe_listeners() entry."""
+    if item['iface']:
+        return item['iface'] + (f" ({', '.join(item['addrs'])})" if item['addrs'] else '')
+    return ', '.join(item['addrs']) or 'all interfaces (IPv4 + IPv6)'
+
+
 def describe_listeners(listeners):
     """[{'iface': 'ens19' | None, 'addrs': [...]}] for the UI: where clients can send to (loopback left out)."""
     out = []
+    only_loopback = all(s.getsockname()[0] in LOOPBACK for s, _ in listeners)
     for s, dev in listeners:
         host = s.getsockname()[0]
-        if host in LOOPBACK:
+        if host in LOOPBACK and not only_loopback:
             continue
         addrs = [] if host in ('::', '0.0.0.0') else [host]
         prev = next((x for x in out if x['iface'] == dev), None) if dev else None
@@ -358,7 +381,7 @@ def classify_l7(proto, port):
         return hit
     name = PROTO_NAMES.get(proto, f'IP/{proto}')
     if proto in (6, 17) and port:
-        return (f'{name}/{port}' if port < 1024 else f'{name} інше'), None
+        return (f'{name}/{port}' if port < 1024 else f'{name} other'), None
     return name, None
 
 
@@ -369,4 +392,4 @@ def service_name(port_service, asn, as_org, ext_ip):
         return ASN_SERVICES[asn]
     if as_org:
         return clean_org(as_org)
-    return 'Локальна мережа' if is_private(ext_ip) else 'Невідомо'
+    return 'Local network' if is_private(ext_ip) else 'Unknown'
