@@ -98,3 +98,7 @@ TTL ts + INTERVAL 90 DAY;
 -- columns added after the first release (no-ops on new databases)
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
+-- where the exporter observed the packet: 0 ingress, 1 egress, 255 not reported
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS obs UInt8 DEFAULT 255;
+-- egress copies dropped because the same traffic was already reported on ingress
+ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_dropped UInt64 DEFAULT 0;

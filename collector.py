@@ -152,6 +152,7 @@ class Exporter:
         self.ip = ip
         self.configure(cfg)
         self.templates = {'netflow': {}, 'ipfix': {}}
+        self.ingress_ifs = set()     # interfaces this exporter reports ingress-observed records for
         self.reset()
 
     def configure(self, cfg):
@@ -169,7 +170,7 @@ class Exporter:
         return r if r and r > 1 else self.cfg_sampling
 
     def reset(self):
-        self.records = self.no_template = self.decode_errors = 0
+        self.records = self.no_template = self.decode_errors = self.dup_dropped = 0
         self.max_sampling = 1
 
 
@@ -343,6 +344,18 @@ class Collector:
         dport = gi(rec, 'L4_DST_PORT', 'DST_PORT', 'destinationTransportPort')
         in_if = gi(rec, 'INPUT_SNMP', 'INPUT', 'ingressInterface')
         out_if = gi(rec, 'OUTPUT_SNMP', 'OUTPUT', 'egressInterface')
+        # Exporters that monitor both directions on several interfaces see a routed packet twice: on the
+        # way in (ingress of in_if) and on the way out (egress of out_if). With the direction field
+        # (NetFlow v9 DIRECTION / IPFIX flowDirection: 0 ingress, 1 egress) the egress copy is dropped
+        # whenever in_if already reports ingress; egress records stay the only copy on interfaces that
+        # are monitored on egress only.
+        fdir = g(rec, 'DIRECTION', 'flowDirection')
+        obs = fdir if fdir in (0, 1) else 255
+        if obs == 0:
+            e.ingress_ifs.add(in_if)
+        elif obs == 1 and in_if in e.ingress_ifs:
+            e.dup_dropped += 1
+            return
 
         # inside / outside endpoint and direction
         if e.wan and out_if in e.wan and in_if not in e.wan:
@@ -382,7 +395,7 @@ class Collector:
             'nat_ip': nat_ip, 'nat_port': nat_port, 'bytes': nbytes, 'packets': npkts, 'sampling': rate,
             'l7': l7, 'service': service_name(port_service, asn, as_org, ei[0]),
             'country': country, 'city': city, 'lat': lat, 'lon': lon, 'asn': asn, 'as_org': as_org,
-            'app_tag': app_tag if app_tag < 2**64 else 0,
+            'app_tag': app_tag if app_tag < 2**64 else 0, 'obs': obs,
         })
         e.records += 1
 
@@ -447,8 +460,8 @@ class Collector:
         """Per-exporter decoding counters since the last call, plus this worker's output state."""
         exp = {}
         for e in self.exporters.values():
-            if e.records or e.no_template or e.decode_errors:
-                exp[e.ip] = {'records': e.records, 'no_template': e.no_template, 'decode_errors': e.decode_errors,
+            if e.records or e.no_template or e.decode_errors or e.dup_dropped:
+                exp[e.ip] = {'records': e.records, 'no_template': e.no_template, 'decode_errors': e.decode_errors, 'dup_dropped': e.dup_dropped,
                              'templates': len(e.templates['netflow']) + len(e.templates['ipfix']),
                              'sampling': max(e.max_sampling, e.opt_sampling or 1, e.cfg_sampling)}
                 e.reset()
@@ -591,9 +604,9 @@ class Receiver:
             self.worker_state[n] = st['buffered']
             self.col_acc['dropped_rows'] += st['dropped_rows']
             for ip, x in st['exp'].items():
-                a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0,
+                a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0, 'dup_dropped': 0,
                                                  'decode_errors': 0, 'templates': 0, 'sampling': 1})
-                for k in ('records', 'no_template', 'decode_errors'):
+                for k in ('records', 'no_template', 'decode_errors', 'dup_dropped'):
                     a[k] += x[k]
                 a['templates'] = max(a['templates'], x['templates'])
                 a['sampling'] = max(a['sampling'], x['sampling'])
@@ -611,7 +624,7 @@ class Receiver:
 
     def write_stats(self):
         for ip, x in self.acct.take().items():
-            a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0,
+            a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0, 'dup_dropped': 0,
                                              'decode_errors': 0, 'templates': 0, 'sampling': 1})
             a['packets'] += x['packets']
             a['lost'] += x['lost']

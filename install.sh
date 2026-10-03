@@ -622,23 +622,40 @@ config system interface
     edit "wan1"
         set netflow-sampler both
     next
+    edit "internal"
+        set netflow-sampler both
+    next
 end${N}
 CFG
     ;;
     Cisco) cat <<CFG
-${D}flow exporter FLOWTRACK
+${D}flow record FT-REC
+ match ipv4 source address
+ match ipv4 destination address
+ match ipv4 protocol
+ match transport source-port
+ match transport destination-port
+ match interface input
+ match flow direction
+ collect interface output
+ collect counter bytes long
+ collect counter packets long
+ collect timestamp sys-uptime first
+ collect timestamp sys-uptime last
+flow exporter FLOWTRACK
  destination $CIP
  transport udp $NF_PORT
  template data timeout 60
 flow monitor FT-MON
  exporter FLOWTRACK
- record netflow ipv4 original-input
+ record FT-REC
+ cache timeout active 60
 interface GigabitEthernet0/0/0
  ip flow monitor FT-MON input
  ip flow monitor FT-MON output${N}
 CFG
     ;;
-    MikroTik) say "${D}/ip traffic-flow set enabled=yes interfaces=ether1 active-flow-timeout=1m"; say "/ip traffic-flow target add dst-address=$CIP port=$NF_PORT version=ipfix${N}" ;;
+    MikroTik) say "${D}/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m"; say "/ip traffic-flow target add dst-address=$CIP port=$NF_PORT version=ipfix${N}" ;;
     *) say "  ${D}$(t 'The web interface shows snippets for each vendor: Devices → Connect device.' 'Готові налаштування для кожного виробника — у вебінтерфейсі: Пристрої → Підключити пристрій.')${N}" ;;
   esac
   say ""

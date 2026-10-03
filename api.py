@@ -395,6 +395,7 @@ def api_devices(q):
     exp = exporters_cfg()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
             sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, max(sampling) AS sampling_n,
+            sum(dup_dropped) AS dup_dropped,
             toUnixTimestamp(max(ts)) AS last, dateDiff('second', min(ts), max(ts)) + 60 AS span
         FROM exporter_stats WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')
     # every interface seen in 24 h. ext = bytes for which the far end on this interface is a public address:
@@ -426,11 +427,15 @@ def api_devices(q):
     seen_addrs = {}
     for h in hints:
         seen_addrs.setdefault(h['exporter'], {}).setdefault(int(h['i']), []).append(h['a'])
+    # records reported twice although the exporter sends no direction field (both directions monitored on
+    # several interfaces): identical flow, interfaces, start time and size
+    dups = {r['exporter']: r for r in ch("""SELECT exporter, count() AS n, uniqExact(cityHash64(int_ip, ext_ip, int_port, ext_port, proto, in_if, out_if, ts_start, bytes)) AS u,
+            countIf(obs != 255) AS with_dir FROM flows WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')}
     out = []
     seen = {s['exporter'] for s in stats}
     for ip in exp:
         if ip not in seen:
-            stats.append({'exporter': ip, 'version': 0, 'packets': 0, 'records': 0, 'lost': 0, 'no_template': 0, 'errors': 0, 'templates': 0, 'last': 0, 'span': 60, 'sampling_n': 0})
+            stats.append({'exporter': ip, 'version': 0, 'packets': 0, 'records': 0, 'lost': 0, 'no_template': 0, 'errors': 0, 'templates': 0, 'last': 0, 'span': 60, 'sampling_n': 0, 'dup_dropped': 0})
     for s in stats:
         c = exp.get(s['exporter'], {})
         names = c.get('if_names', {})
@@ -440,6 +445,9 @@ def api_devices(q):
                     'rps': round(recs / span, 1), 'packets': int(s['packets']), 'records': recs, 'lost': int(s['lost']),
                     'loss_pct': round(100 * int(s['lost']) / max(1, int(s['packets']) + int(s['lost'])), 2), 'no_template': int(s['no_template']),
                     'errors': int(s['errors']), 'templates': int(s['templates']), 'last': int(s['last']),
+                    'dup_dropped': int(s.get('dup_dropped') or 0),
+                    'dup_pct': round(100 * (int(dups[s['exporter']]['n']) - int(dups[s['exporter']]['u'])) / max(1, int(dups[s['exporter']]['n'])), 2) if s['exporter'] in dups else 0,
+                    'direction_field': bool(s['exporter'] in dups and int(dups[s['exporter']]['with_dir'])),
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},

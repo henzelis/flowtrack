@@ -180,6 +180,14 @@ the device itself originates; coordinates place the site on the map.
 
 ## Exporter configuration
 
+**Which interfaces.** Enable export on every interface whose traffic you want to see: the WAN for
+internet traffic, internal interfaces (LAN, VLANs, VPN tunnels) for traffic between your own networks.
+Monitoring both directions (ingress and egress) is fine: when a flow is reported on the way in and again
+on the way out, FlowTrack keeps one copy if the record carries the direction field (NetFlow v9
+`DIRECTION` / IPFIX `flowDirection`), and the Devices page warns when an exporter sends copies that
+cannot be told apart. The *Internet / Internal / All* selector in the top bar switches between internet
+traffic and traffic between inside addresses.
+
 **FortiGate (FortiOS 7.x)** — NetFlow v9, full rate:
 
 ```
@@ -197,23 +205,46 @@ config system interface
     edit "wan"
         set netflow-sampler both
     next
+    edit "internal"
+        set netflow-sampler both
+    next
 end
 ```
 
-`active-flow-timeout` defaults to 30 minutes; at 60 s long sessions show up in near real time. The WAN
-interface index is shown by `show system interface wan | grep snmp-index`.
+`active-flow-timeout` defaults to 30 minutes; at 60 s long sessions show up in near real time. Interface
+indexes: `show system interface <name> | grep snmp-index`. FortiOS exports per session, so a session that
+crosses two sampled interfaces is still reported once. Wi-Fi SSID (VAP) interfaces cannot be sampled:
+traffic between two SSIDs is not visible; traffic between an SSID and a sampled interface is.
+FortiOS starts exporting sessions created after the sampler was enabled.
 
-**Cisco IOS-XE**
+**Cisco IOS-XE** (Flexible NetFlow) — a record with `flow direction`, so egress copies can be removed:
 
 ```
+flow record FT-REC
+ match ipv4 source address
+ match ipv4 destination address
+ match ipv4 protocol
+ match transport source-port
+ match transport destination-port
+ match interface input
+ match flow direction
+ collect interface output
+ collect counter bytes long
+ collect counter packets long
+ collect timestamp sys-uptime first
+ collect timestamp sys-uptime last
 flow exporter FLOWTRACK
  destination <COLLECTOR_IP>
  transport udp 2055
  template data timeout 60
 flow monitor FT-MON
  exporter FLOWTRACK
- record netflow ipv4 original-input
+ record FT-REC
+ cache timeout active 60
 interface GigabitEthernet0/0/0
+ ip flow monitor FT-MON input
+ ip flow monitor FT-MON output
+interface GigabitEthernet0/0/1
  ip flow monitor FT-MON input
  ip flow monitor FT-MON output
 ```
@@ -221,7 +252,7 @@ interface GigabitEthernet0/0/0
 **MikroTik RouterOS 7**
 
 ```
-/ip traffic-flow set enabled=yes interfaces=ether1 active-flow-timeout=1m
+/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m
 /ip traffic-flow target add dst-address=<COLLECTOR_IP> port=2055 version=ipfix
 ```
 
