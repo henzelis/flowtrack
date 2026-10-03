@@ -548,10 +548,11 @@ function vFlows(){
     return `<div class="donut-wrap"><div class="chart donut" id="cProto"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(dv(r.k))}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`; });
   section('recBox', async () => { const t = await api('flows', {limit:60}); window.__recs = t.rows; return recTable(t.rows); });
 }
-// ===================== device map: hosts -> ports on the device contour -> paths inside -> ports -> hosts =====================
-// Inside interfaces sit on the left edge of the box, WAN interfaces on the right edge, the device itself is the
-// core in the middle. LAN -> internet crosses the box, LAN <-> LAN turns round in an arc and leaves on the left,
-// traffic for the device itself ends in the core. Widths ∝ √volume (or linear), colours as on the Flows page.
+// ===================== device map: hosts -> ports (dots on the device contour) -> lines inside -> ports -> hosts =====================
+// Inside interfaces are dots on the left edge of the box, WAN interfaces dots on the right edge, the device
+// itself is the core. Inside the box every path is a line whose width follows its volume: LAN -> internet
+// crosses the box, LAN <-> LAN turns round in an arc and goes back to the left edge, traffic for the device
+// itself ends in the core. Hosts sit outside the box, joined to the dot of their interface.
 function createDevMap(host, opts){
   host.innerHTML = '<canvas></canvas><div class="rtip" hidden></div>';
   const cv = host.querySelector('canvas'), tip = host.querySelector('.rtip'), ctx = cv.getContext('2d');
@@ -566,160 +567,12 @@ function createDevMap(host, opts){
   const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
   load(); if (opts.refreshMs) every(opts.refreshMs, load);
   const rr = (x, y, w, h, r) => { const p = new Path2D(); p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r); p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath(); return p; };
-  // a ribbon between two vertical segments: (xa, ya..ya+t) -> (xb, yb..yb+t), bending through control x's
-  const ribbon = (xa, ya, xb, yb, t, cxa, cxb, tb = t) => { const p = new Path2D(); p.moveTo(xa, ya); p.bezierCurveTo(cxa, ya, cxb, yb, xb, yb); p.lineTo(xb, yb + tb); p.bezierCurveTo(cxb, yb + tb, cxa, ya + t, xa, ya + t); p.closePath(); return p; };
-  function draw(){
-    if (!W || !H) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
-    if (!data) return;
-    const v = x => state.scale === 'lin' ? x : Math.sqrt(x);
-    const paths = data.paths.filter(p => p.v > 0);
-    if (!paths.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No traffic through this device for the selected filters', 'Немає трафіку через цей пристрій для вибраних фільтрів'), W / 2, H / 2); return; }
-    // ports and their totals
-    const tot = new Map(); paths.forEach(p => { tot.set(p.in_if, (tot.get(p.in_if) || 0) + p.v); tot.set(p.out_if, (tot.get(p.out_if) || 0) + p.v); });
-    const sideOf = i => { const r = roleOf(i); return r === 'wan' ? 'R' : r === 'local' ? 'C' : 'L'; };
-    const ports = {L:[], R:[]}; [...tot.keys()].sort((a, b) => tot.get(b) - tot.get(a)).forEach(i => { const s = sideOf(i); if (s !== 'C') ports[s].push(i); });
-    const cardW = Math.min(196, Math.max(124, W * .15)), gap = Math.max(46, W * .07);
-    const bx0 = cardW + gap, bx1 = W - cardW - gap, by0 = 34, by1 = H - 8, bw = bx1 - bx0, bh = by1 - by0;
-    // box
-    ctx.fillStyle = 'rgba(30,60,140,.16)'; ctx.fill(rr(bx0, by0, bw, bh, 22)); ctx.strokeStyle = 'rgba(110,160,255,.38)'; ctx.lineWidth = 1.3; ctx.stroke(rr(bx0, by0, bw, bh, 22));
-    ctx.font = '700 14px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(dev.name + (dev.model ? '  ·  ' + dev.model : ''), (bx0 + bx1) / 2, by0 - 16);
-    // port slots: height ∝ scaled volume, at least 30 px, spread over the edge
-    const slot = side => { const list = ports[side], inner = bh - 40, sc = list.map(i => v(tot.get(i))), sum = sc.reduce((a, b) => a + b, 0) || 1;
-      const gapP = 12, avail = inner - gapP * Math.max(0, list.length - 1); let y = by0 + 20;
-      return list.map((i, k) => { const h = Math.max(30, avail * sc[k] / sum); const o = {i, y, h}; y += h + gapP; return o; }); };
-    const slots = {L:slot('L'), R:slot('R')}, slotOf = new Map([...slots.L, ...slots.R].map(o => [o.i, o]));
-    // cards per port first: the width scale must fit both sides of every port
-    const cardsFor = side => {
-      const list = side === 'L' ? data.inside : data.outside, out = [];
-      for (const o of slots[side]) {
-        const own = list.filter(h => h.iface === o.i).sort((x, y) => y.v - x.v);
-        const shown = own.slice(0, side === 'L' ? 4 : 6), rest = Math.max(0, tot.get(o.i) - shown.reduce((x, h) => x + h.v, 0));
-        shown.forEach(h => out.push({side, port:o.i, h, v:h.v}));
-        if (rest > tot.get(o.i) * .03 && own.length > shown.length) out.push({side, port:o.i, other:true, v:rest});
-      }
-      return out;
-    };
-    const cardsBy = {L:cardsFor('L'), R:cardsFor('R')};
-    const innerSum = new Map(), outerSum = new Map();
-    paths.forEach(p => { for (const i of [p.in_if, p.out_if]) innerSum.set(i, (innerSum.get(i) || 0) + v(p.v)); });
-    [...cardsBy.L, ...cardsBy.R].forEach(c => outerSum.set(c.port, (outerSum.get(c.port) || 0) + v(c.v)));
-    let k = Infinity; for (const o of [...slots.L, ...slots.R]) k = Math.min(k, o.h * .78 / Math.max(1e-9, innerSum.get(o.i) || 0, outerSum.get(o.i) || 0));
-    const wid = x => Math.max(1.2, v(x) * k);
-    const core = {x:(bx0 + bx1) / 2, y:by1 - Math.min(70, bh * .16), r:22};
-    // ---- paths inside the box
-    const offIn = new Map();   // running offset on the inner side of each port
-    const at = (i, t) => { const o = slotOf.get(i), cur = offIn.get(i) ?? (o.y + o.h / 2 - (o.ownIn || 0) / 2); offIn.set(i, cur + t); return cur; };
-    paths.forEach(p => { for (const i of [p.in_if, p.out_if]) { const o = slotOf.get(i); if (o) o.ownIn = (o.ownIn || 0) + wid(p.v); } });
-    const order = [...paths].sort((a, b) => (slotOf.get(a.in_if)?.y ?? 0) - (slotOf.get(b.in_if)?.y ?? 0) || (slotOf.get(a.out_if)?.y ?? 0) - (slotOf.get(b.out_if)?.y ?? 0));
-    for (const p of order) {
-      const t = wid(p.v), si = sideOf(p.in_if), so = sideOf(p.out_if);
-      const col = si === 'L' && so === 'R' ? C.up : si === 'R' && so === 'L' ? C.down : si === so ? C.int : '#6E7FA6';
-      let path;
-      const xIn = si === 'L' ? bx0 + 7 : bx1 - 7, xOut = so === 'L' ? bx0 + 7 : bx1 - 7;
-      if (si === 'C' || so === 'C') {            // to / from the device itself: into the core
-        const port = si === 'C' ? p.out_if : p.in_if, ps = sideOf(port), x = ps === 'L' ? bx0 + 7 : bx1 - 7, y = at(port, t);
-        path = ribbon(x, y, core.x + (ps === 'L' ? -core.r : core.r), core.y - t / 2, t, (x + core.x) / 2, (x + core.x) / 2);
-      } else if (si === so) {                   // turns round inside the box and leaves on the same side
-        const ya = at(p.in_if, t), yb = at(p.out_if, t), depth = Math.min(bw * .42, 40 + Math.abs(yb - ya) * .55), dirx = si === 'L' ? 1 : -1;
-        path = ribbon(xIn, ya, xOut, yb, t, xIn + dirx * depth, xOut + dirx * depth);
-      } else {
-        const ya = at(p.in_if, t), yb = at(p.out_if, t);
-        path = ribbon(xIn, ya, xOut, yb, t, (xIn + xOut) / 2, (xIn + xOut) / 2);
-      }
-      const lit = !hover || hover.kind !== 'path' || (hover.in_if === p.in_if && hover.out_if === p.out_if);
-      ctx.fillStyle = hexA(col, lit ? .46 : .1); ctx.fill(path); ctx.strokeStyle = hexA(col, lit ? .75 : .15); ctx.lineWidth = .8; ctx.stroke(path);
-      shapes.push({kind:'path', path, in_if:p.in_if, out_if:p.out_if, tip:`<b>${esc(nameOf(p.in_if))} → ${esc(nameOf(p.out_if))}</b><br>${fmtV(p.v)} · ${T('hosts', 'хостів')}: ${p.hosts}`});
-    }
-    // core
-    if (paths.some(p => sideOf(p.in_if) === 'C' || sideOf(p.out_if) === 'C')) {
-      const cp = new Path2D(); cp.arc(core.x, core.y, core.r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(14,26,58,.95)'; ctx.fill(cp); ctx.strokeStyle = hexA('#6E7FA6', .9); ctx.lineWidth = 1.4; ctx.stroke(cp);
-      ctx.font = '600 11px Manrope, sans-serif'; ctx.fillStyle = C.ink2; ctx.fillText(T('device itself', 'сам пристрій'), core.x, core.y + core.r + 12);
-      const li = paths.find(p => sideOf(p.in_if) === 'C' || sideOf(p.out_if) === 'C'), idx = sideOf(li.in_if) === 'C' ? li.in_if : li.out_if;
-      shapes.push({kind:'port', path:cp, i:idx, tip:`<b>${T('The device itself', 'Сам пристрій')}</b> (${idx})`});
-    }
-    // ---- hosts outside the box and their ribbons to the ports
-    for (const side of ['L', 'R']) {
-      const cards = cardsBy[side]; if (!cards.length) continue;
-      const n = cards.length, cg = 6, ch = Math.max(26, Math.min(46, (H - 20 - cg * (n - 1)) / n)), x = side === 'L' ? 0 : W - cardW;
-      const offOut = new Map(), ownOut = new Map();
-      cards.forEach(c => ownOut.set(c.port, (ownOut.get(c.port) || 0) + wid(c.v)));
-      let y = Math.max(4, (H - n * ch - (n - 1) * cg) / 2);
-      for (const c of cards) {
-        const o = slotOf.get(c.port), t = wid(c.v), py = offOut.get(c.port) ?? (o.y + o.h / 2 - ownOut.get(c.port) / 2); offOut.set(c.port, py + t);
-        // the ribbon is as wide as its share of the port on the port side, at most the card's height on the card side
-        const tc = Math.min(t, ch - 12), cx0 = side === 'L' ? x + cardW : x, px = side === 'L' ? bx0 - 7 : bx1 + 7, cy = y + ch / 2 - tc / 2;
-        const col = c.other ? C.other : side === 'L' ? C.int : C.ext;
-        const path = ribbon(cx0, cy, px, py, tc, (cx0 + px) / 2, (cx0 + px) / 2, t);
-        const key = side + '|' + c.port + '|' + (c.other ? '*' : c.h.host);
-        const lit = !hover || (hover.kind === 'host' && hover.key === key) || (hover.kind === 'port' && hover.i === c.port) || (hover.kind === 'path' && (hover.in_if === c.port || hover.out_if === c.port));
-        ctx.fillStyle = hexA(col, lit ? .42 : .12); ctx.fill(path);
-        const box = rr(x + .5, y + .5, cardW - 1, ch - 1, 10);
-        ctx.fillStyle = 'rgba(14,26,58,.82)'; ctx.fill(box); ctx.strokeStyle = hover && hover.key === key ? hexA(col, .9) : 'rgba(110,160,255,.28)'; ctx.lineWidth = 1; ctx.stroke(box);
-        ctx.fillStyle = col; ctx.fill(rr(x + 6, y + 6, 4, ch - 12, 2));
-        const l1 = c.other ? T('Others', 'Інші') : side === 'L' ? (c.h.name || c.h.host) : c.h.host;
-        const l2 = c.other ? fmtV(c.v) : `${fmtV(c.v)} · ${side === 'L' ? (c.h.name ? c.h.host : nameOf(c.port)) : [dv(c.h.service), c.h.city || ccName(c.h.country)].filter(Boolean).join(' · ')}`;
-        const clip = (str, font, max) => { ctx.font = font; if (ctx.measureText(str).width <= max) return str; while (str.length > 2 && ctx.measureText(str + '…').width > max) str = str.slice(0, -1); return str + '…'; };
-        ctx.textAlign = 'left'; ctx.fillStyle = C.ink;
-        if (ch >= 36) { ctx.fillText(clip(l1, '600 12px "JetBrains Mono", monospace', cardW - 26), x + 16, y + ch / 2 - 7); ctx.fillStyle = C.ink2; ctx.fillText(clip(l2, '500 11px Manrope, sans-serif', cardW - 26), x + 16, y + ch / 2 + 9); }
-        else ctx.fillText(clip(l1, '600 11.5px "JetBrains Mono", monospace', cardW - 26), x + 16, y + ch / 2);
-        if (!c.other) shapes.push({kind:'host', path:box, key, side, ip:c.h.host, tip:`<b>${esc(l1)}</b><br>${esc(c.h.host)} · ${esc(nameOf(c.port))}<br>↑ ${fmtV(c.h.up)} · ↓ ${fmtV(c.h.dn)}`});
-        y += ch + cg;
-      }
-    }
-    // ports on the contour (drawn last, above the ribbons)
-    for (const side of ['L', 'R']) for (const o of slots[side]) {
-      const x = side === 'L' ? bx0 - 7 : bx1 - 7, role = roleOf(o.i), col = role === 'wan' ? C.up : '#2F7BFF';
-      const pp = rr(x, o.y, 14, o.h, 4); ctx.fillStyle = hexA(col, hover && hover.kind === 'port' && hover.i === o.i ? .95 : .75); ctx.fill(pp);
-      const l1 = nameOf(o.i), l2 = [addrOf(o.i), fmtV(tot.get(o.i))].filter(Boolean).join(' · ');
-      ctx.font = '700 12.5px "JetBrains Mono", monospace'; const w1 = ctx.measureText(l1).width; ctx.font = '500 10.5px "JetBrains Mono", monospace'; const w2 = ctx.measureText(l2).width;
-      const lw = Math.max(w1, w2) + 16, lx = side === 'L' ? bx0 + 12 : bx1 - 12 - lw, ly = o.y + o.h / 2 - 19;
-      ctx.fillStyle = 'rgba(8,16,40,.86)'; ctx.fill(rr(lx, ly, lw, 38, 9)); ctx.strokeStyle = hexA(col, .55); ctx.lineWidth = 1; ctx.stroke(rr(lx, ly, lw, 38, 9));
-      ctx.textAlign = 'left'; ctx.font = '700 12.5px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink; ctx.fillText(l1, lx + 8, ly + 12);
-      ctx.font = '500 10.5px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink2; ctx.fillText(l2, lx + 8, ly + 27);
-      shapes.push({kind:'port', path:pp, i:o.i, tip:`<b>${esc(nameOf(o.i))}</b> (${o.i}) · ${role === 'wan' ? 'WAN' : 'LAN'}<br>${esc(addrOf(o.i))}<br>${fmtV(tot.get(o.i))}`});
-    }
-  }
-  // shapes are in CSS pixels and the context is scaled by dpr, so test device pixels
-  const pick = e => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    for (let i = shapes.length - 1; i >= 0; i--) if (ctx.isPointInPath(shapes[i].path, x * dpr, y * dpr)) return {s:shapes[i], x, y};
-    return null; };
-  const same = (a, b) => a === b || (a && b && a.kind === b.kind && a.key === b.key && a.i === b.i && a.in_if === b.in_if && a.out_if === b.out_if);
-  cv.addEventListener('mousemove', e => { const h = pick(e), n = h ? h.s : null;
-    if (!same(n, hover)) { hover = n; draw(); }
-    if (h) { tip.hidden = false; tip.innerHTML = h.s.tip; tip.style.left = Math.min(W - 230, h.x + 14) + 'px'; tip.style.top = (h.y + 14) + 'px'; cv.style.cursor = 'pointer'; } else { tip.hidden = true; cv.style.cursor = ''; } });
-  cv.addEventListener('mouseleave', () => { hover = null; tip.hidden = true; draw(); });
-  cv.addEventListener('click', e => { const h = pick(e); if (h && opts.onPick) opts.onPick(h.s); });
-}
-// ===================== device ring (LiveNX-style): the device is a circle, its interfaces sit on the rim =====================
-// Inside interfaces take the left half of the rim, WAN interfaces the right half; each owns an arc sized by
-// its volume. A path input -> output is a chord between the two arcs (through the middle: LAN -> internet
-// crosses the circle, LAN <-> LAN bends back inside the left half); traffic of the device itself goes to the
-// core. Badges on the rim show what enters and leaves each port; hosts sit outside next to their ports.
-function createDevRing(host, opts){
-  host.innerHTML = '<canvas></canvas><div class="rtip" hidden></div>';
-  const cv = host.querySelector('canvas'), tip = host.querySelector('.rtip'), ctx = cv.getContext('2d');
-  let W = 0, H = 0, dpr = 1, data = null, hover = null, shapes = [];
-  const {ifs, dev} = opts;
-  const roleOf = i => (ifs.get(i) || {}).role || (i === dev.config.local_if ? 'local' : 'lan');
-  const nameOf = i => { const x = ifs.get(i); return x ? (x.custom_name || x.name) : (i === 0 ? 'local' : `if ${i}`); };
-  const addrOf = i => { const x = ifs.get(i); return x ? ([...(x.addrs || []), ...(x.seen_addrs || [])][0] || '') : ''; };
-  const fmtV = v => state.metric === 'bytes' ? fmtB(v) : fmtN(v);
-  async function load(){ try { data = await opts.fetchData(); if (opts.onData) opts.onData(data); draw(); } catch (e) { host.innerHTML = errBox(e); } }
-  function size(){ const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; draw(); }
-  const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
-  load(); if (opts.refreshMs) every(opts.refreshMs, load);
-  const rr = (x, y, w, h, r) => { const p = new Path2D(); p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r); p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath(); return p; };
-  const pt = (cx, cy, r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
   const clip = (str, font, max) => { ctx.font = font; if (ctx.measureText(str).width <= max) return str; while (str.length > 2 && ctx.measureText(str + '…').width > max) str = str.slice(0, -1); return str + '…'; };
   function draw(){
     if (!W || !H) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
     if (!data) return;
-    ctx.textBaseline = 'middle';
+    ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
     const v = x => state.scale === 'lin' ? x : Math.sqrt(x);
     const paths = data.paths.filter(p => p.v > 0);
     if (!paths.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No traffic through this device for the selected filters', 'Немає трафіку через цей пристрій для вибраних фільтрів'), W / 2, H / 2); return; }
@@ -727,67 +580,75 @@ function createDevRing(host, opts){
     const enter = new Map(), leave = new Map(), tot = new Map();
     paths.forEach(p => { enter.set(p.in_if, (enter.get(p.in_if) || 0) + p.v); leave.set(p.out_if, (leave.get(p.out_if) || 0) + p.v);
       for (const i of [p.in_if, p.out_if]) tot.set(i, (tot.get(i) || 0) + p.v); });
-    const ports = {L:[], R:[]}; [...tot.keys()].sort((a, b) => a - b).forEach(i => { const sd = sideOf(i); if (sd !== 'C') ports[sd].push(i); });
-    // geometry
-    const cardW = Math.min(190, Math.max(124, W * .14)), cx = W / 2, cy = H / 2 + 18;
-    const R = Math.max(120, Math.min(H / 2 - 74, (W - 2 * cardW) / 2 - 104)), Ri = R - 10, core = {r:24}, BR = R + 40;
-    // arcs: left half 100°..260°, right half -80°..80°; size ∝ scaled volume, padding between ports
-    const deg = d => d * Math.PI / 180, arcs = new Map();
-    const lay = (list, a0, a1) => { if (!list.length) return; const pad = deg(4), span = a1 - a0 - pad * list.length, sc = list.map(i => Math.max(v(tot.get(i)), 1e-9)), sum = sc.reduce((a, b) => a + b, 0);
-      let a = a0 + pad / 2; list.forEach((i, k) => { const w = Math.max(deg(5), span * sc[k] / sum); arcs.set(i, {a0:a, a1:a + w, mid:a + w / 2, side:sideOf(i)}); a += w + pad; }); };
-    lay(ports.L, deg(118), deg(242)); lay(ports.R, deg(-62), deg(62));
-    // ring
-    const ring = new Path2D(); ring.arc(cx, cy, R, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(30,60,140,.14)'; ctx.fill(ring); ctx.strokeStyle = 'rgba(110,160,255,.35)'; ctx.lineWidth = 1.2; ctx.stroke(ring);
-    // chords: each port's arc is shared by its paths in proportion to their volume
-    const used = new Map(), share = (i, val) => { const a = arcs.get(i); if (!a) return null; const span = (a.a1 - a.a0) * val / Math.max(1e-9, v(tot.get(i))), s0 = used.get(i) ?? a.a0; used.set(i, s0 + span); return [s0, s0 + span]; };
+    const ports = {L:[], R:[]}; [...tot.keys()].sort((a, b) => tot.get(b) - tot.get(a)).forEach(i => { const sd = sideOf(i); if (sd !== 'C') ports[sd].push(i); });
+    const cardW = Math.min(196, Math.max(124, W * .15)), gap = Math.max(56, W * .08);
+    const bx0 = cardW + gap, bx1 = W - cardW - gap, by0 = 44, by1 = H - 10, bw = bx1 - bx0, bh = by1 - by0;
+    // the box
+    ctx.fillStyle = 'rgba(30,60,140,.14)'; ctx.fill(rr(bx0, by0, bw, bh, 22)); ctx.strokeStyle = 'rgba(110,160,255,.4)'; ctx.lineWidth = 1.3; ctx.stroke(rr(bx0, by0, bw, bh, 22));
+    ctx.textAlign = 'center'; ctx.font = '700 14px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(dev.name, (bx0 + bx1) / 2, 14);
+    ctx.font = '500 11.5px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.fillText([dev.model, dev.ip].filter(Boolean).join(' · '), (bx0 + bx1) / 2, 31);
+    // dots: evenly spread along each edge
+    const dots = new Map();
+    for (const side of ['L', 'R']) { const list = ports[side], n = list.length, step = bh / (n + 1);
+      list.forEach((i, k) => dots.set(i, {i, side, x:side === 'L' ? bx0 : bx1, y:by0 + step * (k + 1)})); }
+    const core = {x:(bx0 + bx1) / 2, y:by1 - Math.min(70, bh * .14), r:20};     // low, away from the port labels
+    // line widths: 1.2 .. 10 px
+    const vmax = Math.max(...paths.map(p => v(p.v)));
+    const lw = x => 1.2 + 8.8 * v(x) / Math.max(1e-9, vmax);
     const colorOf = p => { if (state.ringColor === 'service') return keyColor((p.services || [])[0] || '?');
-      const si = sideOf(p.in_if), so = sideOf(p.out_if); return si === 'C' || so === 'C' ? '#6E7FA6' : si === 'L' && so === 'R' ? C.up : si === 'R' && so === 'L' ? C.down : si === 'L' ? C.int : C.ext; };
-    const order = [...paths].sort((a, b) => (arcs.get(a.in_if)?.mid ?? 0) - (arcs.get(b.in_if)?.mid ?? 0) || (arcs.get(a.out_if)?.mid ?? 0) - (arcs.get(b.out_if)?.mid ?? 0));
-    for (const p of order) {
-      const val = v(p.v), col = colorOf(p), path = new Path2D();
-      const sa = sideOf(p.in_if) === 'C' ? null : share(p.in_if, val), sb = sideOf(p.out_if) === 'C' ? null : share(p.out_if, val);
-      if (sa && sb) {          // chord between two arcs, bending through the middle
-        const [x0, y0] = pt(cx, cy, Ri, sa[0]); path.moveTo(x0, y0); path.arc(cx, cy, Ri, sa[0], sa[1]);
-        const [x1, y1] = pt(cx, cy, Ri, sb[0]); path.quadraticCurveTo(cx, cy, x1, y1); path.arc(cx, cy, Ri, sb[0], sb[1]);
-        path.quadraticCurveTo(cx, cy, x0, y0); path.closePath();
-      } else {                 // into / out of the core
-        const s = sa || sb; if (!s) continue; const [x0, y0] = pt(cx, cy, Ri, s[0]); path.moveTo(x0, y0); path.arc(cx, cy, Ri, s[0], s[1]);
-        const [ex, ey] = pt(cx, cy, core.r, (s[0] + s[1]) / 2 + Math.PI); path.quadraticCurveTo((cx + ex) / 2, (cy + ey) / 2, cx, cy); path.closePath();
+      const si = sideOf(p.in_if), so = sideOf(p.out_if); return si === 'C' || so === 'C' ? '#8A96B4' : si === 'L' && so === 'R' ? C.up : si === 'R' && so === 'L' ? C.down : si === 'L' ? C.int : C.ext; };
+    // lines fan out a little next to the dot so parallel paths stay apart
+    const fanIn = new Map(); paths.forEach(p => { for (const i of [p.in_if, p.out_if]) fanIn.set(i, (fanIn.get(i) || 0) + 1); });
+    const fanUsed = new Map(), fan = i => { const n = fanIn.get(i) || 1, k = fanUsed.get(i) || 0; fanUsed.set(i, k + 1); const spread = Math.min(26, 5 * (n - 1)); return n === 1 ? 0 : -spread / 2 + spread * k / (n - 1); };
+    const order = [...paths].sort((a, b) => b.v - a.v);
+    const lines = [];
+    for (const p of [...order].sort((a, b) => (dots.get(a.in_if)?.y ?? core.y) - (dots.get(b.in_if)?.y ?? core.y) || (dots.get(a.out_if)?.y ?? core.y) - (dots.get(b.out_if)?.y ?? core.y))) {
+      const A = dots.get(p.in_if), B = dots.get(p.out_if), w = lw(p.v), path = new Path2D();
+      if (A && B) {
+        const ya = A.y + fan(A.i), yb = B.y + fan(B.i), xa = A.x + (A.side === 'L' ? 9 : -9), xb = B.x + (B.side === 'L' ? 9 : -9);
+        path.moveTo(xa, ya);
+        if (A.side === B.side) { const dirx = A.side === 'L' ? 1 : -1, depth = Math.min(bw * .4, 50 + Math.abs(yb - ya) * .6); path.bezierCurveTo(xa + dirx * depth, ya, xb + dirx * depth, yb, xb, yb); }
+        else { const xm = (xa + xb) / 2; path.bezierCurveTo(xm, ya, xm, yb, xb, yb); }
+      } else {
+        const P = A || B; if (!P) continue; const yp = P.y + fan(P.i), xp = P.x + (P.side === 'L' ? 9 : -9);
+        path.moveTo(xp, yp); path.bezierCurveTo((xp + core.x) / 2, yp, (xp + core.x) / 2, core.y, core.x + (P.side === 'L' ? -core.r : core.r), core.y);
       }
-      const lit = !hover || (hover.kind === 'path' ? hover.in_if === p.in_if && hover.out_if === p.out_if : hover.kind === 'port' ? hover.i === p.in_if || hover.i === p.out_if : true);
-      ctx.fillStyle = hexA(col, lit ? (hover ? .62 : .34) : .06); ctx.fill(path); ctx.strokeStyle = hexA(col, lit ? .75 : .1); ctx.lineWidth = .7; ctx.stroke(path);
-      shapes.push({kind:'path', path, in_if:p.in_if, out_if:p.out_if,
-        tip:`<b>${esc(nameOf(p.in_if))} → ${esc(nameOf(p.out_if))}</b><br>${fmtV(p.v)} · ${T('hosts', 'хостів')}: ${p.hosts}${(p.services || []).length ? '<br>' + esc(p.services.map(dv).join(', ')) : ''}`});
+      lines.push({p, path, w, col:colorOf(p)});
     }
-    // core and the device name
-    const corePath = new Path2D(); corePath.arc(cx, cy, core.r, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(12,22,52,.96)'; ctx.fill(corePath); ctx.strokeStyle = hexA('#6E7FA6', .9); ctx.lineWidth = 1.4; ctx.stroke(corePath);
-    ctx.textAlign = 'center'; ctx.font = '700 14px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(dev.name, cx, 14);
-    ctx.font = '500 11.5px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.fillText([dev.model, dev.ip].filter(Boolean).join(' · '), cx, 31);
-    ctx.font = '600 10.5px Manrope, sans-serif'; ctx.fillStyle = C.ink2; ctx.fillText(T('device itself', 'сам пристрій'), cx, cy + core.r + 11);
-    const li = paths.find(p => sideOf(p.in_if) === 'C' || sideOf(p.out_if) === 'C');
-    if (li) { const idx = sideOf(li.in_if) === 'C' ? li.in_if : li.out_if; shapes.push({kind:'port', path:corePath, i:idx, tip:`<b>${T('The device itself', 'Сам пристрій')}</b> (${idx})<br>${T('in', 'вхід')} ${fmtV(leave.get(idx) || 0)} · ${T('out', 'вихід')} ${fmtV(enter.get(idx) || 0)}`}); }
-    // hosts outside the circle, next to their side, with ribbons to their port's badge
-    const maxPort = Math.max(...[...tot.values()]);
+    const litPath = p => !hover || (hover.kind === 'path' ? hover.in_if === p.in_if && hover.out_if === p.out_if : hover.kind === 'port' ? hover.i === p.in_if || hover.i === p.out_if : hover.kind !== 'host' || hover.port === p.in_if || hover.port === p.out_if);
+    for (const L of lines.sort((a, b) => b.w - a.w)) {
+      const lit = litPath(L.p);
+      ctx.strokeStyle = hexA(L.col, lit ? (hover ? .95 : .72) : .1); ctx.lineWidth = L.w; ctx.stroke(L.path);
+      shapes.push({kind:'path', stroke:L.path, sw:Math.max(10, L.w + 6), in_if:L.p.in_if, out_if:L.p.out_if,
+        tip:`<b>${esc(nameOf(L.p.in_if))} → ${esc(nameOf(L.p.out_if))}</b><br>${fmtV(L.p.v)} · ${T('hosts', 'хостів')}: ${L.p.hosts}${(L.p.services || []).length ? '<br>' + esc(L.p.services.map(dv).join(', ')) : ''}`});
+    }
+    // core
+    if (paths.some(p => sideOf(p.in_if) === 'C' || sideOf(p.out_if) === 'C')) {
+      const cp = new Path2D(); cp.arc(core.x, core.y, core.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(12,22,52,.96)'; ctx.fill(cp); ctx.strokeStyle = '#8A96B4'; ctx.lineWidth = 1.4; ctx.stroke(cp);
+      ctx.textAlign = 'center'; ctx.font = '600 10.5px Manrope, sans-serif'; ctx.fillStyle = C.ink2; ctx.fillText(T('device itself', 'сам пристрій'), core.x, core.y + core.r + 11);
+      const li = paths.find(p => sideOf(p.in_if) === 'C' || sideOf(p.out_if) === 'C'), idx = sideOf(li.in_if) === 'C' ? li.in_if : li.out_if;
+      shapes.push({kind:'port', path:cp, i:idx, tip:`<b>${T('The device itself', 'Сам пристрій')}</b> (${idx})`});
+    }
+    // hosts outside, joined to their dot
+    const hmax = Math.max(1e-9, ...[...data.inside, ...data.outside].map(h => v(h.v)));
     for (const side of ['L', 'R']) {
       const list = side === 'L' ? data.inside : data.outside, cards = [];
-      for (const i of [...ports[side]].sort((a, b) => Math.sin(arcs.get(a).mid) - Math.sin(arcs.get(b).mid))) {
+      for (const i of ports[side].slice().sort((a, b) => dots.get(a).y - dots.get(b).y)) {
         const own = list.filter(h => h.iface === i).sort((a, b) => b.v - a.v), shown = own.slice(0, side === 'L' ? 4 : 6);
         shown.forEach(h => cards.push({port:i, h, v:h.v}));
         const rest = Math.max(0, tot.get(i) - shown.reduce((a, h) => a + h.v, 0));
         if (own.length > shown.length && rest > tot.get(i) * .03) cards.push({port:i, other:true, v:rest});
       }
       if (!cards.length) continue;
-      const n = cards.length, cg = 6, ch = Math.max(24, Math.min(44, (H - 16 - cg * (n - 1)) / n)), x = side === 'L' ? 0 : W - cardW;
+      const n = cards.length, cg = 6, ch = Math.max(24, Math.min(44, (H - 12 - cg * (n - 1)) / n)), x = side === 'L' ? 0 : W - cardW;
       let y = Math.max(6, (H - n * ch - (n - 1) * cg) / 2);
       for (const c of cards) {
-        const a = arcs.get(c.port), [bx, by] = pt(cx, cy, BR, a.mid), t = Math.max(1.5, Math.min(ch - 12, 3 + 18 * v(c.v) / Math.max(1e-9, v(maxPort))));
-        const x0 = side === 'L' ? x + cardW : x, col = c.other ? C.other : side === 'L' ? C.int : C.ext;
-        const key = side + '|' + c.port + '|' + (c.other ? '*' : c.h.host);
-        const rib = new Path2D(); rib.moveTo(x0, y + ch / 2 - t / 2); rib.bezierCurveTo((x0 + bx) / 2, y + ch / 2 - t / 2, (x0 + bx) / 2, by - t / 2, bx, by - t / 2); rib.lineTo(bx, by + t / 2); rib.bezierCurveTo((x0 + bx) / 2, by + t / 2, (x0 + bx) / 2, y + ch / 2 + t / 2, x0, y + ch / 2 + t / 2); rib.closePath();
+        const D = dots.get(c.port), w = 1.2 + 6.8 * v(c.v) / hmax, x0 = side === 'L' ? x + cardW : x, xd = D.x + (side === 'L' ? -9 : 9);
+        const col = c.other ? C.other : side === 'L' ? C.int : C.ext, key = side + '|' + c.port + '|' + (c.other ? '*' : c.h.host);
+        const path = new Path2D(); path.moveTo(x0, y + ch / 2); path.bezierCurveTo((x0 + xd) / 2, y + ch / 2, (x0 + xd) / 2, D.y, xd, D.y);
         const lit = !hover || (hover.kind === 'host' && hover.key === key) || (hover.kind === 'port' && hover.i === c.port) || (hover.kind === 'path' && (hover.in_if === c.port || hover.out_if === c.port));
-        ctx.fillStyle = hexA(col, lit ? .38 : .08); ctx.fill(rib);
+        ctx.strokeStyle = hexA(col, lit ? .6 : .1); ctx.lineWidth = w; ctx.stroke(path);
         const box = rr(x + .5, y + .5, cardW - 1, ch - 1, 10);
         ctx.fillStyle = 'rgba(14,26,58,.82)'; ctx.fill(box); ctx.strokeStyle = hover && hover.key === key ? hexA(col, .9) : 'rgba(110,160,255,.28)'; ctx.lineWidth = 1; ctx.stroke(box);
         ctx.fillStyle = col; ctx.fill(rr(x + 6, y + 6, 4, ch - 12, 2));
@@ -796,32 +657,32 @@ function createDevRing(host, opts){
         ctx.textAlign = 'left'; ctx.fillStyle = C.ink;
         if (ch >= 36) { ctx.fillText(clip(l1, '600 12px "JetBrains Mono", monospace', cardW - 26), x + 16, y + ch / 2 - 7); ctx.fillStyle = C.ink2; ctx.fillText(clip(l2, '500 11px Manrope, sans-serif', cardW - 26), x + 16, y + ch / 2 + 9); }
         else ctx.fillText(clip(l1, '600 11.5px "JetBrains Mono", monospace', cardW - 26), x + 16, y + ch / 2);
-        if (!c.other) shapes.push({kind:'host', path:box, key, side, ip:c.h.host, tip:`<b>${esc(l1)}</b><br>${esc(c.h.host)} · ${esc(nameOf(c.port))}<br>↑ ${fmtV(c.h.up)} · ↓ ${fmtV(c.h.dn)}`});
+        if (!c.other) shapes.push({kind:'host', path:box, key, port:c.port, side, ip:c.h.host, tip:`<b>${esc(l1)}</b><br>${esc(c.h.host)} · ${esc(nameOf(c.port))}<br>↑ ${fmtV(c.h.up)} · ↓ ${fmtV(c.h.dn)}`});
         y += ch + cg;
       }
     }
-    // port badges on the rim: name, address, what enters and what leaves the device through the port
-    const maxIO = Math.max(1e-9, ...[...enter.values(), ...leave.values()]);
-    for (const [i, a] of arcs) {
-      const role = roleOf(i), col = role === 'wan' ? C.up : '#2F7BFF', on = hover && hover.kind === 'port' && hover.i === i;
-      // the arc itself, thick, on the rim
-      const arcP = new Path2D(); arcP.arc(cx, cy, R - 4, a.a0, a.a1); ctx.strokeStyle = hexA(col, on ? 1 : .85); ctx.lineWidth = 8; ctx.lineCap = 'butt'; ctx.stroke(arcP);
-      const bw = 138, bh = 50, [px, py] = pt(cx, cy, BR, a.mid), bx = px - bw / 2, by = py - bh / 2;
-      const badge = rr(bx, by, bw, bh, 10);
-      ctx.fillStyle = 'rgba(8,16,40,.92)'; ctx.fill(badge); ctx.strokeStyle = hexA(col, on ? 1 : .6); ctx.lineWidth = on ? 1.6 : 1; ctx.stroke(badge);
-      ctx.textAlign = 'left'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink; ctx.fillText(clip(nameOf(i), '700 12px "JetBrains Mono", monospace', bw - 16), bx + 8, by + 11);
-      ctx.font = '500 10px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink3; ctx.fillText(clip(addrOf(i) || (role === 'wan' ? 'WAN' : 'LAN'), '500 10px "JetBrains Mono", monospace', bw - 16), bx + 8, by + 23);
-      // two meters: entering the device through the port (from outside) and leaving it
-      const meter = (yy, val, mc, label) => { ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fill(rr(bx + 22, yy - 3, bw - 76, 6, 3)); ctx.fillStyle = mc; ctx.fill(rr(bx + 22, yy - 3, Math.max(2, (bw - 76) * val / maxIO), 6, 3));
-        ctx.font = '600 9.5px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink2; ctx.textAlign = 'left'; ctx.fillText(label, bx + 8, yy); ctx.textAlign = 'right'; ctx.fillText(fmtV(val), bx + bw - 6, yy); };
-      meter(by + 34, enter.get(i) || 0, C.down, '↘'); meter(by + 43, leave.get(i) || 0, C.up, '↗');
-      const hit = new Path2D(); hit.addPath(badge); hit.addPath(arcP);
-      shapes.push({kind:'port', path:badge, i, tip:`<b>${esc(nameOf(i))}</b> (${i}) · ${role === 'wan' ? 'WAN' : 'LAN'}<br>${esc(addrOf(i))}<br>${T('enters the device', 'входить у пристрій')}: ${fmtV(enter.get(i) || 0)}<br>${T('leaves the device', 'виходить з пристрою')}: ${fmtV(leave.get(i) || 0)}`});
+    // dots and their labels (inside the box, next to the dot)
+    for (const D of dots.values()) {
+      const role = roleOf(D.i), col = role === 'wan' ? C.up : '#2F7BFF', on = hover && hover.kind === 'port' && hover.i === D.i;
+      const dp = new Path2D(); dp.arc(D.x, D.y, on ? 9 : 7.5, 0, Math.PI * 2);
+      ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = on ? 14 : 8; ctx.fill(dp); ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'rgba(8,16,40,.95)'; ctx.lineWidth = 2; ctx.stroke(dp);
+      const l1 = nameOf(D.i), l2 = [addrOf(D.i), `↘ ${fmtV(enter.get(D.i) || 0)}  ↗ ${fmtV(leave.get(D.i) || 0)}`].filter(Boolean).join(' · ');
+      ctx.font = '700 12px "JetBrains Mono", monospace'; const w1 = ctx.measureText(l1).width; ctx.font = '500 10.5px "JetBrains Mono", monospace'; const w2 = ctx.measureText(l2).width;
+      const lwid = Math.max(w1, w2) + 14, lx = D.side === 'L' ? D.x + 16 : D.x - 16 - lwid, ly = D.y - 34;
+      ctx.fillStyle = 'rgba(8,16,40,.88)'; ctx.fill(rr(lx, ly, lwid, 30, 8)); ctx.strokeStyle = hexA(col, on ? .9 : .45); ctx.lineWidth = 1; ctx.stroke(rr(lx, ly, lwid, 30, 8));
+      ctx.textAlign = 'left'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink; ctx.fillText(l1, lx + 7, ly + 9);
+      ctx.font = '500 10.5px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink2; ctx.fillText(l2, lx + 7, ly + 21);
+      const hit = new Path2D(); hit.arc(D.x, D.y, 13, 0, Math.PI * 2); hit.addPath(rr(lx, ly, lwid, 30, 8));
+      shapes.push({kind:'port', path:hit, i:D.i, tip:`<b>${esc(nameOf(D.i))}</b> (${D.i}) · ${role === 'wan' ? 'WAN' : 'LAN'}<br>${esc(addrOf(D.i))}<br>${T('enters the device', 'входить у пристрій')}: ${fmtV(enter.get(D.i) || 0)}<br>${T('leaves the device', 'виходить з пристрою')}: ${fmtV(leave.get(D.i) || 0)}`});
     }
   }
+  // shapes are in CSS pixels and the context is scaled by dpr, so test device pixels; lines are hit by a wide stroke
   const pick = e => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    for (let i = shapes.length - 1; i >= 0; i--) if (ctx.isPointInPath(shapes[i].path, x * dpr, y * dpr)) return {s:shapes[i], x, y};
+    for (let i = shapes.length - 1; i >= 0; i--) { const sh = shapes[i];
+      if (sh.path && ctx.isPointInPath(sh.path, x * dpr, y * dpr)) return {s:sh, x, y};
+      if (sh.stroke) { ctx.lineWidth = sh.sw; if (ctx.isPointInStroke(sh.stroke, x * dpr, y * dpr)) return {s:sh, x, y}; } }
     return null; };
   const same = (a, b) => a === b || (a && b && a.kind === b.kind && a.key === b.key && a.i === b.i && a.in_if === b.in_if && a.out_if === b.out_if);
   cv.addEventListener('mousemove', e => { const h = pick(e), n = h ? h.s : null;
@@ -938,7 +799,7 @@ function vPaths(){
       if (!df) putFilter({k:'device', v:ip, neg:false});
       render(); };
     const mapEl = document.getElementById('cPaths');
-    if (mapEl) createDevRing(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap,
+    if (mapEl) createDevMap(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap,
       fetchData:() => api('devmap', {t:'all', metric:state.metric, live:live ? 1 : 0, win:120, top:6}, extra)});
     try { draw(await load()); } catch (e) { fill('pTable', errBox(e)); }
     if (live) every(10000, () => load().then(d => { if (seq === renderSeq) draw(d); }).catch(() => {}));
