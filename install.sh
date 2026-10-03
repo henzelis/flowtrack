@@ -516,27 +516,46 @@ ensure_tls() {
 step "$(t 'HTTPS certificate' 'Сертифікат HTTPS')" ensure_tls
 
 clickhouse_up() {
-  local mem cur img
+  local mem cur img conf_changed=0
   # the image that created the data is recorded in the config; a re-run must never switch versions
   img=$(envget FT_CH_IMAGE)
   if [ -z "$img" ] && docker inspect "$CH_NAME" >/dev/null 2>&1; then img=$(docker inspect -f '{{.Config.Image}}' "$CH_NAME"); fi
   [ -n "$img" ] && CH_IMAGE=$img
   grep -q '^FT_CH_IMAGE=' "$ETC/env" || echo "FT_CH_IMAGE=$CH_IMAGE" >> "$ETC/env"
   mem=$(awk '/MemTotal/ {m=int($2/1024/1024/4); if (m<1) m=1; if (m>4) m=4; print m}' /proc/meminfo)
-  if docker inspect "$CH_NAME" >/dev/null 2>&1; then
-    cur=$(docker inspect -f '{{.State.Running}}' "$CH_NAME")
-    [ "$cur" = true ] || docker start "$CH_NAME"
-  else
-    docker pull -q "$CH_IMAGE"
+  # FlowTrack's ClickHouse settings (quiet diagnostic logs, small caches), mounted into config.d
+  mkdir -p "$ETC/clickhouse"
+  if ! cmp -s "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; then
+    cp "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; chmod 644 "$ETC/clickhouse/flowtrack.xml"; conf_changed=1
+  fi
+  ch_run() {
     docker run -d --name "$CH_NAME" --restart unless-stopped -p "127.0.0.1:$CH_PORT:8123" --memory "${mem}g" \
       --ulimit nofile=262144:262144 -v "$PREFIX/clickhouse:/var/lib/clickhouse" \
+      -v "$ETC/clickhouse/flowtrack.xml:/etc/clickhouse-server/config.d/flowtrack.xml:ro" \
       -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD="$CH_PASSWORD" "$CH_IMAGE"
+  }
+  if docker inspect "$CH_NAME" >/dev/null 2>&1; then
+    if ! docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$CH_NAME" | grep -q 'config.d/flowtrack.xml'; then
+      # an older install: recreate the container with the settings mounted (the data stays in $PREFIX/clickhouse)
+      docker stop -t 30 "$CH_NAME" >/dev/null 2>&1 || true; docker rm "$CH_NAME" >/dev/null; ch_run
+    else
+      cur=$(docker inspect -f '{{.State.Running}}' "$CH_NAME")
+      if [ "$cur" != true ]; then docker start "$CH_NAME"; elif [ "$conf_changed" = 1 ]; then docker restart -t 30 "$CH_NAME"; fi
+    fi
+  else
+    docker pull -q "$CH_IMAGE"
+    ch_run
   fi
   for _ in $(seq 1 60); do
-    curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 && return 0
+    curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 && break
     sleep 2
   done
-  echo "ClickHouse did not answer within 120 s"; docker logs --tail 30 "$CH_NAME"; return 1
+  curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 || { echo "ClickHouse did not answer within 120 s"; docker logs --tail 30 "$CH_NAME"; return 1; }
+  # diagnostic log tables left by older versions are no longer written: drop them (FlowTrack data is untouched)
+  for t in trace_log text_log metric_log asynchronous_metric_log processors_profile_log query_thread_log query_views_log part_log session_log error_log; do
+    curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/" --data-binary "DROP TABLE IF EXISTS system.$t" >/dev/null 2>&1 || true
+  done
+  return 0
 }
 step "$(t 'Database (ClickHouse in Docker)' 'База даних (ClickHouse у Docker)')" clickhouse_up
 

@@ -1,0 +1,35 @@
+<!-- FlowTrack settings for its ClickHouse container (mounted into /etc/clickhouse-server/config.d/).
+     A collector writes a few thousand rows per second at most; ClickHouse's own diagnostic logs were
+     larger than the flow data and kept allocating memory. Keep only query_log, for a week. -->
+<clickhouse>
+    <logger>
+        <level>warning</level>
+    </logger>
+
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <metric_log remove="1"/>
+    <asynchronous_metric_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <part_log remove="1"/>
+    <session_log remove="1"/>
+    <opentelemetry_span_log remove="1"/>
+    <asynchronous_insert_log remove="1"/>
+    <backup_log remove="1"/>
+    <blob_storage_log remove="1"/>
+    <error_log remove="1"/>
+
+    <query_log replace="1">
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+    </query_log>
+
+    <!-- caches sized for a small container -->
+    <mark_cache_size>268435456</mark_cache_size>
+    <index_mark_cache_size>67108864</index_mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+</clickhouse>

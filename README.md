@@ -100,10 +100,13 @@ Run from a checkout of this repository.
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
 sudo mkdir -p /opt/flowtrack/clickhouse /opt/flowtrack/geoip /etc/flowtrack
 
-# 2. ClickHouse, reachable from this host only
+# 2. ClickHouse, reachable from this host only; deploy/clickhouse-flowtrack.xml turns off the diagnostic
+#    log tables (they grow by gigabytes and inflate memory use) and keeps caches small
 PW=$(openssl rand -hex 16)
+sudo mkdir -p /etc/flowtrack/clickhouse && sudo cp deploy/clickhouse-flowtrack.xml /etc/flowtrack/clickhouse/flowtrack.xml
 docker run -d --name flowtrack-ch --restart unless-stopped -p 127.0.0.1:8123:8123 --memory 4g \
   --ulimit nofile=262144:262144 -v /opt/flowtrack/clickhouse:/var/lib/clickhouse \
+  -v /etc/flowtrack/clickhouse/flowtrack.xml:/etc/clickhouse-server/config.d/flowtrack.xml:ro \
   -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD=$PW \
   clickhouse/clickhouse-server:24
 
