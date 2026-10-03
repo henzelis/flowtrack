@@ -12,6 +12,7 @@ import json
 import multiprocessing as mp
 import os
 import queue
+import select
 import signal
 import socket
 import struct
@@ -24,8 +25,8 @@ from netflow.ipfix import IPFIXTemplateNotRecognized, TemplateField, TemplateFie
 from netflow.v9 import V9OptionsTemplateRecord, V9TemplateField, V9TemplateNotRecognized, V9TemplateRecord
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (STATE_DIR, CHError, Geo, apply_schema, ch, classify_l7, exporters_mtime, ipstr, is_private,  # noqa: E402
-                    load_exporters, service_name)
+from common import (STATE_DIR, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, exporters_mtime,  # noqa: E402
+                    ipstr, is_private, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -599,7 +600,7 @@ class Receiver:
 
     def sample_socket(self):
         """Kernel counters of our socket: cumulative drops (receive buffer full) and bytes queued now."""
-        st = socket_counters(self.sock)
+        st = socket_counters(self.socks)
         if st is None:
             return
         drops, rxq = st
@@ -644,9 +645,16 @@ class Receiver:
         else:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
-        self.sock = sock = udp_listener(BIND, PORT)
-        sock.settimeout(DISPATCH_SECONDS)
-        self.rcvbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        try:
+            self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
+        except (OSError, ValueError) as ex:
+            log(f'cannot listen on FT_BIND={BIND!r} port {PORT}: {ex}')
+            sys.exit(1)
+        self.socks = [s for s, _ in self.listeners]
+        self.listen_sig = listen_signature(BIND)
+        for sock in self.socks:
+            sock.setblocking(False)
+        self.rcvbuf = self.socks[0].getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
         fwd_socks = {fwd: socket.socket(socket.AF_INET6 if ':' in fwd[0] else socket.AF_INET, socket.SOCK_DGRAM) for fwd in FORWARD}
         self.ctx = mp.get_context('spawn')
         self.queues = [self.ctx.Queue(maxsize=QUEUE_MAX) for _ in range(self.n)]
@@ -655,9 +663,12 @@ class Receiver:
         for i in range(self.n):
             self.start_worker(i)
         self.pending, self.npending = [[] for _ in range(self.n)], 0
-        where = f"[::]:{PORT} (IPv4 + IPv6)" if sock.family == socket.AF_INET6 and BIND in ('', '0.0.0.0', '::') else f'{BIND}:{PORT}'
-        log(f'listening on {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
+        listen = describe_listeners(self.listeners)
+        where = '; '.join((f"{x['iface']} " if x['iface'] else 'all interfaces ') + (f"({', '.join(x['addrs'])})" if x['addrs'] else '(IPv4 + IPv6)')
+                          for x in listen)
+        log(f'listening on UDP {PORT}: {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
             f'forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
+        write_state({'port': PORT, 'bind': BIND, 'listen': listen, 'workers': self.n, 'started': int(time.time())})
         if self.rcvbuf < RCVBUF:
             log(f'NOTE socket buffer capped by net.core.rmem_max; raise it to {RCVBUF} to absorb bursts (install.sh does)')
         stop = False
@@ -671,21 +682,25 @@ class Receiver:
         last_dispatch = last_sec = last_min = time.time()
         while not stop:
             try:
-                data, addr = sock.recvfrom(65535)
-            except socket.timeout:
-                data = None
-            except OSError:
+                ready = select.select(self.socks, [], [], DISPATCH_SECONDS)[0]
+            except (OSError, ValueError):
                 if stop:
                     break
                 raise
-            if data is not None:
-                for fwd in FORWARD:
+            for sock in ready:
+                for _ in range(DISPATCH_EVERY):          # drain a burst, then let the other sockets have a turn
                     try:
-                        fwd_socks[fwd].sendto(data, fwd)
-                    except OSError:
-                        pass
-                ip = norm_addr(addr[0])
-                if not ALLOW or ip in ALLOW or ip in self.cfg:
+                        data, addr = sock.recvfrom(65535)
+                    except (BlockingIOError, InterruptedError):
+                        break
+                    for fwd in FORWARD:
+                        try:
+                            fwd_socks[fwd].sendto(data, fwd)
+                        except OSError:
+                            pass
+                    ip = norm_addr(addr[0])
+                    if ALLOW and ip not in ALLOW and ip not in self.cfg:
+                        continue
                     self.col_acc['packets'] += 1
                     if self.acct.account(ip, data):
                         for i in range(self.n):
@@ -710,6 +725,10 @@ class Receiver:
                 last_min = now
                 self.write_stats()
                 self.reload_config()
+                sig = listen_signature(BIND)
+                if sig != self.listen_sig:          # an interface got another address (DHCP): systemd restarts us
+                    log(f'listening addresses changed ({", ".join(self.listen_sig)} -> {", ".join(sig or ["none"])}); restarting')
+                    stop = True
         self.dispatch()
         for q in self.queues:
             try:
@@ -725,40 +744,43 @@ class Receiver:
         log('stopped')
 
 
-def socket_counters(sock):
-    """(drops, bytes queued) of this UDP socket from /proc/net/udp[6], or None."""
-    ino = str(os.fstat(sock.fileno()).st_ino)
+def socket_counters(socks):
+    """(drops, bytes queued) summed over our UDP sockets, from /proc/net/udp[6]; None if not found."""
+    inodes = {str(os.fstat(s.fileno()).st_ino) for s in socks}
+    drops = queued = found = 0
     for path in ('/proc/net/udp6', '/proc/net/udp'):
         try:
             with open(path) as f:
                 next(f)
                 for line in f:
                     p = line.split()
-                    if len(p) > 12 and p[9] == ino:
-                        return int(p[-1]), int(p[4].split(':')[1], 16)
+                    if len(p) > 12 and p[9] in inodes:
+                        drops += int(p[-1])
+                        queued += int(p[4].split(':')[1], 16)
+                        found += 1
         except (OSError, StopIteration, ValueError):
             continue
-    return None
+    return (drops, queued) if found else None
+
+
+def write_state(info):
+    """What the collector listens on, for the web UI (it may bind elsewhere than the web server)."""
+    try:
+        tmp = os.path.join(STATE_DIR, 'collector.json.tmp')
+        with open(tmp, 'w') as f:
+            json.dump(info, f)
+        os.replace(tmp, os.path.join(STATE_DIR, 'collector.json'))
+    except OSError as ex:
+        log(f'WARN cannot write collector state: {ex}')
+
+
+def set_rcvbuf(s):
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RCVBUF)
 
 
 def udp_listener(bind, port):
-    """Listen on IPv4 and IPv6 at once when binding to all addresses; IPv4-only if IPv6 is unavailable."""
-    def setup(s):
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RCVBUF)
-        return s
-    if bind in ('', '0.0.0.0', '::') or ':' in bind:
-        try:
-            s = setup(socket.socket(socket.AF_INET6, socket.SOCK_DGRAM))
-            s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-            s.bind(('::' if bind in ('', '0.0.0.0', '::') else bind, port))
-            return s
-        except OSError:
-            if ':' in bind and bind != '::':
-                raise
-    s = setup(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
-    s.bind(('0.0.0.0' if bind in ('', '::') else bind, port))
-    return s
+    """The first socket for FT_BIND-style `bind` (tests use this)."""
+    return open_listeners(bind, port, socket.SOCK_DGRAM, set_rcvbuf, log)[0][0]
 
 
 if __name__ == '__main__':

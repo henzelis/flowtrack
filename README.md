@@ -139,12 +139,13 @@ users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FT_BIND`, `FT_PORT` | `0.0.0.0`, `2055` | NetFlow/IPFIX UDP listener |
+| `FT_BIND`, `FT_PORT` | interface of the default route, `2055` | where NetFlow/IPFIX is received: interface name(s) and/or IP address(es), comma-separated, or `0.0.0.0` for all |
 | `FT_EXPORTERS` | *(empty = any)* | allowed exporter IPs, comma-separated; devices added in the UI are allowed automatically |
 | `FT_FORWARD` | *(empty)* | `host:port,…` — copy every datagram unchanged to other collectors |
 | `FT_WORKERS` | `auto` | decoding processes; `auto` = half the CPU threads, at most 4 |
+| | | With specific interfaces, both services also answer on localhost (health checks, `ssh -L`, a local reverse proxy) and restart themselves when an interface's address changes (DHCP). |
 | `FT_RCVBUF` | `33554432` | UDP receive buffer in bytes (capped by `net.core.rmem_max`, which the installer raises to 32 MB) |
-| `FT_WEB_BIND`, `FT_WEB_PORT` | `0.0.0.0`, `3030` | web UI and API |
+| `FT_WEB_BIND`, `FT_WEB_PORT` | interface of the default route, `3030` | web UI and API, same syntax — e.g. NetFlow on the external interface, the web UI only on the internal one |
 | `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
 

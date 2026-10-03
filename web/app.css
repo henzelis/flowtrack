@@ -352,3 +352,9 @@ tr.unseen td{opacity:.75}
 .collbar > div span{font-size:11px;color:var(--ink2)}
 .collbar > div b{font-size:13px}
 .collbar-h{margin-right:6px}
+.collbar-where{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px 26px;font-size:12px;color:var(--ink2);padding-top:8px;border-top:1px solid var(--hair)}
+.collbar-where b{color:var(--ink);font-weight:600}
+/* a column whose last panel grows so both columns of a row end at the same line */
+.col.fillcol{display:flex;flex-direction:column}
+.col.fillcol > .grow{flex:1 1 auto;display:flex;flex-direction:column}
+.col.fillcol > .grow > .chart{flex:1 1 auto;min-height:260px}

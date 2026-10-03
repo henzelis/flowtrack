@@ -70,6 +70,7 @@ const setPressed = (id, val) => document.querySelectorAll(`#${id} button`).forEa
 const scaleNote = () => '';   // the pressed toggle shows the scale; labels keep a constant length
 const charts = [];
 function mkChart(el){ const c = echarts.init(el, null, {renderer:'canvas'}); charts.push(c);
+  if (window.ResizeObserver) { const ro = new ResizeObserver(() => { if (!c.isDisposed()) c.resize(); }); ro.observe(el); onCleanup(() => ro.disconnect()); }
   // axis labels are measured with the web font; re-layout once it has loaded so nothing gets clipped
   if (document.fonts && document.fonts.status !== 'loaded') document.fonts.ready.then(() => { if (!c.isDisposed()) c.resize(); }); onCleanup(() => { c.dispose(); const i = charts.indexOf(c); if (i >= 0) charts.splice(i, 1); }); return c; }
 window.addEventListener('resize', () => charts.forEach(c => c.resize()));
@@ -439,14 +440,22 @@ function vOverview(){
     return `<div class="tw"><table class="compact"><thead><tr><th>Час</th><th>Внутр. → зовн. · сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : '←'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(f.service)}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || '<tr><td colspan="4"><div class="empty">Немає записів</div></td></tr>'}</tbody></table></div>`; });
 }
 
+// filters that describe a river selection (a host, an outside address, or a conversation band); none for «Інші»
+function selFilters(sel){
+  if (!sel) return [];
+  const isOther = k => k === '__other', out = [];
+  if (sel.type === 'band') { if (!isOther(sel.l)) out.push({k:'ip', v:sel.l}); if (!isOther(sel.r)) out.push({k:'dst', v:sel.r}); }
+  else if (!isOther(sel.k)) out.push({k:sel.side === 'L' ? 'ip' : 'dst', v:sel.k});
+  return out;
+}
 async function inspectorHtml(sel){
-  if (!sel) return `<p class="note" style="margin:0">Наведіть на стрічку чи вузол, щоб побачити обсяг. Клік фіксує вибір і показує деталі тут.</p>`;
-  const extra = [];
+  if (!sel) return `<p class="note" style="margin:0">Наведіть на стрічку чи вузол, щоб побачити обсяг. Клік додає вибране у фільтри й показує деталі тут.</p>`;
+  const extra = selFilters(sel);
   let title, subtitle = '';
   const isOther = k => k === '__other';
-  if (sel.type === 'band') { if (!isOther(sel.l)) extra.push({k:'ip', v:sel.l}); if (!isOther(sel.r)) extra.push({k:'dst', v:sel.r}); title = `${sel.l === '__other' ? 'Інші' : sel.l} ⇄ ${sel.r === '__other' ? 'Інші' : sel.r}`; subtitle = 'розмова'; }
-  else if (sel.side === 'L') { if (!isOther(sel.k)) extra.push({k:'ip', v:sel.k}); title = isOther(sel.k) ? 'Інші внутрішні' : sel.k; }
-  else { if (!isOther(sel.k)) extra.push({k:'dst', v:sel.k}); title = isOther(sel.k) ? 'Інші зовнішні' : sel.k; }
+  if (sel.type === 'band') { title = `${isOther(sel.l) ? 'Інші' : sel.l} ⇄ ${isOther(sel.r) ? 'Інші' : sel.r}`; subtitle = 'розмова'; }
+  else if (sel.side === 'L') title = isOther(sel.k) ? 'Інші внутрішні' : sel.k;
+  else title = isOther(sel.k) ? 'Інші зовнішні' : sel.k;
   if (!extra.length) return `<div class="insp"><div class="who"><b>${esc(title)}</b></div><p class="note" style="margin:0">Згорнута група — виберіть конкретну адресу.</p></div>`;
   const [s, svc, l7, ext] = await Promise.all([api('summary', {}, extra), api('top', {dim:'service', limit:4}, extra), api('top', {dim:'l7', limit:4}, extra), api('top', {dim:'ext_ip', limit:1}, extra)]);
   const e0 = ext.rows[0];
@@ -455,8 +464,7 @@ async function inspectorHtml(sel){
     <div class="dk"><div><span>↑ upload</span><b class="u">${fmtB(s.up)}</b></div><div><span>↓ download</span><b class="d">${fmtB(s.down)}</b></div><div><span>flows</span><b>${fmtN(s.flows)}</b></div></div>
     <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">Сервіси</h4><div class="tagrow">${svc.rows.map(g => `<span class="tag">${esc(g.k)} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
     <div><h4 style="margin:0 0 6px;font-size:12.5px;color:var(--ink2)">Протоколи</h4><div class="tagrow">${l7.rows.map(g => `<span class="tag mono">${esc(g.k)}</span>`).join('') || '—'}</div></div>
-    <div class="chart" id="cInsp" style="height:120px" data-extra="${esc(JSON.stringify(extra))}"></div>
-    <button class="btn" id="inspFilter">Фільтрувати все за вибраним</button></div>`;
+    <div class="chart" id="cInsp" style="height:120px" data-extra="${esc(JSON.stringify(extra))}"></div></div>`;
 }
 function vFlows(){
   const v = document.getElementById('view');
@@ -479,16 +487,19 @@ function vFlows(){
     if (seq !== renderSeq) return; fill('insp', html);
     const el = document.getElementById('cInsp');
     if (el) api('series', {}, JSON.parse(el.dataset.extra)).then(s => { if (el.isConnected) trendChart(el, s, true); });
-    const b = document.getElementById('inspFilter'); if (b) b.onclick = () => { const ex = JSON.parse(el.dataset.extra); ex.forEach(f => putFilter({...f, neg:false})); state.sel = null; render(); };
   };
   showInsp(state.sel);
+  // a click on the river works like everywhere else: the selection goes into the filters (and stays selected)
+  const onRiverSelect = sel => { const ex = selFilters(sel);
+    if (!ex.length) return showInsp(sel);
+    ex.forEach(f => putFilter({...f, neg:false})); state.sel = sel; render(); };
   let riverScope = null;
   const winLbl = d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}` : rangeLabel()) + scaleNote(); };
   let lastData = null;
   const mountRiver = () => {
     if (riverScope) riverScope.dispose();
     riverScope = childScope();
-    riverScope.run(() => createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 10000 : 0, onSelect:showInsp,
+    riverScope.run(() => createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 10000 : 0, onSelect:onRiverSelect,
       fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, win:120, metric:state.metric}), onData:d => { lastData = d; winLbl(d); }}));
   };
   mountRiver();
@@ -498,7 +509,9 @@ function vFlows(){
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:6});
-    return `<div class="tw"><table class="compact"><thead><tr><th>Внутр.</th><th>Зовн.</th><th>Сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(x => `<tr><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>Внутр.</th><th>Зовн.</th><th>Сервіс</th><th class="num">Обсяг</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="Фільтр за цією розмовою"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
+  document.getElementById('convBox').addEventListener('click', e => { const tr = e.target.closest('tr[data-conv]'); if (!tr) return;
+    const [ip, dst] = tr.dataset.conv.split('|'); putFilter({k:'ip', v:ip, neg:false}); putFilter({k:'dst', v:dst, neg:false}); state.sel = null; render(); });
   section('protoBox', async () => { const t = await api('top', {dim:'l7', limit:6});
     setTimeout(() => { const el = document.getElementById('cProto'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
     return `<div class="donut-wrap"><div class="chart donut" id="cProto"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`; });
@@ -528,15 +541,17 @@ function vTalkers(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
     <div id="tKpi" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
-    <section class="glass panel s8">${ph('users', 'Топ хостів', 'за загальним обсягом · клік по рядку вибирає хост для швидких дій', '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
+    <div class="col s8 fillcol">
+      <section class="glass panel">${ph('users', 'Топ хостів', 'за загальним обсягом · клік по рядку додає хост у фільтри', '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
+      <section class="glass panel grow">${ph('chart', 'Тренд топ-хостів', 'топ-5 і решта')}<div class="chart" id="cTop5"></div></section>
+    </div>
     <div class="col s4">
       <section class="glass panel">${ph('pie', 'Трафік топ-хостів', 'частка від усього обсягу')}<div id="tDonut" class="loading"></div></section>
-      <section class="glass panel">${ph('nodes', 'За протоколом L4', 'частка трафіку')}<div id="tProto" class="loading"></div></section>
+      <section class="glass panel">${ph('grid', 'За сервісами', 'частка трафіку · клік — фільтр')}<div id="tSvc" class="loading"></div></section>
       <section class="glass panel">${ph('globe', 'Куди йде трафік', 'країни призначення')}<div id="tGeo" class="loading"></div></section>
       <section class="glass panel">${ph('search', 'Швидкі дії', '<span id="qaFor">—</span>')}<div class="qa" id="qa"></div></section>
     </div>
-    <section class="glass panel s6">${ph('chart', 'Тренд топ-хостів', 'топ-5 і решта')}<div class="chart" id="cTop5"></div></section>
-    <section class="glass panel s6">${ph('list', 'Топ хостів детально', 'головний сервіс і протокол кожного', '<button class="lnk" id="toFlows2">Потоки →</button>')}<div id="tDetail" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('list', 'Топ хостів детально', 'головний сервіс і протокол кожного · клік — фільтр', '<button class="lnk" id="toFlows2">Потоки →</button>')}<div id="tDetail" class="loading"></div></section></div>`;
   document.getElementById('toFlows2').onclick = () => { state.view = 'flows'; render(); };
   const limit = state.talkersAll ? 50 : 10, secs = rangeSecs();
   fill('tMore', state.talkersAll ? 'Показати топ-10' : 'Показати топ-50');
@@ -569,17 +584,18 @@ function vTalkers(){
   Promise.all([api('top', {dim:'int_ip', limit}), api('series', {by:'int_ip', top:Math.min(limit, 20)})]).then(([t, ser]) => {
     topRows = t.rows; window.__tTotal = t.total;
     t.rows.forEach((r, i) => colorOf.set(r.k, HOSTPAL[i % HOSTPAL.length]));
-    selected = t.rows[0] || null; drawQa();
+    const fip = (state.filters.find(f => f.k === 'ip' && !f.neg) || {}).v;
+    selected = t.rows.find(r => r.k === fip) || t.rows[0] || null; drawQa();
     const sp = new Map(); for (const [ts, k, b] of ser.rows) { if (!sp.has(k)) sp.set(k, new Map()); sp.get(k).set(ts, b); }
     const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1;
     const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>Хост / IP</th><th style="width:26%">Обсяг</th><th class="num">%</th><th class="num">Flows</th><th class="num">Сер. швидкість</th><th>Тренд</th><th></th></tr></thead><tbody>
       ${t.rows.map((r, i) => { const c = colorOf.get(r.k);
-        return `<tr class="click${i === 0 ? ' is-picked' : ''}" data-pick="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? 'без імені' : 'публічна адреса'))}</span></span></div></td>
+        return `<tr class="click${r.k === fip ? ' is-picked' : ''}" data-pick="${esc(r.k)}" title="Додати у фільтри"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? 'без імені' : 'публічна адреса'))}</span></span></div></td>
           <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div></td>
           <td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
           <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="Картка хоста">›</button></td></tr>`; }).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`);
     if (box) { box.classList.remove('loading');
-      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => { box.querySelectorAll('tr.is-picked').forEach(x => x.classList.remove('is-picked')); tr.classList.add('is-picked'); selected = t.rows.find(r => r.k === tr.dataset.pick); drawQa(); });
+      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => addFilter('ip', tr.dataset.pick));
       box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation(); openHost(b.dataset.open); }); }
     // donut: top 5 + rest, same colours as the table
     const top5 = t.rows.slice(0, 5), rest = t.total - top5.reduce((a, r) => a + tot(r), 0);
@@ -598,9 +614,10 @@ function vTalkers(){
             areaStyle:{color:new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset:0, color:hexA(col, .45)}, {offset:1, color:hexA(col, .05)}])}, data:t5.map(x => [x * 1000, (keys.get(k).get(x) || 0) * 8 / step])}; })});
     }).catch(e => fill('cTop5', errBox(e)));
   }).catch(e => fill('tBox', errBox(e)));
-  section('tProto', async () => { const p = await api('top', {dim:'proto', limit:6}); const rows = p.rows.slice(0, 3), rest = p.total - rows.reduce((a, r) => a + tot(r), 0);
-    const all = [...rows.map(r => ({label:L4[r.k] || `IP/${r.k}`, v:tot(r), k:r.k})), ...(rest > 0 ? [{label:'Інше', v:rest}] : [])], cols = ['#2F7BFF', '#27D3F5', '#2EE59D', '#6E7FA6'];
-    return `<div class="pbars">${all.map((r, i) => `<span>${r.k ? `<button class="link" data-f="proto" data-v="${r.k}">${r.label}</button>` : r.label}</span><div class="vbar"><i style="width:${Math.max(1, 100 * r.v / (p.total || 1)).toFixed(1)}%;background:linear-gradient(90deg,${hexA(cols[i], .6)},${cols[i]})"></i></div><b class="mono">${pct(r.v, p.total)}</b>`).join('')}</div>`; });
+  section('tSvc', async () => { const p = await api('top', {dim:'service', limit:6}); const rows = p.rows.slice(0, 5), rest = p.total - rows.reduce((a, r) => a + tot(r), 0);
+    const all = [...rows.map(r => ({label:r.k, v:tot(r), k:r.k})), ...(rest > 0 ? [{label:'Інші', v:rest}] : [])];
+    return `<div class="pbars">${all.map(r => { const c = r.k ? keyColor(r.k) : C.other;
+      return `<span>${r.k ? `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.label)}</button>` : r.label}</span><div class="vbar"><i style="width:${Math.max(1, 100 * r.v / (p.total || 1)).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .6)},${c})"></i></div><b class="mono">${pct(r.v, p.total)}</b>`; }).join('') || '<div class="empty">Немає даних</div>'}</div>`; });
   section('tGeo', async () => { const [cc, city] = await Promise.all([api('top', {dim:'country', limit:5}), api('top', {dim:'city', limit:25})]);
     const rest = cc.total - cc.rows.reduce((a, r) => a + tot(r), 0), cols = ['#27D3F5', '#2F7BFF', '#2EE59D', '#8B5CFF', '#FFB547'];
     setTimeout(() => { const el = document.getElementById('cMini'); if (!el || !echarts.getMap('world')) return; const c = mkChart(el), cmax = city.rows.length ? tot(city.rows[0]) : 1;
@@ -610,35 +627,43 @@ function vTalkers(){
     return `<div class="geomini"><div class="chart" id="cMini" style="height:120px"></div><div class="dl">${cc.rows.map((r, i) => `<i class="idot" style="background:${cols[i]}"></i><button class="link" data-f="country" data-v="${esc(r.k)}">${esc(r.k ? ccName(r.k) : 'Локальні')}</button><span class="p">${pct(tot(r), cc.total)}</span><span class="t"></span>`).join('')}${rest > 0 ? `<i class="idot" style="background:${C.other}"></i><span>Інші</span><span class="p">${pct(rest, cc.total)}</span><span class="t"></span>` : ''}</div></div>`; });
   section('tDetail', async () => { const d = await api('top', {dim:'host_svc', limit:6});
     return `<div class="tw"><table class="compact"><thead><tr><th>Хост</th><th>Головний сервіс</th><th>Протокол</th><th class="num">Обсяг</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
-      return `<tr class="click" data-host="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(r.l7)}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
+      return `<tr class="click" data-f="ip" data-v="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(r.l7)}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
 }
 function vPorts(){
-  const v = document.getElementById('view');
+  const v = document.getElementById('view'), all = !!state.portsAll;
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s8">${ph('list', 'Топ портів', 'клік — фільтр за портом')}<div id="pTbl" class="loading"></div></section>
-    <section class="glass panel s4">${ph('pie', 'Протоколи L7', 'за портом')}<div id="pL7" class="loading"></div></section>
-    <section class="glass panel s12">${ph('chart', 'Порти в часі', 'топ-7')}<div class="chart" id="cPorts"></div></section></div>`;
-  section('pTbl', async () => { const t = await api('top', {dim:'ext_port', limit:30}), max = t.rows.length ? tot(t.rows[0]) : 1;
+    <section class="glass panel s12">${ph('chart', 'Порти в часі', 'топ-7 · клік по лінії — фільтр за портом')}<div class="chart" id="cPorts"></div></section>
+    <section class="glass panel s8">${ph('list', 'Топ портів', 'клік — фільтр за портом', '<button class="lnk" id="pMore"></button>')}<div id="pTbl" class="loading"></div></section>
+    <section class="glass panel s4">${ph('pie', 'Протоколи L7', 'за портом')}<div id="pL7" class="loading"></div></section></div>`;
+  api('series', {by:'ext_port', top:7}).then(s => { const el = document.getElementById('cPorts'); if (el) stackChart(el, s, k => ':' + k, k => addFilter('port', k)); }).catch(e => fill('cPorts', errBox(e)));
+  section('pTbl', async () => { const t = await api('top', {dim:'ext_port', limit:all ? 100 : 11}), rows = all ? t.rows : t.rows.slice(0, 10), max = rows.length ? tot(rows[0]) : 1;
+    moreToggle('pMore', 'portsAll', all, t.rows.length > 10);
     return `<div class="tw"><table><thead><tr><th>Порт</th><th>Протокол</th><th>Типовий сервіс</th><th style="width:24%">Обсяг</th><th class="num">%</th><th class="num">Хостів</th><th class="num">Зовн. адрес</th><th class="num">Flows</th></tr></thead><tbody>
-      ${t.rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(r.l7)}</span></td><td>${svcBadge(r.service)}</td>
-        <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,#1aa7d6,#27D3F5)"></i></div></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td><td class="num mono">${fmtN(r.peers)}</td><td class="num mono">${fmtN(r.fl)}</td></tr>`).join('')}</tbody></table></div>`; });
+      ${rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(r.l7)}</span></td><td>${svcBadge(r.service)}</td>
+        <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,#1aa7d6,#27D3F5)"></i></div></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td><td class="num mono">${fmtN(r.peers)}</td><td class="num mono">${fmtN(r.fl)}</td></tr>`).join('') || '<tr><td colspan="8"><div class="empty">Немає даних</div></td></tr>'}</tbody></table></div>`; });
   section('pL7', async () => { const t = await api('top', {dim:'l7', limit:8});
     setTimeout(() => { const el = document.getElementById('cPL7'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
     return `<div class="chart" id="cPL7" style="height:200px"></div><div class="dl">${t.rows.map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
-  api('series', {by:'ext_port', top:7}).then(s => { const el = document.getElementById('cPorts'); if (el) stackChart(el, s, k => ':' + k, k => addFilter('port', k)); }).catch(e => fill('cPorts', errBox(e)));
+}
+// "show all" / "top 10" link in a panel header; hidden when there is nothing more to show
+function moreToggle(id, key, all, hasMore){
+  const b = document.getElementById(id); if (!b) return;
+  b.hidden = !all && !hasMore; b.textContent = all ? 'Показати топ-10' : 'Показати всі';
+  b.onclick = () => { state[key] = !all; render(); };
 }
 function vApps(){
-  const v = document.getElementById('view');
+  const v = document.getElementById('view'), all = !!state.appsAll;
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('chart', 'Сервіси в часі', 'сервіс визначається за ASN адреси призначення та портом')}<div class="chart" id="cApps"></div></section>
-    <section class="glass panel s8">${ph('grid', 'Сервіси')}<div id="aBox" class="loading"></div></section>
+    <section class="glass panel s8">${ph('grid', 'Сервіси', 'клік — фільтр за сервісом', '<button class="lnk" id="aMore"></button>')}<div id="aBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('pie', 'Протоколи', 'L7 за портом')}<div id="pBox" class="loading"></div></section></div>`;
   api('series', {by:'service', top:7}).then(s => { const el = document.getElementById('cApps'); if (el) stackChart(el, s, k => k, k => addFilter('service', k)); }).catch(e => fill('cApps', errBox(e)));
-  section('aBox', async () => { const t = await api('top', {dim:'service', limit:100});
+  section('aBox', async () => { const t = await api('top', {dim:'service', limit:all ? 100 : 11}), rows = all ? t.rows : t.rows.slice(0, 10);
+    moreToggle('aMore', 'appsAll', all, t.rows.length > 10);
     return `<div class="tw"><table><thead><tr><th>Сервіс</th><th>Протокол</th><th class="num">↓</th><th class="num">↑</th><th class="num">Разом</th><th class="num">%</th><th class="num">Хостів</th></tr></thead><tbody>
-      ${t.rows.map(r => `<tr><td><button class="link" data-f="service" data-v="${esc(r.k)}">${svcBadge(r.k)}</button></td><td class="ipl">${esc(r.l7)}</td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td></tr>`).join('')}</tbody></table></div>`; });
+      ${rows.map(r => `<tr class="click" data-f="service" data-v="${esc(r.k)}"><td><button class="link" data-f="service" data-v="${esc(r.k)}">${svcBadge(r.k)}</button></td><td class="ipl">${esc(r.l7)}</td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td></tr>`).join('')}</tbody></table></div>`; });
   section('pBox', async () => { const t = await api('top', {dim:'l7', limit:10});
     setTimeout(() => { const el = document.getElementById('cL7'); if (el) donut(el, t.rows.slice(0, 8), k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), 'протоколів']); });
-    return `<div class="chart" id="cL7" style="height:220px"></div><div class="dl">${t.rows.slice(0, 10).map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
+    return `<div class="chart" id="cL7" style="height:220px"></div><div class="dl">${t.rows.slice(0, 8).map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(r.k)}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
 }
 function vGeo(){
   const v = document.getElementById('view');
@@ -673,11 +698,11 @@ function vThreats(){
       <div class="meta"><span class="pill ${x.sev}">${{warn:'увага', crit:'аномалія', info:'інфо'}[x.sev]}</span><span class="mono">${esc(String(x.when).slice(11, 16) || x.when)}</span>${x.ip ? `<button class="btn" data-f="ip" data-v="${esc(x.ip)}">Фільтр</button>` : ''}</div></div>`).join('') + '</div>'; });
 }
 const VENDORS = {
-  Fortinet:ip => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port 2055\n        next\n    end\nend\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\nend`,
-  Cisco:ip => `flow exporter FLOWTRACK\n destination ${ip}\n transport udp 2055\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record netflow ipv4 original-input\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON input\n ip flow monitor FT-MON output`,
-  MikroTik:ip => `/ip traffic-flow set enabled=yes interfaces=ether1 active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=2055 version=ipfix`,
-  Juniper:ip => `set services flow-monitoring version-ipfix template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port 2055\nset forwarding-options sampling instance FT family inet output flow-server ${ip} version-ipfix template FT`,
-  'Linux / pmacct':ip => `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:2055\nnfprobe_version: 10\npcap_interface: eth0`,
+  Fortinet:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\nend`,
+  Cisco:(ip, port) => `flow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record netflow ipv4 original-input\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON input\n ip flow monitor FT-MON output`,
+  MikroTik:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=ether1 active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=ipfix`,
+  Juniper:(ip, port) => `set services flow-monitoring version-ipfix template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} version-ipfix template FT`,
+  'Linux / pmacct':(ip, port) => `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: 10\npcap_interface: eth0`,
 };
 function vDevices(){
   const v = document.getElementById('view'); state.ifEdit = null;
@@ -697,11 +722,20 @@ function vDevices(){
       ${d.map(x => { const never = !x.last, stale = Date.now() / 1000 - x.last > 180, st = never ? 'warn' : stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
         return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? 'ще не надсилав даних' : stale ? 'немає даних понад 3 хв' : 'онлайн'}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ' <span class="tag">не описаний</span>'}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? 'очікую' : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
           <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td>
-          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div>${collectorBar(res.collector)}<p class="note">Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
+          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div>${collectorBar(res.collector, res.listen)}<p class="note">Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
 }
+// where devices must send NetFlow: the collector's own interface address when it listens on specific interfaces
+// (the web UI may be on another one), otherwise the address this page was opened with
+function collectorTarget(){
+  const nf = (META.listen || {}).netflow, addrs = nf ? nf.listen.flatMap(x => x.addrs) : [];
+  return [addrs.find(a => !a.includes(':')) || addrs[0] || location.hostname, nf ? nf.port : 2055];
+}
+const listenText = l => !l ? '—' : l.listen.map(x => (x.iface || 'усі інтерфейси') + (x.addrs.length ? ` (${x.addrs.join(', ')})` : '')).join('; ');
 // receiver health: workers, socket buffer and every place a packet can be lost on the way to the database
-function collectorBar(c){
-  if (!c) return '';
+function collectorBar(c, listen){
+  const nf = listen && listen.netflow, web = listen && listen.web;
+  const where = (nf || web) ? `<div class="collbar-where">${nf ? `<span>Прийом NetFlow/IPFIX: <b class="mono">UDP ${nf.port} · ${esc(listenText(nf))}</b></span>` : ''}${web ? `<span>Вебінтерфейс: <b class="mono">TCP ${web.port} · ${esc(listenText(web))}</b></span>` : ''}</div>` : '';
+  if (!c) return where ? `<div class="collbar">${where}</div>` : '';
   const lost = c.socket_drops + c.queue_drops, pct = 100 * lost / Math.max(1, c.packets + lost), fill = c.rcvbuf ? Math.round(100 * c.rx_queue_peak / c.rcvbuf) : 0;
   const cell = (k, v, tip, bad) => `<div title="${esc(tip)}"><span>${k}</span><b class="mono"${bad ? ' style="color:var(--warn)"' : ''}>${v}</b></div>`;
   return `<div class="collbar"><div class="collbar-h"><b>Колектор</b><span class="nat">за ${c.minutes} хв</span></div>
@@ -711,7 +745,7 @@ function collectorBar(c){
     ${cell('Відкинуто чергою', c.queue_drops.toLocaleString('uk-UA'), 'Воркери не встигали забирати пакети', c.queue_drops)}
     ${cell('Втрачено записів', c.dropped_rows.toLocaleString('uk-UA'), 'Записи, які не вдалося зберегти: ClickHouse був недоступний занадто довго', c.dropped_rows)}
     ${cell('Буфер сокета', `${fmtB(c.rcvbuf)} · пік ${fill}%`, 'Розмір буфера прийому і найбільше його заповнення (net.core.rmem_max обмежує розмір)', fill > 50)}
-    ${cell('Втрати', (lost ? pct.toFixed(pct < 0.01 ? 3 : 2) : '0') + '%', 'Частка пакетів, які колектор не обробив', lost)}</div>`;
+    ${cell('Втрати', (lost ? pct.toFixed(pct < 0.01 ? 3 : 2) : '0') + '%', 'Частка пакетів, які колектор не обробив', lost)}${where}</div>`;
 }
 // generic centered dialog; returns {root, close}
 const ROLE_UI = {lan:'LAN', wan:'WAN (інтернет)', local:'Сам пристрій'};
@@ -788,11 +822,11 @@ const formErr = (id, msg) => { const el = document.getElementById(id); if (el) {
 function openDevice(dev){
   const c = dev ? dev.config || {} : {}, editing = !!dev;
   let vendor = c.vendor && VENDORS[c.vendor] ? c.vendor : (c.vendor || 'Fortinet');
-  const me = location.hostname;
+  const [me, nfPort] = collectorTarget();
   const draw = () => {
     const m = openModal(editing ? `Пристрій ${dev.name}` : 'Підключити пристрій', editing ? esc(dev.ip) : 'Налаштуйте експорт на пристрої та опишіть його тут', `
       <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
-      <div class="cols"><div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc((VENDORS[vendor] || VENDORS.Fortinet)(me))}</pre></div>
+      <div class="cols"><div><h4>1. Конфігурація на пристрої</h4><pre class="codebox">${esc((VENDORS[vendor] || VENDORS.Fortinet)(me, nfPort))}</pre></div>
       <form class="form" id="devForm"><h4 style="margin:0">2. Опис для FlowTrack</h4>
         <div class="two"><label>IP, з якого йде експорт<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>Назва<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
         <div class="two"><label>Модель<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>Вибірка (sampling)<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>

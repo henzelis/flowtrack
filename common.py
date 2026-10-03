@@ -3,6 +3,8 @@ import base64
 import ipaddress
 import json
 import os
+import socket
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -76,6 +78,120 @@ def load_json(name, default):
             return json.load(f)
     except FileNotFoundError:
         return default
+
+
+# ---------------------------------------------------------------- listening sockets
+# FT_BIND (NetFlow/IPFIX) and FT_WEB_BIND (web UI) take a comma-separated list of interface names and/or
+# IP addresses; empty, 'all', '0.0.0.0' or '::' = every interface. An interface name means its current
+# addresses; the services restart themselves when those change (DHCP). With specific interfaces, localhost
+# is served too, so health checks, SSH tunnels and a local reverse proxy keep working.
+ALL_IFACES = ('', '*', 'any', 'all', '0.0.0.0', '::')
+LOOPBACK = ('127.0.0.1', '::1')
+
+
+def bind_targets(spec):
+    """'ens19, 203.0.113.5' -> [('', 'ens19'), ('203.0.113.5', None)]; [('', None)] = all interfaces."""
+    items = [x.strip() for x in str(spec or '').split(',') if x.strip()]
+    if not items or any(x.lower() in ALL_IFACES for x in items):
+        return [('', None)]
+    names = {n for _, n in socket.if_nameindex()}
+    out = []
+    for it in items:
+        try:
+            out.append((str(ipaddress.ip_address(it)), None))
+        except ValueError:
+            if it not in names:
+                raise ValueError(f'unknown interface or address: {it!r} (interfaces: {", ".join(sorted(names))})')
+            out.append(('', it))
+    return out
+
+
+def iface_addrs(dev):
+    """Current global addresses of an interface (IPv4 first)."""
+    try:
+        r = subprocess.run(['ip', '-j', 'addr', 'show', 'dev', dev], capture_output=True, text=True, timeout=5)
+        data = json.loads(r.stdout or '[]')
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    addrs = [(a.get('family'), a.get('local')) for d in data for a in d.get('addr_info', []) if a.get('scope') == 'global' and a.get('local')]
+    return [ip for fam, ip in sorted(addrs, key=lambda x: x[0] != 'inet')]
+
+
+def bind_plan(spec):
+    """[(address, interface or None)] to bind right now; [('::', None)] = all interfaces (dual-stack)."""
+    plan = []
+    for host, dev in bind_targets(spec):
+        if not host and not dev:
+            return [('::', None)]
+        if dev:
+            addrs = iface_addrs(dev)
+            if not addrs:
+                raise OSError(f'interface {dev} has no IP address yet')
+            plan += [(a, dev) for a in addrs]
+        else:
+            plan.append((host, None))
+    plan += [(a, None) for a in LOOPBACK if a not in {h for h, _ in plan}]
+    return plan
+
+
+def _bound(host, port, socktype, configure):
+    """One bound socket; '::' listens on IPv4 too (dual-stack), falling back to IPv4 when IPv6 is off."""
+    fam = socket.AF_INET6 if ':' in host else socket.AF_INET
+    s = None
+    try:
+        s = socket.socket(fam, socktype)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        configure(s)
+        if fam == socket.AF_INET6:
+            s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0 if host == '::' else 1)
+        s.bind((host, port))
+        return s
+    except OSError:
+        if s:
+            s.close()
+        if host != '::':
+            raise
+        return _bound('0.0.0.0', port, socktype, configure)
+
+
+def open_listeners(spec, port, socktype, configure=lambda s: None, log=print):
+    """Bound (not yet listening) sockets for FT_BIND / FT_WEB_BIND, as [(socket, interface or None)].
+    ::1 is skipped quietly when IPv6 is disabled."""
+    out = []
+    for host, dev in bind_plan(spec):
+        try:
+            out.append((_bound(host, port, socktype, configure), dev))
+        except OSError:
+            if host == '::1':
+                continue
+            for s, _ in out:
+                s.close()
+            raise
+    return out
+
+
+def listen_signature(spec):
+    """Addresses the spec resolves to now; compare with the value at start to notice a changed DHCP address."""
+    try:
+        return sorted(h for h, _ in bind_plan(spec))
+    except (OSError, ValueError):
+        return None
+
+
+def describe_listeners(listeners):
+    """[{'iface': 'ens19' | None, 'addrs': [...]}] for the UI: where clients can send to (loopback left out)."""
+    out = []
+    for s, dev in listeners:
+        host = s.getsockname()[0]
+        if host in LOOPBACK:
+            continue
+        addrs = [] if host in ('::', '0.0.0.0') else [host]
+        prev = next((x for x in out if x['iface'] == dev), None) if dev else None
+        if prev:
+            prev['addrs'] += [a for a in addrs if a not in prev['addrs']]
+        else:
+            out.append({'iface': dev, 'addrs': addrs})
+    return out
 
 
 # ---------------------------------------------------------------- ClickHouse

@@ -10,7 +10,8 @@
 #           --upgrade      update code of an existing install, keep settings
 #           --uninstall    remove FlowTrack (asks whether to keep the data)
 #           --lang en|uk   installer language
-# Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
+# Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_NETFLOW_IFACE FT_WEB_IFACE (interface name, IP or
+#                       'all'; default: the interface of the default route) FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
 #                       FT_WAN_IFS FT_CITY FT_COUNTRY FT_ADMIN_PASSWORD FT_OPEN_FIREWALL=yes|no
 #                       FT_INSTALL_DOCKER=yes|no
 # HTTPS is on by default with a self-signed certificate; FT_TLS=no keeps plain HTTP.
@@ -277,16 +278,58 @@ LAN_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1
 [ -n "$LAN_IP" ] || LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 envget() { [ -f "$ETC/env" ] || return 0; sed -n "s/^$1=//p" "$ETC/env" | tail -1; }
 
+# ------------------------------------------------------------------ network interfaces
+# real interfaces with their global addresses: "name<TAB>addr, addr" (containers, bridges of VMs and loopback left out)
+list_ifaces() {
+  ip -o addr show scope global 2>/dev/null | awk '{split($4, a, "/"); print $2, a[1]}' \
+    | grep -Ev '^(lo|docker[0-9]*|veth[^ ]*|br-[0-9a-f]{12}|virbr[0-9]*|vnet[0-9]*|cni[^ ]*|flannel[^ ]*) ' \
+    | awk '{ if (!($1 in ips)) order[++n] = $1; ips[$1] = ips[$1] (ips[$1] ? ", " : "") $2 } END { for (i = 1; i <= n; i++) print order[i] "\t" ips[order[i]] }'
+}
+mapfile -t IFACE_ROWS < <(list_ifaces)
+IFACES=(); for r in "${IFACE_ROWS[@]}"; do IFACES+=("${r%%$'\t'*}"); done
+DEF_IFACE=$(ip route show default 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit }}')
+printf '%s\n' "${IFACES[@]}" | grep -qx "${DEF_IFACE:-none}" || DEF_IFACE=${IFACES[0]:-all}
+# answer -> value for FT_BIND / FT_WEB_BIND: a number from the list, 0 / all, an interface name or an IP address
+iface_value() {
+  local a=$1
+  case "$a" in 0|all|ALL|any|'*'|0.0.0.0|::) echo 0.0.0.0; return ;; esac
+  if [[ $a =~ ^[0-9]+$ ]] && [ "$a" -ge 1 ] && [ "$a" -le ${#IFACES[@]} ]; then echo "${IFACES[$((a-1))]}"; return; fi
+  echo "$a"
+}
+is_iface() {
+  local v; v=$(iface_value "$1")
+  [ "$v" = 0.0.0.0 ] || is_ip "$v" || ip link show dev "$v" >/dev/null 2>&1
+}
+iface_number() {   # value -> its number in the list (default answer), or the value itself
+  local i; case "$1" in ''|0.0.0.0|::|all) echo 0; return ;; esac
+  for i in "${!IFACES[@]}"; do [ "${IFACES[$i]}" = "$1" ] && { echo $((i+1)); return; }; done
+  echo "$1"
+}
+# IPv4 addresses a bind value is reachable at (for URLs and device snippets)
+bind_ips() {
+  local v=$1
+  if [ "$v" = 0.0.0.0 ] || [ -z "$v" ]; then ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel|vnet)/ {split($4, a, "/"); print a[1]}'
+  elif is_ip "$v"; then echo "$v"
+  else ip -4 -o addr show dev "$v" scope global 2>/dev/null | awk '{split($4, a, "/"); print a[1]}'; fi
+}
+bind_label() { [ "$1" = 0.0.0.0 ] && t 'all interfaces' 'усі інтерфейси' || printf '%s' "$1"; }
+iface_of() {   # interface that carries a bind value (for per-interface firewall rules), empty = all
+  local v=$1
+  [ "$v" = 0.0.0.0 ] && return 0
+  if is_ip "$v"; then ip -o addr show 2>/dev/null | awk -v ip="$v" '{split($4, a, "/"); if (a[1] == ip) { print $2; exit }}'; else echo "$v"; fi
+}
+
 if [ "$MODE" = upgrade ]; then
   NF_PORT=$(envget FT_PORT); WEB_PORT=$(envget FT_WEB_PORT); CH_PORT=$(envget FT_CH_URL | sed -n 's/.*:\([0-9]*\)$/\1/p')
   NF_PORT=${NF_PORT:-2055}; WEB_PORT=${WEB_PORT:-3030}; CH_PORT=${CH_PORT:-8123}
   CH_PASSWORD=$(envget FT_CH_PASSWORD); ADMIN_PW=""; WRITE_DEVICE=n; OPEN_FW=n
+  NF_BIND=$(envget FT_BIND); WEB_BIND=$(envget FT_WEB_BIND); NF_BIND=${NF_BIND:-0.0.0.0}; WEB_BIND=${WEB_BIND:-0.0.0.0}
   info "$(t 'Upgrading, settings are kept' 'Оновлення, налаштування збережено') (NetFlow UDP $NF_PORT, web $WEB_PORT)"
 else
   if [ "$EXISTING" = 1 ]; then NF_OWN=$(envget FT_PORT); WEB_OWN=$(envget FT_WEB_PORT); fi
   say ""; say "${B}$(t 'A few questions — press Enter to accept the value in [brackets].' 'Кілька питань — Enter приймає значення в [дужках].')${N}"
   say ""
-  say "${B}1/4 $(t 'Ports' 'Порти')${N}"
+  say "${B}1/5 $(t 'Ports' 'Порти')${N}"
   def=${NF_OWN:-2055}; ok_udp "$def" || { o=$(port_owner udp "$def"); warn "$(t "UDP $def is in use${o:+ by $o}" "UDP $def зайнятий${o:+ програмою $o}")"; def=$(free_from udp "$def"); }
   ask NF_PORT "$(t 'UDP port for NetFlow/IPFIX from your devices' 'UDP-порт для NetFlow/IPFIX від ваших пристроїв')" "$def" ok_udp \
       "$(t 'Use a free port number 1–65535 (this one is invalid or busy).' 'Введіть вільний порт 1–65535 (цей некоректний або зайнятий).')" FT_NETFLOW_PORT
@@ -294,7 +337,21 @@ else
   ask WEB_PORT "$(t 'TCP port for the web interface' 'TCP-порт вебінтерфейсу')" "$def" ok_tcp \
       "$(t 'Use a free port number 1–65535 (this one is invalid or busy).' 'Введіть вільний порт 1–65535 (цей некоректний або зайнятий).')" FT_WEB_PORT
 
-  say ""; say "${B}2/4 $(t 'Your exporter (router / firewall)' 'Ваш експортер (роутер / фаєрвол)')${N}"
+  say ""; say "${B}2/5 $(t 'Network interfaces' 'Мережеві інтерфейси')${N}"
+  say "  ${D}$(t 'Devices send NetFlow to one interface; the web interface can listen on another (e.g. only the internal network).' 'Пристрої надсилають NetFlow на один інтерфейс, а вебінтерфейс може слухати інший (наприклад, лише внутрішню мережу).')${N}"
+  for i in "${!IFACE_ROWS[@]}"; do
+    n=${IFACES[$i]}; a=${IFACE_ROWS[$i]#*$'\t'}
+    say "  $((i+1))) ${B}$n${N}  ${D}$a$([ "$n" = "$DEF_IFACE" ] && t '  (default route)' '  (маршрут за замовчуванням)')${N}"
+  done
+  say "  0) $(t 'all interfaces' 'усі інтерфейси')"
+  ihint=$(t 'A number from the list, 0 for all, an interface name or an IP address of this server.' 'Номер зі списку, 0 — усі, назва інтерфейсу або IP-адреса цього сервера.')
+  if [ "$EXISTING" = 1 ]; then d1=$(iface_number "$(envget FT_BIND)"); d2=$(iface_number "$(envget FT_WEB_BIND)")
+  else d1=$(iface_number "$DEF_IFACE"); d2=$d1; fi
+  ask a "$(t 'Receive NetFlow/IPFIX on' 'Приймати NetFlow/IPFIX на')" "$d1" is_iface "$ihint" FT_NETFLOW_IFACE; NF_BIND=$(iface_value "$a")
+  ask a "$(t 'Web interface on' 'Вебінтерфейс на')" "$d2" is_iface "$ihint" FT_WEB_IFACE; WEB_BIND=$(iface_value "$a")
+  [ "$WEB_BIND" = 0.0.0.0 ] || say "  ${D}$(t 'The web interface also answers on localhost (SSH tunnel: ssh -L' 'Вебінтерфейс також відповідає на localhost (SSH-тунель: ssh -L') $WEB_PORT:localhost:$WEB_PORT …)${N}"
+
+  say ""; say "${B}3/5 $(t 'Your exporter (router / firewall)' 'Ваш експортер (роутер / фаєрвол)')${N}"
   say "  1) FortiGate   2) Cisco   3) MikroTik   4) Juniper   5) Linux / pmacct   6) $(t 'Other / skip' 'Інше / пропустити')"
   def=1; case "${FT_VENDOR:-}" in [Ff]orti*) def=1 ;; [Cc]isco*) def=2 ;; [Mm]ikro*) def=3 ;; [Jj]uni*) def=4 ;; [Ll]inux*|pmacct) def=5 ;; ?*) def=6 ;; esac
   FT_VENDOR_N=$def
@@ -324,17 +381,17 @@ else
     COUNTRY=$(printf '%s' "$COUNTRY" | tr '[:lower:]' '[:upper:]')
   fi
 
-  say ""; say "${B}3/4 $(t 'Administrator password' 'Пароль адміністратора')${N}"
+  say ""; say "${B}4/5 $(t 'Administrator password' 'Пароль адміністратора')${N}"
   say "  ${D}$(t 'Login is "admin". You can change the password later in the web interface.' 'Логін — «admin». Пароль можна змінити пізніше у вебінтерфейсі.')${N}"
   ask_secret ADMIN_PW "$(t 'New password (min. 8 characters)' 'Новий пароль (щонайменше 8 символів)')" FT_ADMIN_PASSWORD
 
-  say ""; say "${B}4/4 $(t 'Firewall' 'Фаєрвол')${N}"
+  say ""; say "${B}5/5 $(t 'Firewall' 'Фаєрвол')${N}"
   OPEN_FW=n
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then FW=ufw
   elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then FW=firewalld
   else FW=""; fi
   if [ -n "$FW" ]; then
-    ask_yn OPEN_FW "$(t "Open UDP $NF_PORT and TCP $WEB_PORT in $FW?" "Відкрити UDP $NF_PORT і TCP $WEB_PORT у $FW?")" y FT_OPEN_FIREWALL
+    ask_yn OPEN_FW "$(t "Open UDP $NF_PORT ($(bind_label "$NF_BIND")) and TCP $WEB_PORT ($(bind_label "$WEB_BIND")) in $FW?" "Відкрити UDP $NF_PORT ($(bind_label "$NF_BIND")) і TCP $WEB_PORT ($(bind_label "$WEB_BIND")) у $FW?")" y FT_OPEN_FIREWALL
   else say "  ${D}$(t 'No active firewall (ufw/firewalld) found — nothing to open.' 'Активного фаєрвола (ufw/firewalld) не знайдено — відкривати нічого.')${N}"; fi
 
   CH_PASSWORD=$(envget FT_CH_PASSWORD); [ -n "$CH_PASSWORD" ] || CH_PASSWORD=$(openssl rand -hex 16)
@@ -342,8 +399,9 @@ else
   if [ -z "$CH_PORT" ]; then CH_PORT=$(free_from tcp 8123); fi
 
   say ""; say "${B}$(t 'Summary' 'Підсумок')${N}"
-  say "  NetFlow/IPFIX   UDP ${B}$NF_PORT${N}   $(t 'from' 'від') ${EXP_IP:-$(t 'any device' 'будь-якого пристрою')}"
-  say "  $(t 'Web interface' 'Вебінтерфейс')    $PROTO://${LAN_IP:-<server>}:${B}$WEB_PORT${N}$([ "$USE_TLS" = yes ] && t ' (self-signed certificate)' ' (самопідписаний сертифікат)')"
+  WEB_IP=$(bind_ips "$WEB_BIND" | head -1)
+  say "  NetFlow/IPFIX   UDP ${B}$NF_PORT${N} $(t 'on' 'на') $(bind_label "$NF_BIND")   $(t 'from' 'від') ${EXP_IP:-$(t 'any device' 'будь-якого пристрою')}"
+  say "  $(t 'Web interface' 'Вебінтерфейс')    $PROTO://${WEB_IP:-${LAN_IP:-<server>}}:${B}$WEB_PORT${N} ($(bind_label "$WEB_BIND"))$([ "$USE_TLS" = yes ] && t ' (self-signed certificate)' ' (самопідписаний сертифікат)')"
   [ "$WRITE_DEVICE" = y ] && say "  $(t 'Device' 'Пристрій')         $DEV_NAME ($VENDOR, $EXP_IP${WAN_IFS:+, WAN $WAN_IFS}${CITY:+, $CITY}${COUNTRY:+ $COUNTRY})"
   say "  $(t 'Admin password' 'Пароль admin')    $([ -n "$ADMIN_PW" ] && t 'set now' 'задано зараз' || t 'flowtrack (change it after login)' 'flowtrack (змініть після входу)')"
   say "  $(t 'Data' 'Дані')             $PREFIX, ClickHouse 127.0.0.1:$CH_PORT"
@@ -402,12 +460,12 @@ FT_CH_URL=http://127.0.0.1:$CH_PORT
 FT_CH_USER=flowtrack
 FT_CH_PASSWORD=$CH_PASSWORD
 FT_CH_DB=flowtrack
-FT_BIND=0.0.0.0
+FT_BIND=$NF_BIND
 FT_PORT=$NF_PORT
 FT_EXPORTERS=$EXP_IP
 FT_FORWARD=
 FT_WORKERS=auto
-FT_WEB_BIND=0.0.0.0
+FT_WEB_BIND=$WEB_BIND
 FT_WEB_PORT=$WEB_PORT
 ENV
     chown root:flowtrack "$ETC/env"; chmod 640 "$ETC/env"
@@ -507,8 +565,17 @@ fi
 
 if [ "${OPEN_FW:-n}" = y ]; then
   open_fw() {
-    if [ "$FW" = ufw ]; then ufw allow "$NF_PORT/udp" && ufw allow "$WEB_PORT/tcp"
-    else firewall-cmd -q --permanent --add-port="$NF_PORT/udp" --add-port="$WEB_PORT/tcp" && firewall-cmd -q --reload; fi
+    local port dev zone
+    for port in "$NF_PORT/udp:$NF_BIND" "$WEB_PORT/tcp:$WEB_BIND"; do
+      dev=$(iface_of "${port#*:}"); port=${port%%:*}
+      if [ "$FW" = ufw ]; then
+        if [ -n "$dev" ]; then ufw allow in on "$dev" to any port "${port%/*}" proto "${port#*/}"; else ufw allow "$port"; fi
+      else
+        zone=""; [ -n "$dev" ] && zone=$(firewall-cmd --get-zone-of-interface="$dev" 2>/dev/null || true)
+        firewall-cmd -q --permanent ${zone:+--zone="$zone"} --add-port="$port"
+      fi
+    done
+    [ "$FW" = ufw ] || firewall-cmd -q --reload
   }
   step "$(t 'Opening firewall ports' 'Відкриття портів у фаєрволі')" open_fw
 fi
@@ -517,7 +584,7 @@ start_all() {
   systemctl restart $UNITS
   systemctl start flowtrack-geoip.timer
   for _ in $(seq 1 30); do
-    if systemctl is-active -q flowtrack-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi
+    if systemctl is-active -q flowtrack-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi   # localhost is always served
     sleep 1
   done
   systemctl status --no-pager $UNITS; journalctl -u flowtrack-collector -u flowtrack-web -n 30 --no-pager; return 1
@@ -528,7 +595,7 @@ step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
 say ""
 say "${G}${B}$(t 'FlowTrack is running.' 'FlowTrack працює.')${N}"
 say ""
-for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel)/ {split($4, a, "/"); print a[1]}'); do say "  ${B}$PROTO://$ip:$WEB_PORT${N}"; done
+for ip in $(bind_ips "$WEB_BIND"); do say "  ${B}$PROTO://$ip:$WEB_PORT${N}"; done
 if [ "$USE_TLS" = yes ]; then
   FP=$(openssl x509 -noout -fingerprint -sha256 -in "$TLS_DIR/cert.pem" 2>/dev/null | cut -d= -f2)
   say "  ${D}$(t 'The certificate is self-signed, so the browser warns once — check that its SHA-256 fingerprint matches, then continue:' 'Сертифікат самопідписаний, тож браузер один раз попередить — звірте відбиток SHA-256 і продовжуйте:')${N}"
@@ -538,7 +605,7 @@ if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwo
 else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
 say ""
 if [ "$MODE" != upgrade ]; then
-  CIP=${LAN_IP:-<collector-ip>}
+  CIP=$(bind_ips "$NF_BIND" | head -1); CIP=${CIP:-${LAN_IP:-<collector-ip>}}
   say "${B}$(t 'Now point your device at the collector' 'Тепер налаштуйте пристрій на колектор'): $CIP UDP $NF_PORT${N}"
   case "${VENDOR:-}" in
     Fortinet) cat <<CFG

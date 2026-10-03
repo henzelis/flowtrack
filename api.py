@@ -20,10 +20,12 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
-from common import CHError, ch, exporters_mtime, is_private, load_exporters, load_json, load_ui_exporter, save_ui_exporter  # noqa: E402
+from common import (STATE_DIR, CHError, ch, describe_listeners, exporters_mtime, iface_addrs, is_private, listen_signature,  # noqa: E402
+                    load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_WEB_PORT', '3030'))
+WEB_LISTEN = []          # set at start: what this web server listens on
 TLS_CERT = os.environ.get('FT_TLS_CERT', '')
 TLS_KEY = os.environ.get('FT_TLS_KEY', '')
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -137,6 +139,27 @@ def exporters_cfg():
     return NAMES.exporters
 
 
+_listen_cache = [0, None]
+
+
+def listen_info():
+    """Where the collector receives NetFlow (from its state file) and where this web server listens; interface
+    addresses are read live, so a changed DHCP address shows up."""
+    if time.time() - _listen_cache[0] < 15:
+        return _listen_cache[1]
+    def live(items):
+        return [{'iface': x['iface'], 'addrs': (iface_addrs(x['iface']) or x['addrs']) if x['iface'] else x['addrs']} for x in items]
+    try:
+        with open(os.path.join(STATE_DIR, 'collector.json')) as f:
+            st = json.load(f)
+        netflow = {'port': int(st['port']), 'listen': live(st.get('listen') or [])}
+    except (OSError, ValueError, KeyError, TypeError):
+        netflow = None
+    out = {'netflow': netflow, 'web': {'port': PORT, 'listen': live(WEB_LISTEN)}}
+    _listen_cache[:] = [time.time(), out]
+    return out
+
+
 # ------------------------------------------------------------------ endpoints
 
 def api_meta(q):
@@ -149,7 +172,7 @@ def api_meta(q):
                         'if_names': c.get('if_names', {}), 'local_if': c.get('local_if'),
                         'city': c.get('city', ''), 'country': c.get('country', ''), 'lat': c.get('lat'), 'lon': c.get('lon'), 'last': r['last']})
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')
-    return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0,
+    return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
             'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0'}
 
 
@@ -406,7 +429,7 @@ def api_devices(q):
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}))})
-    return {'devices': out, 'collector': collector_health()}
+    return {'devices': out, 'collector': collector_health(), 'listen': listen_info()}
 
 
 def api_host(q):
@@ -751,15 +774,16 @@ class Server(ThreadingHTTPServer):
     TLS handshakes run in the per-connection thread, so slow clients never block accept()."""
     daemon_threads = True
 
-    def __init__(self, addr, handler, ctx=None, family=socket.AF_INET):
-        self.address_family = family
-        super().__init__(addr, handler)
+    def __init__(self, sock, handler, ctx=None):
+        """sock: an already bound socket from common.open_listeners (any interface / address / family)."""
+        self.address_family = sock.family
+        super().__init__(sock.getsockname()[:2], handler, bind_and_activate=False)
+        self.socket.close()
+        self.socket = sock
+        self.server_address = sock.getsockname()
+        self.server_name, self.server_port = str(self.server_address[0]), self.server_address[1]
+        self.server_activate()
         self.ctx = ctx
-
-    def server_bind(self):
-        if self.address_family == socket.AF_INET6:       # accept IPv4 too (dual-stack)
-            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-        super().server_bind()
 
     def finish_request(self, request, client_address):
         if not self.ctx:
@@ -798,15 +822,25 @@ def tls_context():
 if __name__ == '__main__':
     AUTH = Auth()
     ctx = tls_context()
-    if BIND in ('', '0.0.0.0', '::') or ':' in BIND:
-        try:
-            srv = Server(('::' if BIND in ('', '0.0.0.0', '::') else BIND, PORT), H, ctx, socket.AF_INET6)
-        except OSError:                  # IPv6 disabled on this host
-            if ':' in BIND and BIND != '::':
-                raise
-            srv = Server(('0.0.0.0', PORT), H, ctx)
-    else:
-        srv = Server((BIND, PORT), H, ctx)
-    print(f'[flowtrack-api] serving on {"https" if ctx else "http"}://{BIND}:{PORT}'
+    try:
+        LISTENERS = open_listeners(BIND, PORT, socket.SOCK_STREAM, log=lambda m: print(f'[flowtrack-api] {m}', flush=True))
+    except (OSError, ValueError) as e:
+        print(f'[flowtrack-api] cannot listen on FT_WEB_BIND={BIND!r} port {PORT}: {e}', flush=True)
+        sys.exit(1)
+    WEB_LISTEN = describe_listeners(LISTENERS)
+    servers = [Server(sock, H, ctx) for sock, _ in LISTENERS]
+    where = '; '.join((x['iface'] or 'all interfaces') + (f" ({', '.join(x['addrs'])})" if x['addrs'] else '') for x in WEB_LISTEN)
+    print(f'[flowtrack-api] serving {"https" if ctx else "http"} on TCP {PORT}: {where}'
           f'{" (plain HTTP redirects to HTTPS)" if ctx else ""}', flush=True)
-    srv.serve_forever()
+    def watch_addresses(start=listen_signature(BIND)):
+        while True:                      # an interface got another address (DHCP): exit, systemd restarts us
+            time.sleep(30)
+            sig = listen_signature(BIND)
+            if sig != start:
+                print(f'[flowtrack-api] listening addresses changed ({", ".join(start)} -> {", ".join(sig or ["none"])}); restarting', flush=True)
+                os._exit(3)
+    if any(dev for _, dev in LISTENERS):
+        threading.Thread(target=watch_addresses, daemon=True).start()
+    for srv in servers[1:]:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    servers[0].serve_forever()
