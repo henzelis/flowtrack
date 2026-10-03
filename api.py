@@ -315,20 +315,21 @@ def api_geo(q):
     return {'rows': rows}
 
 
-def iface(c, idx, nbytes, ext):
+def iface(c, idx, nbytes, ext, seen=()):
     names = c.get('if_names', {})
     role = 'wan' if idx in c.get('wan_ifs', []) else 'local' if c.get('local_if') == idx and c.get('local_if') is not None else 'lan'
     custom = names.get(str(idx), '')
     return {'index': idx, 'name': custom or ('local' if role == 'local' else f'if {idx}'), 'custom_name': custom,
-            'role': role, 'wan': role == 'wan', 'bytes': nbytes, 'ext_share': round(ext / nbytes, 3) if nbytes else 0}
+            'role': role, 'wan': role == 'wan', 'bytes': nbytes, 'ext_share': round(ext / nbytes, 3) if nbytes else 0,
+            'addrs': c.get('if_addrs', {}).get(str(idx), []), 'seen_addrs': list(seen)}
 
 
-def interfaces_of(c, rows):
+def interfaces_of(c, rows, seen_addrs):
     """Interfaces seen in the data, plus those only mentioned in the settings (so a WAN index that never
     shows up in the data is visible and can be corrected)."""
-    out = [iface(c, int(r['i']), int(r['bytes']), int(r['ext'])) for r in rows]
+    out = [iface(c, int(r['i']), int(r['bytes']), int(r['ext']), seen_addrs.get(int(r['i']), ())) for r in rows]
     seen = {i['index'] for i in out}
-    configured = set(c.get('wan_ifs', [])) | {int(k) for k in c.get('if_names', {}) if str(k).isdigit()}
+    configured = set(c.get('wan_ifs', [])) | {int(k) for key in ('if_names', 'if_addrs') for k in c.get(key, {}) if str(k).isdigit()}
     if c.get('local_if') is not None:
         configured.add(int(c['local_if']))
     for idx in sorted(configured - seen):
@@ -355,6 +356,22 @@ def api_devices(q):
             SELECT exporter, in_if AS i, bytes AS b, if({pub.format(x=src)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY
             UNION ALL SELECT exporter, out_if AS i, bytes AS b, if({pub.format(x=dst)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY)
         GROUP BY exporter, i ORDER BY exporter, i""", {'selfs': selfs}, fmt='JSON')
+    # NetFlow does not carry interface addresses; show what the data reveals so the user can recognise ports:
+    # the source NAT address used when leaving an interface (the uplink's public IP) and the private /24
+    # networks that send traffic into it (LAN segments). Only addresses with at least 10 % of the interface's flows.
+    hints = ch("""SELECT exporter, i, a FROM (
+            SELECT exporter, i, a, c, sum(c) OVER (PARTITION BY exporter, i) AS t FROM (
+                SELECT exporter, out_if AS i, nat_ip AS a, count() AS c FROM flows
+                WHERE ts >= now() - INTERVAL 1 DAY AND dir = 'up' AND nat_ip != '' AND nat_ip != int_ip GROUP BY exporter, i, a
+                UNION ALL
+                SELECT exporter, in_if AS i, concat(IPv4NumToString(bitAnd(IPv4StringToNumOrDefault(int_ip), 4294967040)), '/24') AS a, count() AS c FROM flows
+                WHERE ts >= now() - INTERVAL 1 DAY AND dir IN ('up', 'internal') AND int_ip != exporter AND isIPv4String(int_ip)
+                  AND (isIPAddressInRange(int_ip, '10.0.0.0/8') OR isIPAddressInRange(int_ip, '172.16.0.0/12') OR isIPAddressInRange(int_ip, '192.168.0.0/16'))
+                GROUP BY exporter, i, a))
+        WHERE c >= 0.1 * t ORDER BY exporter, i, c DESC LIMIT 3 BY exporter, i""", fmt='JSON')
+    seen_addrs = {}
+    for h in hints:
+        seen_addrs.setdefault(h['exporter'], {}).setdefault(int(h['i']), []).append(h['a'])
     out = []
     seen = {s['exporter'] for s in stats}
     for ip in exp:
@@ -372,7 +389,7 @@ def api_devices(q):
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
-                    'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']])})
+                    'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}))})
     return {'devices': out}
 
 
@@ -455,8 +472,9 @@ def device_from_body(b):
             raise BadRequest(f'Некоректна публічна IP: {x}')
     cfg['public_ips'] = pubs
     old = exporters_cfg().get(ip, {})
-    if old.get('if_names'):
-        cfg['if_names'] = old['if_names']
+    for k in ('if_names', 'if_addrs'):
+        if old.get(k):
+            cfg[k] = old[k]
     return ip, cfg
 
 
@@ -475,7 +493,7 @@ def post_device_interfaces(body, user):
     items = body.get('interfaces')
     if not isinstance(items, list) or len(items) > 1024:
         raise BadRequest('Очікується список інтерфейсів')
-    names, wan, local = {}, [], None
+    names, addrs, wan, local = {}, {}, [], None
     for it in items:
         try:
             idx = int(it.get('index'))
@@ -488,6 +506,18 @@ def post_device_interfaces(body, user):
             raise BadRequest(f'Назва інтерфейсу {idx}: до 32 символів, без керівних символів')
         if name:
             names[str(idx)] = name
+        raw = it.get('addrs') or []
+        if isinstance(raw, str):
+            raw = raw.replace(',', ' ').split()
+        if not isinstance(raw, list) or len(raw) > 8:
+            raise BadRequest(f'Інтерфейс {idx}: до 8 адрес')
+        try:
+            # 'a.b.c.d/nn' keeps its prefix (interface address with mask), a bare address stays bare
+            ok = [str(ipaddress.ip_interface(a) if '/' in a else ipaddress.ip_address(a)) for a in (str(x).strip() for x in raw) if a]
+        except ValueError as e:
+            raise BadRequest(f'Інтерфейс {idx}: некоректна адреса ({e})')
+        if ok:
+            addrs[str(idx)] = ok
         role = it.get('role', 'lan')
         if role == 'wan':
             wan.append(idx)
@@ -499,7 +529,7 @@ def post_device_interfaces(body, user):
             raise BadRequest('Роль: lan, wan або local')
     merged = exporters_cfg().get(ip, {})
     entry = load_ui_exporter(ip)
-    entry.update({'if_names': names, 'wan_ifs': sorted(set(wan)), 'local_if': local})
+    entry.update({'if_names': names, 'if_addrs': addrs, 'wan_ifs': sorted(set(wan)), 'local_if': local})
     entry.setdefault('name', merged.get('name', ip))
     save_ui_exporter(ip, entry)
     NAMES.reload()

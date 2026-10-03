@@ -342,3 +342,8 @@ table.compact .app-b{max-width:120px;overflow:hidden;text-overflow:ellipsis;whit
 .ifrole option{background:#0c1838}
 .btn:disabled{opacity:.45;cursor:default}
 tr.unseen td{opacity:.75}
+.ifaddr{border:1px solid var(--edge);border-radius:8px;padding:5px 9px;background:rgba(0,0,0,.3);color:var(--ink);font:12.5px var(--f-mono);outline:none;width:min(260px,100%)}
+.ifaddr:focus{border-color:var(--blue-hi)}
+.ifseen{font-size:11px;margin-top:3px}
+#dBox tr.picked td{background:rgba(47,123,255,.12)}
+#dBox tr.picked td:first-child{box-shadow:inset 3px 0 0 var(--blue-hi)}
