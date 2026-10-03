@@ -128,6 +128,7 @@ main{min-width:0;padding:18px 22px 36px}
 .kcard .v{font:700 25px/1.15 var(--f-mono);letter-spacing:-.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kcard .tr{font:600 12.5px var(--f-mono);color:var(--ok);align-self:end;justify-self:end}
 .kcard .tr.dn{color:var(--crit)}
+.kcard .tr.nodata{grid-column:2/-1;justify-self:start;font-size:11.5px}
 .kcard svg.spark{grid-column:2/-1;width:100%;height:26px;margin-top:4px}
 
 /* river */

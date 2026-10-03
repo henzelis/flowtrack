@@ -18,21 +18,24 @@ function setLang(l){ try { localStorage.setItem('ft-lang', l); } catch (e) {} do
   set('nav', 'aria-label', 'Розділи'); set('collState', 'textContent', 'Колектор'); set('ingK', 'textContent', 'Прийом записів');
   set('q', 'placeholder', 'Пошук: IP, сервіс, країна, порт…  (ip:10.0.0.5  service:Telegram  -country:US  port:443)'); set('q', 'aria-label', 'Пошук і фільтр');
   set('devLbl', 'title', 'Пристрій-експортер'); set('devSel', 'aria-label', 'Пристрій'); set('rangeLbl', 'title', 'Період'); set('rangeSel', 'aria-label', 'Період');
-  set('bell', 'aria-label', 'Події');
+  set('bell', 'aria-label', 'Події'); set('trafLbl', 'title', 'Трафік'); set('trafSel', 'aria-label', 'Трафік');
+  const tnames = {internet:'Інтернет', internal:'Внутрішній', all:'Увесь трафік'};
+  document.querySelectorAll('#trafSel option').forEach(o => { if (tnames[o.value]) o.textContent = tnames[o.value]; });
   const names = {'1h':'Остання година', '6h':'Останні 6 годин', '24h':'Останні 24 години', '7d':'Останні 7 днів', '30d':'Останні 30 днів'};
   document.querySelectorAll('#rangeSel option').forEach(o => { if (names[o.value]) o.textContent = names[o.value]; });
 })();
 
 // ===================== state, api =====================
-const state = {view:'overview', range:'24h', filters:[], heroMode:'map', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null, ifDev:null, ifEdit:null};
+const state = {view:'overview', range:'24h', filters:[], heroMode:'map', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null, ifDev:null, ifEdit:null, traffic:'internet'};
 let META = {devices:[]}, ME = null;
 const isAdmin = () => ME && ME.role === 'admin';
+const isInternal = () => state.traffic === 'internal';
 const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto'];
 const FILTER_LABEL = {ip:T('host','хост'), dst:T('ext. IP','зовн. IP'), service:T('service','сервіс'), l7:T('protocol','протокол'), country:T('country','країна'), city:T('city','місто'), port:T('port','порт'), device:T('device','пристрій'), asn:'ASN', dir:T('direction','напрямок'), proto:'L4'};
 let renderSeq = 0;
 
 async function api(path, params = {}, extraFilters = []){
-  const qs = new URLSearchParams({range:state.range, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
+  const qs = new URLSearchParams({range:state.range, t:state.traffic, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
   const r = await fetch(`api/${path}?${qs}`);
   if (r.status === 401) { showLogin(T('Session ended — sign in again', 'Сесія завершилась — увійдіть знову')); throw new Error(T('login required', 'потрібен вхід')); }
   const body = await r.json().catch(() => ({}));
@@ -177,8 +180,10 @@ function createRiver(host, opts){
   function size(){ kick(); const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; }
   const ro = new ResizeObserver(size); ro.observe(host); size(); onCleanup(() => ro.disconnect());
   const nodeLabel = (side, k) => {
-    if (side === 'L') { if (k === '__other') return [T('Other inside', 'Інші внутрішні'), T('Remaining addresses', 'решта адрес')]; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? T('Inside', 'внутрішня') : T('Public (self)', 'публічна (self)'))]; }
-    if (k === '__other') return [T('Other outside', 'Інші зовнішні'), T('Remaining addresses', 'решта адрес')]; const r = info.R.get(k) || {}; return [k, [r.service, r.city || ccName(r.country)].filter(Boolean).join(' · ')];
+    if (side === 'L') { if (k === '__other') return [isInternal() ? T('Other sources', 'Інші джерела') : T('Other inside', 'Інші внутрішні'), T('Remaining addresses', 'решта адрес')]; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? T('Inside', 'внутрішня') : T('Public (self)', 'публічна (self)'))]; }
+    if (k === '__other') return [isInternal() ? T('Other destinations', 'Інші отримувачі') : T('Other outside', 'Інші зовнішні'), T('Remaining addresses', 'решта адрес')]; const r = info.R.get(k) || {};
+    if (isInternal()) return [r.name || k, r.name ? k : T('Inside', 'внутрішня')];
+    return [k, [r.service, r.city || ccName(r.country)].filter(Boolean).join(' · ')];
   };
   let bands = [], cards = [];
   function layout(){
@@ -228,7 +233,7 @@ function createRiver(host, opts){
     if (!data) return;
     const L = layout();
     ctx.font = `600 ${compact ? 11.5 : 13}px Manrope, sans-serif`; ctx.fillStyle = C.ink2; ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left'; ctx.fillText(T('Inside addresses', 'Внутрішні адреси'), 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText(T('Outside addresses', 'Зовнішні адреси'), W - 2, L.headH / 2 - 2);
+    ctx.textAlign = 'left'; ctx.fillText(isInternal() ? T('Sources', 'Джерела') : T('Inside addresses', 'Внутрішні адреси'), 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText(isInternal() ? T('Destinations', 'Отримувачі') : T('Outside addresses', 'Зовнішні адреси'), W - 2, L.headH / 2 - 2);
     if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText(T('No traffic under this filter for the selected period', 'Немає трафіку під цей фільтр за вибраний період'), W / 2, H / 2); return; }
     ctx.globalCompositeOperation = 'lighter';
     for (const b of bands) {
@@ -398,7 +403,7 @@ async function kpiCards(){
   // trend vs the previous equal period; until enough history exists, say since when data is collected and when the comparison appears
   const since = s.oldest ? (Date.now() / 1000 - s.oldest > 86400 ? dmy(s.oldest) + ' ' : '') + hhmm(s.oldest) : '';
   const ready = s.oldest ? s.oldest + 2 * s.range : 0, readyTxt = ready ? new Date(ready * 1000).toLocaleString(LOC, {day:'numeric', month:'long', hour:'2-digit', minute:'2-digit'}) : '';
-  const noPrev = `<span class="tr" style="color:var(--ink3)" title="${T('Comparison with the previous equal period will appear once twice as much data is collected', 'Порівняння з попереднім таким самим періодом з’явиться, коли назбирається вдвічі більше даних')}${readyTxt ? T(' — approx. ', ' — орієнтовно ') + readyTxt : ''}">${since ? T('data since ', 'дані з ') + since : T('no data', 'немає даних')}</span>`;
+  const noPrev = `<span class="tr nodata" style="color:var(--ink3)" title="${T('Comparison with the previous equal period will appear once twice as much data is collected', 'Порівняння з попереднім таким самим періодом з’явиться, коли назбирається вдвічі більше даних')}${readyTxt ? T(' — approx. ', ' — орієнтовно ') + readyTxt : ''}">${since ? T('data since ', 'дані з ') + since : T('no data', 'немає даних')}</span>`;
   const trend = (a, b) => !s.has_prev || !b ? noPrev : `<span class="tr ${a < b ? 'dn' : ''}" title="${T('compared to the previous equal period', 'порівняно з попереднім таким самим періодом')}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
   const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]);
   const card = (ic, k, v, tr, sp, col) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sparkSvg(sp, col)}</div>`;
@@ -411,10 +416,11 @@ let heroScope = null;
 function mountHero(){
   if (heroScope) heroScope.dispose();
   heroScope = childScope();
-  const g = state.heroMode === 'graph';
+  const g = state.heroMode === 'graph' || isInternal();     // no geography for inside <-> inside traffic
   fill('heroSec', `${ph('flow', T('Network traffic', 'Мережевий трафік'), g ? `<span id="heroLbl" class="tnum">${T('live · window 2 min · updating…', 'наживо · вікно 2 хв · оновлюється…')}</span>` : T('connections for the selected period · new lines appear live', 'з’єднання за вибраний період · нові лінії з’являються наживо'),
-      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stand out next to large ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale)}</span>` + seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode)
-      + `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('inside', 'внутр.')}</span><span><i style="background:${C.ext}"></i>${T('outside', 'зовн.')}</span></span>`)}
+      `<span style="visibility:${g ? 'visible' : 'hidden'}">${seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stand out next to large ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale)}</span>` + (isInternal() ? '' : seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode))
+      + (isInternal() ? `<span class="legend"><span><i class="bar" style="background:${C.up}"></i>${T('source → destination', 'джерело → отримувач')}</span></span>`
+        : `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('inside', 'внутр.')}</span><span><i style="background:${C.ext}"></i>${T('outside', 'зовн.')}</span></span>`))}
     <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div>`);
   wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
@@ -446,7 +452,7 @@ function vOverview(){
       <section class="glass panel">${ph('users', T('Top hosts', 'Топ хостів'), T('inside addresses', 'внутрішні адреси'))}<div id="hostBox" class="loading"></div></section>
     </div>
     <section class="glass panel s4">${ph('chart', T('Traffic trend', 'Динаміка трафіку'), rangeLabel())}<div class="chart" id="cTrend"></div></section>
-    <section class="glass panel s4">${ph('conv', T('Top conversations', 'Топ розмов'), T('inside → outside address', 'внутрішня → зовнішня адреса'))}<div id="convBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('conv', T('Top conversations', 'Топ розмов'), (isInternal() ? T('source → destination', 'джерело → отримувач') : T('inside → outside address', 'внутрішня → зовнішня адреса')))}<div id="convBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('list', T('Recent flows', 'Останні потоки'), T('new network activity', 'нова мережева активність'), `<button class="lnk" id="toFlows">${T('All', 'Усі')}</button>`)}<div id="recentBox" class="loading"></div></section></div>`;
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
@@ -462,7 +468,7 @@ function vOverview(){
   api('series').then(s => { const el = document.getElementById('cTrend'); if (el) trendChart(el, s); }).catch(e => fill('cTrend', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:5}); return convRows(t.rows, t.total); });
   section('recentBox', async () => { const t = await api('flows', {limit:7});
-    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time', 'Час')}</th><th>${T('Inside → outside · service', 'Внутр. → зовн. · сервіс')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : '←'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(f.service)}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records', 'Немає записів')}</div></td></tr>`}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time', 'Час')}</th><th>${isInternal() ? T('Source → destination · service', 'Джерело → отримувач · сервіс') : T('Inside → outside · service', 'Внутр. → зовн. · сервіс')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'down' ? 'd' : 'u'}">${f.dir === 'down' ? '←' : '→'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(dv(f.service))}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records', 'Немає записів')}</div></td></tr>`}</tbody></table></div>`; });
 }
 
 // filters that describe a river selection (a host, an outside address, or a conversation band); none for «Інші»
@@ -494,9 +500,9 @@ async function inspectorHtml(sel){
 function vFlows(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s9">${ph('flow', T('Exchange between inside and outside addresses', 'Обмін між внутрішніми та зовнішніми адресами'), T('Colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»'),
+    <section class="glass panel s9">${ph('flow', isInternal() ? T('Exchange between inside addresses', 'Обмін між внутрішніми адресами') : T('Exchange between inside and outside addresses', 'Обмін між внутрішніми та зовнішніми адресами'), isInternal() ? T('source → destination · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»', 'джерело → отримувач · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»') : T('Colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»'),
       seg('metricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) + seg('liveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], state.flowLive ? 'live' : 'period'), true)}
-      <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>${T('download (outside → inside)', 'download (зовн. → внутр.)')}</span><span><i class="bar" style="background:${C.up}"></i>${T('upload (inside → outside)', 'upload (внутр. → зовн.)')}</span><span><i style="background:${C.int}"></i>${T('inside address', 'внутрішня адреса')}</span><span><i style="background:${C.ext}"></i>${T('outside address', 'зовнішня адреса')}</span><span id="winLbl" class="mono" style="margin-left:auto"></span></div>
+      <div class="legend" style="margin:-6px 0 10px">${isInternal() ? `<span><i class="bar" style="background:${C.up}"></i>${T('source → destination', 'джерело → отримувач')}</span><span><i style="background:${C.int}"></i>${T('inside address', 'внутрішня адреса')}</span>` : `<span><i class="bar" style="background:${C.down}"></i>${T('download (outside → inside)', 'download (зовн. → внутр.)')}</span><span><i class="bar" style="background:${C.up}"></i>${T('upload (inside → outside)', 'upload (внутр. → зовн.)')}</span><span><i style="background:${C.int}"></i>${T('inside address', 'внутрішня адреса')}</span><span><i style="background:${C.ext}"></i>${T('outside address', 'зовнішня адреса')}</span>`}<span id="winLbl" class="mono" style="margin-left:auto"></span></div>
       <div class="river big" id="river"></div></section>
     <div class="col s3">
       <section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO.pulse, 22)}</span><span class="k">${T('Total traffic', 'Загальний трафік')}</span><span class="v" id="kTot">—</span></section>
@@ -534,7 +540,7 @@ function vFlows(){
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:6});
-    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Inside', 'Внутр.')}</th><th>${T('Outside', 'Зовн.')}</th><th>${T('Service', 'Сервіс')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="${T('Filter by this conversation', 'Фільтр за цією розмовою')}"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${isInternal() ? T('Source', 'Джерело') : T('Inside', 'Внутр.')}</th><th>${isInternal() ? T('Destination', 'Отримувач') : T('Outside', 'Зовн.')}</th><th>${T('Service', 'Сервіс')}</th><th class="num">${T('Volume', 'Обсяг')}</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="${T('Filter by this conversation', 'Фільтр за цією розмовою')}"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
   document.getElementById('convBox').addEventListener('click', e => { const tr = e.target.closest('tr[data-conv]'); if (!tr) return;
     const [ip, dst] = tr.dataset.conv.split('|'); putFilter({k:'ip', v:ip, neg:false}); putFilter({k:'dst', v:dst, neg:false}); state.sel = null; render(); });
   section('protoBox', async () => { const t = await api('top', {dim:'l7', limit:6});
@@ -545,7 +551,7 @@ function vFlows(){
 function recTable(rows){
   return `<div class="tw"><table><thead><tr><th>${T('Time', 'Час')}</th><th>${T('Exporter', 'Експортер')}</th><th>${T('Inside address', 'Внутрішня адреса')}</th><th></th><th>${T('Outside address', 'Зовнішня адреса')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Service', 'Сервіс')}</th><th>${T('Country', 'Країна')}</th><th class="num">${T('Bytes', 'Байти')}</th><th class="num">${T('Packets', 'Пакети')}</th><th class="num">${T('Dur.', 'Трив.')}</th></tr></thead><tbody>
     ${rows.map((f, i) => `<tr class="click" data-rec="${i}"><td class="mono">${hms(f.t)}</td><td class="ipl">${esc(devName(f.exporter))}</td>
-      <td class="ipl"><button class="link" data-f="ip" data-v="${esc(f.int_ip)}">${esc(f.name || f.int_ip)}</button> <span class="nat">:${f.int_port}</span></td><td class="${f.dir === 'up' ? 'u' : 'd'}">${f.dir === 'up' ? '→' : f.dir === 'down' ? '←' : '↔'}</td>
+      <td class="ipl"><button class="link" data-f="ip" data-v="${esc(f.int_ip)}">${esc(f.name || f.int_ip)}</button> <span class="nat">:${f.int_port}</span></td><td class="${f.dir === 'down' ? 'd' : 'u'}">${f.dir === 'down' ? '←' : f.dir === 'transit' ? '↔' : '→'}</td>
       <td class="ipl"><button class="link" data-f="dst" data-v="${esc(f.ext_ip)}">${esc(f.ext_ip)}</button> <span class="nat">:${f.ext_port}</span></td><td><span class="tag">${esc(dv(f.l7))}</span></td><td>${svcBadge(f.service)}</td>
       <td>${f.country ? `<button class="link" data-f="country" data-v="${esc(f.country)}">${esc(f.country)}</button>` : '—'}</td><td class="num mono">${fmtB(f.bytes)}</td><td class="num mono">${fmtN(f.packets)}</td><td class="num mono">${Math.max(0, f.t - f.t0).toFixed(0)} ${T('s', 'с')}</td></tr>
       ${state.openFlow === i ? `<tr class="detail"><td colspan="11"><div class="kv"><div><span>${T('Host', 'Хост')}</span><b>${esc(f.name || '—')} · ${esc(f.int_ip)}</b></div><div><span>${T('NAT (after translation)', 'NAT (після трансляції)')}</span><b>${f.nat_ip ? esc(f.nat_ip) + ':' + f.nat_port : '—'}</b></div>
@@ -598,7 +604,7 @@ function vTalkers(){
   };
   section('tKpi', async () => {
     const [s, ser, t] = await Promise.all([api('summary'), api('series'), api('top', {dim:'int_ip', limit:1})]);
-    const trend = (a, b) => !s.has_prev || !b ? `<span class="tr" style="color:var(--ink3)">${T(`data since ${hhmm(s.oldest)}`, `дані з ${hhmm(s.oldest)}`)}</span>` : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
+    const trend = (a, b) => !s.has_prev || !b ? `<span class="tr nodata" style="color:var(--ink3)">${T(`data since ${hhmm(s.oldest)}`, `дані з ${hhmm(s.oldest)}`)}</span>` : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
     const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]), top = t.rows[0];
     const card = (ic, k, v, tr, sp, col, sub) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sub ? `<span class="s" style="grid-column:2/-1;font-size:12.5px;color:var(--ink2)">${sub}</span>` : ''}${sp ? sparkSvg(sp, col) : ''}</div>`;
     return card('pulse', T('Total traffic', 'Загальний трафік'), fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
@@ -1010,13 +1016,15 @@ function renderShell(){
   ds.innerHTML = `<option value="">${T(`All devices (${META.devices.length})`, `Усі пристрої (${META.devices.length})`)}</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = df ? df.v : '';
   document.getElementById('rangeSel').value = state.range;
+  document.getElementById('trafSel').value = state.traffic;
 }
-function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
-function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r')) state.range = p.get('r'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
+function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
+function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
 function render(){ if (state.view === 'users' && !isAdmin()) state.view = 'overview'; renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
 
 document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) putFilter({k:'device', v:e.target.value, neg:false}); render(); };
 document.getElementById('rangeSel').onchange = e => { state.range = e.target.value; render(); };
+document.getElementById('trafSel').onchange = e => { state.traffic = e.target.value; state.sel = null; render(); };
 const q = document.getElementById('q');
 q.addEventListener('keydown', e => {
   if (e.key === 'Enter') {

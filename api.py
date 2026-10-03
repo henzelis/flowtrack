@@ -97,6 +97,12 @@ def scope(q):
     """-> (where_sql, params, range_seconds, step). Time window is anchored to now()."""
     rng = RANGES.get(q.get('range', ['24h'])[0], 86400)
     where, params = ['ts >= now() - toIntervalSecond({rng:UInt32})'], {'rng': rng}
+    # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
+    traffic = q.get('t', ['internet'])[0]
+    if traffic == 'internet':
+        where.append("dir IN ('up', 'down')")
+    elif traffic == 'internal':
+        where.append("dir = 'internal'")
     try:
         flt = json.loads(q.get('f', ['[]'])[0])
     except ValueError:
@@ -182,7 +188,7 @@ def api_summary(q):
     wprev = where.replace('ts >= now() - toIntervalSecond({rng:UInt32})', 'ts >= now() - toIntervalSecond({rng2:UInt32})')
     p['rng2'] = rng * 2
     r = ch(f"""SELECT
-        sumIf(bytes, cur) AS s_bytes, sumIf(bytes, cur AND dir = 'up') AS s_up, sumIf(bytes, cur AND dir = 'down') AS s_down,
+        sumIf(bytes, cur) AS s_bytes, sumIf(bytes, cur AND dir IN ('up', 'internal')) AS s_up, sumIf(bytes, cur AND dir NOT IN ('up', 'internal')) AS s_down,
         countIf(cur) AS s_flows, sumIf(packets, cur) AS s_packets,
         uniqExactIf(int_ip, cur) + uniqExactIf(ext_ip, cur) AS s_ips, uniqExactIf(int_ip, cur) AS s_hosts, uniqExactIf(int_ip, NOT cur) AS s_p_hosts,
         sumIf(bytes, NOT cur) AS s_p_bytes, countIf(NOT cur) AS s_p_flows, uniqExactIf(int_ip, NOT cur) + uniqExactIf(ext_ip, NOT cur) AS s_p_ips,
@@ -215,7 +221,7 @@ def api_series(q):
             SELECT {bucket} AS t, if(has(tops, toString({col})), toString({col}), '__other') AS k, sum(bytes) AS b
             FROM flows WHERE {where} GROUP BY t, k ORDER BY t""", p, fmt='JSON')
         return {'step': step, 'range': rng, 'rows': [[int(r['t']), r['k'], int(r['b'])] for r in rows]}
-    rows = ch(f"""SELECT {bucket} AS t, sumIf(bytes, dir = 'down') AS dn, sumIf(bytes, dir = 'up') AS up,
+    rows = ch(f"""SELECT {bucket} AS t, sumIf(bytes, dir = 'down') AS dn, sumIf(bytes, dir IN ('up', 'internal')) AS up,
             sumIf(bytes, dir NOT IN ('up', 'down')) AS other, count() AS fl
         FROM flows WHERE {where} GROUP BY t ORDER BY t""", p, fmt='JSON')
     return {'step': step, 'range': rng, 'rows': [[int(r['t']), int(r['dn']), int(r['up']), int(r['other']), int(r['fl'])] for r in rows]}
@@ -227,19 +233,28 @@ def api_top(q):
     p['lim'] = max(1, min(q1(q, 'limit', '10', int), 500))
     if dim == 'conv':
         rows = ch(f"""SELECT int_ip, ext_ip, any(service) AS service, any(country) AS country, any(city) AS city,
-                sumIf(bytes, dir = 'up') AS up, sumIf(bytes, dir != 'up') AS dn, count() AS fl, sum(packets) AS pk
+                sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl, sum(packets) AS pk
             FROM flows WHERE {where} GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
         for r in rows:
             r['name'] = NAMES.get(r['int_ip'])
     elif dim == 'host_svc':     # each inside host with its main service and L7 protocol
         rows = ch(f"""SELECT int_ip AS k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto,
                 sum(u) AS up, sum(d) AS dn, sum(f) AS fl, 0 AS pk
-            FROM (SELECT int_ip, service, l7, proto, sum(bytes) AS b, sumIf(bytes, dir = 'up') AS u, sumIf(bytes, dir != 'up') AS d, count() AS f
+            FROM (SELECT int_ip, service, l7, proto, sum(bytes) AS b, sumIf(bytes, dir IN ('up', 'internal')) AS u, sumIf(bytes, dir NOT IN ('up', 'internal')) AS d, count() AS f
                   FROM flows WHERE {where} GROUP BY int_ip, service, l7, proto)
             GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
         for r in rows:
             r['name'] = NAMES.get(r['k'])
             r['proto'] = int(r['proto'])
+    elif dim == 'int_ip' and q1(q, 't', 'internet') == 'internal':
+        # inside <-> inside: a host is both the source (int_ip) and the destination (ext_ip) of records;
+        # count what it sent (up) and what it received (dn)
+        rows = ch(f"""SELECT k, sum(u) AS up, sum(d) AS dn, sum(f) AS fl, sum(pk_) AS pk FROM (
+                SELECT int_ip AS k, bytes AS u, 0 AS d, 1 AS f, packets AS pk_ FROM flows WHERE {where}
+                UNION ALL SELECT ext_ip AS k, 0 AS u, bytes AS d, 1 AS f, packets AS pk_ FROM flows WHERE {where})
+            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+        for r in rows:
+            r['name'] = NAMES.get(r['k'])
     elif dim in DIMS:
         col = DIMS[dim]
         extra = ''
@@ -253,7 +268,7 @@ def api_top(q):
             extra = ', any(country) AS country, any(lat) AS la, any(lon) AS lo'
         elif dim == 'ext_port':
             extra = ', any(l7) AS l7, any(proto) AS proto_n, uniqExact(int_ip) AS hosts, uniqExact(ext_ip) AS peers, any(service) AS service'
-        rows = ch(f"""SELECT toString({col}) AS k, sumIf(bytes, dir = 'up') AS up, sumIf(bytes, dir != 'up') AS dn,
+        rows = ch(f"""SELECT toString({col}) AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
                 count() AS fl, sum(packets) AS pk {extra}
             FROM flows WHERE {where} GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
         if dim == 'int_ip':
@@ -291,7 +306,7 @@ def api_river(q):
         p['win'] = win
         wwin = where + ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     links = ch(f"""SELECT if(has({{L:Array(String)}}, int_ip), int_ip, '__other') AS l, if(has({{R:Array(String)}}, ext_ip), ext_ip, '__other') AS r,
-            sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir != 'up') AS dn, toUnixTimestamp(max(ts)) AS t
+            sumIf({metric}, dir IN ('up', 'internal')) AS up, sumIf({metric}, dir NOT IN ('up', 'internal')) AS dn, toUnixTimestamp(max(ts)) AS t
         FROM flows WHERE {wwin} GROUP BY l, r""", p, fmt='JSON')
     info = {}
     if right:
@@ -300,7 +315,7 @@ def api_river(q):
     more_l, more_r = int(tops['nl']) > len(left), int(tops['nr']) > len(right)
     out = [{'l': x['l'], 'r': x['r'], 'up': float(x['up']), 'dn': float(x['dn']), 't': int(x['t'])} for x in links
            if (x['l'] != '__other' or more_l) and (x['r'] != '__other' or more_r)]
-    return {'left': [host_obj(ip) for ip in left], 'right': [{'ip': ip, **{k: info.get(ip, {}).get(k, '') for k in ('service', 'country', 'city')}} for ip in right],
+    return {'left': [host_obj(ip) for ip in left], 'right': [{'ip': ip, 'name': NAMES.get(ip) if is_private(ip) else '', **{k: info.get(ip, {}).get(k, '') for k in ('service', 'country', 'city')}} for ip in right],
             'more_left': more_l, 'more_right': more_r, 'links': out, 'window_end': p.get('wend'), 'window': win if live else rng, 'live': live, 'range': rng}
 
 
@@ -331,7 +346,7 @@ def api_live(q):
 
 def api_geo(q):
     where, p, rng, step = scope(q)
-    rows = ch(f"""SELECT exporter, country, city, any(lat) AS la, any(lon) AS lo, sumIf(bytes, dir = 'up') AS up, sumIf(bytes, dir != 'up') AS dn, count() AS fl
+    rows = ch(f"""SELECT exporter, country, city, any(lat) AS la, any(lon) AS lo, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl
         FROM flows WHERE {where} AND lat != 0 GROUP BY exporter, country, city ORDER BY up + dn DESC LIMIT 300""", p, fmt='JSON')
     for r in rows:
         r['up'], r['dn'], r['fl'] = int(r['up']), int(r['dn']), int(r['fl'])
