@@ -9,9 +9,12 @@
   so an existing collector keeps working on the same exporter feed.
 """
 import json
+import multiprocessing as mp
 import os
+import queue
 import signal
 import socket
+import struct
 import sys
 import time
 from datetime import datetime, timezone
@@ -33,10 +36,25 @@ TEMPLATES_FILE = os.path.join(STATE_DIR, 'templates.json')
 # (the netflow library names v9 field 50 'NTERVAL' — a typo for FLOW_SAMPLER_RANDOM_INTERVAL)
 SAMPLING_FIELDS = ('SAMPLING_INTERVAL', 'FLOW_SAMPLER_RANDOM_INTERVAL', 'NTERVAL',
                    'samplingInterval', 'samplingPacketInterval', 'samplerRandomInterval')
+RCVBUF = int(os.environ.get('FT_RCVBUF', str(32 * 1024 * 1024)))   # capped by net.core.rmem_max (install.sh raises it)
 BATCH_SECONDS = 2.0
 BATCH_MAX = 20000
 BUFFER_MAX = 500000        # rows kept in memory while ClickHouse is down
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+DISPATCH_EVERY = 64        # packets per batch handed to a worker (or after DISPATCH_SECONDS)
+DISPATCH_SECONDS = 0.02
+QUEUE_MAX = 500            # batches waiting per worker (~32k packets, a few seconds of a burst); beyond that: queue drops
+
+
+def workers_setting(v=None):
+    """FT_WORKERS: number of decoding processes; 'auto' = half the CPUs, at most 4."""
+    v = (os.environ.get('FT_WORKERS', 'auto') if v is None else v).strip().lower()
+    if v in ('', 'auto'):
+        return max(1, min(4, (os.cpu_count() or 2) // 2))
+    try:
+        return max(1, min(64, int(v)))
+    except ValueError:
+        return 1
 
 
 def log(msg):
@@ -133,9 +151,6 @@ class Exporter:
         self.ip = ip
         self.configure(cfg)
         self.templates = {'netflow': {}, 'ipfix': {}}
-        self.last_seq = None
-        self.version = 0
-        self._last_count = 0
         self.reset()
 
     def configure(self, cfg):
@@ -153,26 +168,136 @@ class Exporter:
         return r if r and r > 1 else self.cfg_sampling
 
     def reset(self):
-        self.packets = self.records = self.lost = self.no_template = self.decode_errors = 0
+        self.records = self.no_template = self.decode_errors = 0
         self.max_sampling = 1
 
 
-class Collector:
+# ---- packet accounting without decoding records: sequence numbers -> lost packets, and which packets
+# carry templates / options data (every worker must see those). Runs in the receiver for every packet.
+class Accounting:
     def __init__(self):
+        self.ex = {}
+
+    def take(self):
+        """{ip: {packets, lost, version}} since the last call."""
+        out = {ip: {'packets': x['packets'], 'lost': x['lost'], 'version': x['version']} for ip, x in self.ex.items() if x['packets']}
+        for x in self.ex.values():
+            x['packets'] = x['lost'] = 0
+        return out
+
+    def account(self, ip, data):
+        """Count the packet; True if it carries templates or options records."""
+        x = self.ex.get(ip)
+        if x is None:
+            x = self.ex[ip] = {'packets': 0, 'lost': 0, 'version': 0, 'tpl': {}, 'seq': {}}
+        x['packets'] += 1
+        try:
+            ver, seq, dom, nrec, shared = peek(data, x['tpl'])
+        except (struct.error, IndexError):
+            return True                     # malformed: let a worker count it as a decode error
+        if ver in (5, 9, 10):
+            x['version'] = ver
+        if seq is None:
+            return shared
+        last = x['seq'].get(dom)
+        if last is not None:
+            diff = (seq - last[0]) % 2**32
+            if ver == 9:                     # v9 counts export packets
+                if 0 < diff < 100000:
+                    x['lost'] += diff - 1
+            elif last[1] is not None and 0 < diff < 1000000:   # v5 counts flows, IPFIX data records
+                x['lost'] += max(0, diff - last[1])
+        x['seq'][dom] = (seq, nrec)
+        return shared
+
+
+def _tpl_fields(body, off, n, ipfix):
+    """Length of a record made of n fields starting at off (None if variable-length) and the new offset."""
+    length = 0
+    for _ in range(n):
+        ftype, flen = struct.unpack_from('!HH', body, off)
+        off += 4
+        if ipfix and ftype & 0x8000:
+            off += 4                         # enterprise number
+        if flen == 0xFFFF:
+            length = None
+        elif length is not None:
+            length += flen
+    return length, off
+
+
+def peek(data, tpl):
+    """(version, sequence, domain, data records or None if unknown, carries templates/options data).
+    tpl = {(domain, template id): (record length or None, is options template)}, learned here."""
+    ver, = struct.unpack_from('!H', data)
+    if ver == 5:
+        count, = struct.unpack_from('!H', data, 2)
+        seq, = struct.unpack_from('!I', data, 16)
+        return 5, seq, 0, count, False
+    if ver == 9:
+        seq, dom = struct.unpack_from('!II', data, 12)
+        pos, t_id, o_id, ipfix = 20, 0, 1, False
+    elif ver == 10:
+        seq, dom = struct.unpack_from('!II', data, 8)
+        pos, t_id, o_id, ipfix = 16, 2, 3, True
+    else:
+        return ver, None, 0, None, False
+    nrec, shared = 0, False
+    while pos + 4 <= len(data):
+        sid, slen = struct.unpack_from('!HH', data, pos)
+        if slen < 4:
+            break
+        body = data[pos + 4:pos + slen]
+        if sid == t_id:
+            shared, off = True, 0
+            while off + 4 <= len(body):
+                tid, n = struct.unpack_from('!HH', body, off)
+                if tid < 256:                # padding
+                    break
+                length, off = _tpl_fields(body, off + 4, n, ipfix)
+                tpl[(dom, tid)] = (length, False)
+        elif sid == o_id:
+            shared, off = True, 0
+            while off + 6 <= len(body):
+                tid, a, b = struct.unpack_from('!HHH', body, off)
+                if tid < 256:
+                    break
+                n = a if ipfix else (a + b) // 4          # IPFIX: field count; v9: scope + option bytes
+                length, off = _tpl_fields(body, off + 6, n, ipfix)
+                tpl[(dom, tid)] = (length, True)
+        elif sid >= 256:
+            t = tpl.get((dom, sid))
+            if t is None or not t[0]:
+                nrec = None                  # unknown template: records cannot be counted
+            else:
+                shared = shared or t[1]      # options data (sampler configuration)
+                if nrec is not None:
+                    nrec += (slen - 4) // t[0]
+        pos += slen
+    return ver, seq, dom, nrec, shared
+
+
+class Collector:
+    """Decodes packets and writes flows to ClickHouse. One per worker process; the receiver feeds it.
+    Used directly (tests, benchmarks), it also does the packet accounting itself."""
+    def __init__(self, worker=0, accounting=True):
+        self.worker = worker
         self.geo = Geo()
         self.cfg = load_exporters()
         self.cfg_mtime = exporters_mtime()
         self.exporters = {}
+        self.acct = Accounting() if accounting else None
         self.buf = []
         self.dropped = 0
         self._saved_templates = None
-        self.last_flush = self.last_stats = time.time()
+        self.last_flush = self.last_tick = time.time()
 
     def exporter(self, ip):
         e = self.exporters.get(ip)
         if e is None:
             e = self.exporters[ip] = Exporter(ip, self.cfg.get(ip, {}))
-            log(f'new exporter {ip} (wan interfaces: {sorted(e.wan) or "not configured, using RFC1918"})')
+            if self.worker == 0:
+                log(f'new exporter {ip} (wan interfaces: {sorted(e.wan) or "not configured, using RFC1918"})')
         return e
 
     # ------------------------------------------------------------ records
@@ -260,53 +385,45 @@ class Collector:
         })
         e.records += 1
 
-    def handle_packet(self, data, addr):
-        for fwd in FORWARD:
-            try:
-                self.fwd_socks[fwd].sendto(data, fwd)
-            except (OSError, KeyError):
-                pass
+    def handle_packet(self, data, addr, learn_only=False):
+        """learn_only: another worker stores this packet's flows; only learn its templates / sampling here."""
         ip = norm_addr(addr[0])
         if ALLOW and ip not in ALLOW and ip not in self.cfg:     # allow-list = env + devices configured (incl. from the UI)
             return
+        if self.acct:
+            self.acct.account(ip, data)
         e = self.exporter(ip)
-        e.packets += 1
         try:
             pkt = parse_packet(data, e.templates)
         except (V9TemplateNotRecognized, IPFIXTemplateNotRecognized):
-            e.no_template += 1
+            if not learn_only:
+                e.no_template += 1
             return
         except Exception as ex:
-            e.decode_errors += 1
-            if e.decode_errors <= 5:
-                log(f'WARN decode error from {ip}: {ex}')
+            if not learn_only:
+                e.decode_errors += 1
+                if e.decode_errors <= 5:
+                    log(f'WARN decode error from {ip}: {ex}')
             return
         hdr = pkt.header
-        e.version = hdr.version
-        seq = getattr(hdr, 'sequence', getattr(hdr, 'sequence_number', None))
-        if seq is not None and hdr.version == 9:
-            # v9 counts export packets; IPFIX counts records (checked below), v5 counts flows
-            if e.last_seq is not None and 0 < (seq - e.last_seq) % 2**32 < 100000:
-                e.lost += (seq - e.last_seq) % 2**32 - 1
-            e.last_seq = seq
-        elif seq is not None and hdr.version in (5, 10):
-            if e.last_seq is not None and 0 < (seq - e.last_seq) % 2**32 < 1000000:
-                e.lost += (seq - e.last_seq) % 2**32 - e._last_count
-            e.last_seq = seq
         now = time.time()
         for opt in getattr(pkt, 'options', None) or []:          # NetFlow v9 options data (sampler config)
             r = sampling_of(getattr(opt, 'data', {}) or {})
             if r:
                 e.opt_sampling = r
-        flows = pkt.flows
-        e._last_count = len(flows)
-        for f in flows:
+        for f in pkt.flows:
             if hasattr(f, 'data') and isinstance(f.data, dict):
                 rec = f.data
             elif hasattr(f, 'fields'):
                 rec = {k: getattr(f, k, None) for k in f.fields}
             else:
                 rec = dict(vars(f))
+            if learn_only:
+                if not g(rec, 'IPV4_SRC_ADDR', 'IPV6_SRC_ADDR', 'sourceIPv4Address', 'sourceIPv6Address'):
+                    r = sampling_of(rec)     # IPFIX options record
+                    if r:
+                        e.opt_sampling = r
+                continue
             self.handle_record(e, rec, hdr.version, hdr, now)
 
     # ------------------------------------------------------------ output
@@ -325,22 +442,18 @@ class Collector:
                 del self.buf[:drop]
                 self.dropped += drop
 
-    def write_stats(self):
-        now = utc(time.time())
-        rows = []
+    def take_stats(self):
+        """Per-exporter decoding counters since the last call, plus this worker's output state."""
+        exp = {}
         for e in self.exporters.values():
-            rows.append({'ts': now, 'exporter': e.ip, 'version': e.version, 'packets': e.packets, 'records': e.records,
-                         'lost': e.lost, 'no_template': e.no_template, 'decode_errors': e.decode_errors,
-                         'templates': len(e.templates['netflow']) + len(e.templates['ipfix']),
-                         'sampling': max(e.max_sampling, e.opt_sampling or 1, e.cfg_sampling)})
-        if not rows:
-            return
-        try:
-            ch('INSERT INTO exporter_stats FORMAT JSONEachRow', data='\n'.join(json.dumps(r) for r in rows).encode())
-            for e in self.exporters.values():
+            if e.records or e.no_template or e.decode_errors:
+                exp[e.ip] = {'records': e.records, 'no_template': e.no_template, 'decode_errors': e.decode_errors,
+                             'templates': len(e.templates['netflow']) + len(e.templates['ipfix']),
+                             'sampling': max(e.max_sampling, e.opt_sampling or 1, e.cfg_sampling)}
                 e.reset()
-        except (CHError, OSError) as ex:
-            log(f'WARN stats insert failed: {str(ex)[:200]}')
+        out = {'exp': exp, 'buffered': len(self.buf), 'dropped_rows': self.dropped}
+        self.dropped = 0
+        return out
 
     def save_templates(self):
         text = templates_file_text({ip: e.templates for ip, e in self.exporters.items()})
@@ -387,6 +500,139 @@ class Collector:
             e.configure(self.cfg.get(ip, {}))
         log(f'exporter config reloaded ({len(self.cfg)} configured)')
 
+    def tick(self, now):
+        if now - self.last_flush >= BATCH_SECONDS or len(self.buf) >= BATCH_MAX:
+            self.flush()
+            self.last_flush = now
+        if now - self.last_tick >= 10:
+            self.last_tick = now
+            if self.worker == 0:            # every worker sees every template; one of them saves them
+                self.save_templates()
+            self.reload_config()
+
+
+def worker_main(n, q, results, ppid):
+    """Decoding process: batches of (packet, exporter ip, learn_only) from the receiver -> ClickHouse."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)     # the receiver stops us with a sentinel after draining
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    c = Collector(worker=n, accounting=False)
+    c.load_templates()
+    last_report = time.time()
+    while True:
+        try:
+            batch = q.get(timeout=0.5)
+        except queue.Empty:
+            batch = ()
+        if batch is None:
+            break
+        for data, ip, learn in batch:
+            c.handle_packet(data, (ip, 0), learn)
+        now = time.time()
+        c.tick(now)
+        if now - last_report >= 10:
+            results.put((n, c.take_stats()))
+            last_report = now
+        if os.getppid() != ppid:            # receiver gone (killed): stop instead of idling forever
+            break
+    while c.buf:                             # write everything that is left; stop only if ClickHouse fails
+        left = len(c.buf)
+        c.flush()
+        if len(c.buf) >= left:
+            log(f'WARN worker {n}: {len(c.buf)} rows not written at shutdown')
+            c.dropped += len(c.buf)
+            break
+    if n == 0:
+        c.save_templates()
+    results.put((n, c.take_stats()))
+
+
+class Receiver:
+    """Reads the UDP socket as fast as possible, accounts packets per exporter, and spreads them over the
+    workers round-robin. Packets carrying templates or options data go to every worker (one stores the
+    flows, the others only learn), so a single busy exporter is decoded in parallel."""
+
+    def __init__(self, workers):
+        self.n = workers
+        self.acct = Accounting()
+        self.cfg = load_exporters()
+        self.cfg_mtime = exporters_mtime()
+        self.exp_acc, self.col_acc = {}, self.empty_col()
+        self.worker_state = {}
+        self.rr = 0
+        self.last_rx = (0, 0)
+
+    @staticmethod
+    def empty_col():
+        return {'packets': 0, 'socket_drops': 0, 'queue_drops': 0, 'dropped_rows': 0, 'rx_queue_peak': 0}
+
+    def start_worker(self, i):
+        p = self.ctx.Process(target=worker_main, args=(i, self.queues[i], self.results, os.getpid()), name=f'flowtrack-worker-{i}', daemon=True)
+        p.start()
+        self.procs[i] = p
+
+    def dispatch(self):
+        for i, items in enumerate(self.pending):
+            if not items:
+                continue
+            try:
+                self.queues[i].put_nowait(items)
+            except queue.Full:
+                self.col_acc['queue_drops'] += sum(1 for it in items if not it[2])
+            self.pending[i] = []
+        self.npending = 0
+
+    def drain_results(self):
+        while True:
+            try:
+                n, st = self.results.get_nowait()
+            except queue.Empty:
+                return
+            self.worker_state[n] = st['buffered']
+            self.col_acc['dropped_rows'] += st['dropped_rows']
+            for ip, x in st['exp'].items():
+                a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0,
+                                                 'decode_errors': 0, 'templates': 0, 'sampling': 1})
+                for k in ('records', 'no_template', 'decode_errors'):
+                    a[k] += x[k]
+                a['templates'] = max(a['templates'], x['templates'])
+                a['sampling'] = max(a['sampling'], x['sampling'])
+
+    def sample_socket(self):
+        """Kernel counters of our socket: cumulative drops (receive buffer full) and bytes queued now."""
+        st = socket_counters(self.sock)
+        if st is None:
+            return
+        drops, rxq = st
+        if drops >= self.last_rx[0]:
+            self.col_acc['socket_drops'] += drops - self.last_rx[0]
+        self.last_rx = (drops, rxq)
+        self.col_acc['rx_queue_peak'] = max(self.col_acc['rx_queue_peak'], rxq)
+
+    def write_stats(self):
+        for ip, x in self.acct.take().items():
+            a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0,
+                                             'decode_errors': 0, 'templates': 0, 'sampling': 1})
+            a['packets'] += x['packets']
+            a['lost'] += x['lost']
+            a['version'] = x['version'] or a['version']
+        now = utc(time.time())
+        rows = [{'ts': now, 'exporter': ip, **a} for ip, a in self.exp_acc.items() if a['packets'] or a['records']]
+        col = {'ts': now, 'workers': sum(1 for p in self.procs if p.is_alive()), 'rcvbuf': self.rcvbuf,
+               'buffered': sum(self.worker_state.values()), **self.col_acc}
+        try:
+            if rows:
+                ch('INSERT INTO exporter_stats FORMAT JSONEachRow', data='\n'.join(json.dumps(r) for r in rows).encode())
+            self.exp_acc = {}
+            ch('INSERT INTO collector_stats FORMAT JSONEachRow', data=json.dumps(col).encode())
+            self.col_acc = self.empty_col()
+        except (CHError, OSError) as ex:
+            log(f'WARN stats insert failed: {str(ex)[:200]}')
+
+    def reload_config(self):
+        mt = exporters_mtime()
+        if mt != self.cfg_mtime:
+            self.cfg_mtime, self.cfg = mt, load_exporters()
+
     def run(self):
         for attempt in range(60):
             try:
@@ -398,12 +644,22 @@ class Collector:
         else:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
-        sock = udp_listener(BIND, PORT)
-        sock.settimeout(0.5)
-        self.fwd_socks = {fwd: socket.socket(socket.AF_INET6 if ':' in fwd[0] else socket.AF_INET, socket.SOCK_DGRAM) for fwd in FORWARD}
-        self.load_templates()
+        self.sock = sock = udp_listener(BIND, PORT)
+        sock.settimeout(DISPATCH_SECONDS)
+        self.rcvbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        fwd_socks = {fwd: socket.socket(socket.AF_INET6 if ':' in fwd[0] else socket.AF_INET, socket.SOCK_DGRAM) for fwd in FORWARD}
+        self.ctx = mp.get_context('spawn')
+        self.queues = [self.ctx.Queue(maxsize=QUEUE_MAX) for _ in range(self.n)]
+        self.results = self.ctx.Queue()
+        self.procs = [None] * self.n
+        for i in range(self.n):
+            self.start_worker(i)
+        self.pending, self.npending = [[] for _ in range(self.n)], 0
         where = f"[::]:{PORT} (IPv4 + IPv6)" if sock.family == socket.AF_INET6 and BIND in ('', '0.0.0.0', '::') else f'{BIND}:{PORT}'
-        log(f'listening on {where}; forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
+        log(f'listening on {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
+            f'forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
+        if self.rcvbuf < RCVBUF:
+            log(f'NOTE socket buffer capped by net.core.rmem_max; raise it to {RCVBUF} to absorb bursts (install.sh does)')
         stop = False
 
         def on_signal(*_):
@@ -412,32 +668,84 @@ class Collector:
         signal.signal(signal.SIGTERM, on_signal)
         signal.signal(signal.SIGINT, on_signal)
 
+        last_dispatch = last_sec = last_min = time.time()
         while not stop:
             try:
                 data, addr = sock.recvfrom(65535)
-                self.handle_packet(data, addr)
             except socket.timeout:
-                pass
+                data = None
+            except OSError:
+                if stop:
+                    break
+                raise
+            if data is not None:
+                for fwd in FORWARD:
+                    try:
+                        fwd_socks[fwd].sendto(data, fwd)
+                    except OSError:
+                        pass
+                ip = norm_addr(addr[0])
+                if not ALLOW or ip in ALLOW or ip in self.cfg:
+                    self.col_acc['packets'] += 1
+                    if self.acct.account(ip, data):
+                        for i in range(self.n):
+                            self.pending[i].append((data, ip, i != self.rr))
+                    else:
+                        self.pending[self.rr].append((data, ip, False))
+                    self.rr = (self.rr + 1) % self.n
+                    self.npending += 1
             now = time.time()
-            if now - self.last_flush >= BATCH_SECONDS or len(self.buf) >= BATCH_MAX:
-                self.flush()
-                self.last_flush = now
-            if now - self.last_stats >= 60:
+            if self.npending >= DISPATCH_EVERY or (self.npending and now - last_dispatch >= DISPATCH_SECONDS):
+                self.dispatch()
+                last_dispatch = now
+            if now - last_sec >= 1:
+                last_sec = now
+                self.sample_socket()
+                self.drain_results()
+                for i, p in enumerate(self.procs):
+                    if not p.is_alive():
+                        log(f'WARN worker {i} exited (code {p.exitcode}); restarting')
+                        self.start_worker(i)
+            if now - last_min >= 60:
+                last_min = now
                 self.write_stats()
-                self.save_templates()
-                self.last_stats = now
                 self.reload_config()
-        self.flush()
+        self.dispatch()
+        for q in self.queues:
+            try:
+                q.put(None, timeout=5)
+            except queue.Full:
+                pass
+        deadline = time.time() + 60
+        for p in self.procs:
+            p.join(max(0.1, deadline - time.time()))
+        self.sample_socket()
+        self.drain_results()
         self.write_stats()
-        self.save_templates()
         log('stopped')
+
+
+def socket_counters(sock):
+    """(drops, bytes queued) of this UDP socket from /proc/net/udp[6], or None."""
+    ino = str(os.fstat(sock.fileno()).st_ino)
+    for path in ('/proc/net/udp6', '/proc/net/udp'):
+        try:
+            with open(path) as f:
+                next(f)
+                for line in f:
+                    p = line.split()
+                    if len(p) > 12 and p[9] == ino:
+                        return int(p[-1]), int(p[4].split(':')[1], 16)
+        except (OSError, StopIteration, ValueError):
+            continue
+    return None
 
 
 def udp_listener(bind, port):
     """Listen on IPv4 and IPv6 at once when binding to all addresses; IPv4-only if IPv6 is unavailable."""
     def setup(s):
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8 * 1024 * 1024)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, RCVBUF)
         return s
     if bind in ('', '0.0.0.0', '::') or ':' in bind:
         try:
@@ -454,4 +762,4 @@ def udp_listener(bind, port):
 
 
 if __name__ == '__main__':
-    Collector().run()
+    Receiver(workers_setting()).run()

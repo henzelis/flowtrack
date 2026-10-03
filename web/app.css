@@ -347,3 +347,8 @@ tr.unseen td{opacity:.75}
 .ifseen{font-size:11px;margin-top:3px}
 #dBox tr.picked td{background:rgba(47,123,255,.12)}
 #dBox tr.picked td:first-child{box-shadow:inset 3px 0 0 var(--blue-hi)}
+.collbar{display:flex;flex-wrap:wrap;gap:10px 26px;align-items:flex-end;margin-top:14px;padding:12px 14px;border:1px solid var(--hair);border-radius:12px;background:rgba(0,0,0,.18)}
+.collbar > div{display:grid;gap:2px;min-width:0}
+.collbar > div span{font-size:11px;color:var(--ink2)}
+.collbar > div b{font-size:13px}
+.collbar-h{margin-right:6px}

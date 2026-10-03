@@ -30,6 +30,11 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   and packets are scaled up accordingly. The rate is stored with every record and shown per device.
 - Exporter health: records/s, templates, packets lost (sequence gaps), records skipped while waiting
   for a template, effective sampling rate.
+- Several decoding workers (`FT_WORKERS`): one receiver process only reads the socket and spreads
+  packets over the workers, templates go to all of them — so even a single busy exporter uses many
+  cores, and a slow database never stalls the socket.
+- Collector health: packets dropped by the kernel (socket buffer full), by the worker queues, and records
+  lost while ClickHouse was unreachable — shown on the Devices page and raised as an event.
 - Optional raw forwarding (`FT_FORWARD`) so another collector keeps receiving the same feed.
 
 **Web UI**
@@ -137,6 +142,8 @@ users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`
 | `FT_BIND`, `FT_PORT` | `0.0.0.0`, `2055` | NetFlow/IPFIX UDP listener |
 | `FT_EXPORTERS` | *(empty = any)* | allowed exporter IPs, comma-separated; devices added in the UI are allowed automatically |
 | `FT_FORWARD` | *(empty)* | `host:port,…` — copy every datagram unchanged to other collectors |
+| `FT_WORKERS` | `auto` | decoding processes; `auto` = half the CPU threads, at most 4 |
+| `FT_RCVBUF` | `33554432` | UDP receive buffer in bytes (capped by `net.core.rmem_max`, which the installer raises to 32 MB) |
 | `FT_WEB_BIND`, `FT_WEB_PORT` | `0.0.0.0`, `3030` | web UI and API |
 | `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
@@ -244,27 +251,25 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 
 ## Performance
 
-One collector process handles about **30,000 flow records per second** on one CPU core (measured on an
-AMD Ryzen 7 5700X with real FortiGate NetFlow v9 traffic, including enrichment and ClickHouse inserts):
+Measured on an AMD Ryzen 7 5700X (8 cores / 16 threads, ClickHouse on the same machine) with real FortiGate
+NetFlow v9 packets offered for 15 s, counting what was stored after the queues drained:
 
-| Offered load | Stored |
-|---|---|
-| 10,400 records/s | 100 % |
-| 20,800 records/s | 100 % |
-| 31,200 records/s | 98.7 % |
-| 41,600 records/s | 76 % — the collector is CPU-bound; the excess is dropped at the socket |
+| Workers | Offered load | Stored | Lost |
+|---|---|---|---|
+| 1 | 41,600 records/s | 100 % (catches up ~10 s after the burst) | 0 |
+| 4 | 83,300 records/s | 100 % (keeps up) | 0 |
+| 4 | 125,000 records/s | 93 % | 7 % dropped at the worker queues, counted and reported |
 
-For scale: a small office firewall exports a few records per second, a busy 1 Gbit/s internet edge
-typically a few thousand. Above ~25,000 records/s per collector, use sampling on the exporter or run
-more collectors (see the roadmap).
+One worker decodes and enriches about **30,000 records per second** on one core; the receiver itself needs about a
+quarter of a core at 125,000 records/s. For scale: a small office firewall exports a few records per
+second, a busy 1 Gbit/s internet edge typically a few thousand. If the Devices page reports drops, raise
+`FT_WORKERS` or use sampling on the exporter.
 
 ## Roadmap
 
 **Next — scale and reach**
-- Several collector workers on one port (`SO_REUSEPORT`), so many exporters use many cores
 - English web interface and a language switch; screenshots in this README
 - Automated tests and CI (GitHub Actions), API tokens for scripts and monitoring
-- Socket-level drop counter in exporter health
 
 **Features**
 - Notifications: Telegram, e-mail, webhook

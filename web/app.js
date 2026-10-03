@@ -684,7 +684,7 @@ function vDevices(){
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', 'Пристрої-експортери', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв', isAdmin() ? '<button class="btn primary" id="addDev">+ Підключити пристрій</button>' : '<span class="nat">додавати пристрої може адміністратор</span>')}<div id="dBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('ip', 'Інтерфейси', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download')}<div id="ifBox" class="loading"></div></section></div>`;
   if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
-  section('dBox', async () => { const d = (await api('devices')).devices; window.__devs = d;
+  section('dBox', async () => { const res = await api('devices'), d = res.devices; window.__devs = d;
     // the interfaces panel shows one device: the one picked in the table, else the global device filter, else the first
     const df = state.filters.find(f => f.k === 'device' && !f.neg);
     if (!d.some(x => x.ip === state.ifDev)) state.ifDev = (d.find(x => df && x.ip === df.v) || d.find(x => x.interfaces.length) || d[0] || {}).ip;
@@ -697,7 +697,21 @@ function vDevices(){
       ${d.map(x => { const never = !x.last, stale = Date.now() / 1000 - x.last > 180, st = never ? 'warn' : stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
         return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? 'ще не надсилав даних' : stale ? 'немає даних понад 3 хв' : 'онлайн'}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ' <span class="tag">не описаний</span>'}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? 'очікую' : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
           <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td>
-          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div><p class="note">Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
+          ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">Змінити</button></td>` : ''}</tr>`; }).join('') || '<tr><td colspan="12"><div class="empty">Ще жоден пристрій не надіслав дані</div></td></tr>'}</tbody></table></div>${collectorBar(res.collector)}<p class="note">Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.${isAdmin() ? ' Зміни опису колектор підхоплює протягом хвилини.' : ''}</p>`; });
+}
+// receiver health: workers, socket buffer and every place a packet can be lost on the way to the database
+function collectorBar(c){
+  if (!c) return '';
+  const lost = c.socket_drops + c.queue_drops, pct = 100 * lost / Math.max(1, c.packets + lost), fill = c.rcvbuf ? Math.round(100 * c.rx_queue_peak / c.rcvbuf) : 0;
+  const cell = (k, v, tip, bad) => `<div title="${esc(tip)}"><span>${k}</span><b class="mono"${bad ? ' style="color:var(--warn)"' : ''}>${v}</b></div>`;
+  return `<div class="collbar"><div class="collbar-h"><b>Колектор</b><span class="nat">за ${c.minutes} хв</span></div>
+    ${cell('Воркери', c.workers, 'Процеси, що декодують пакети (FT_WORKERS у /etc/flowtrack/env)', !c.workers)}
+    ${cell('Пакетів прийнято', c.packets.toLocaleString('uk-UA'), 'Датаграми, прочитані із сокета')}
+    ${cell('Відкинуто сокетом', c.socket_drops.toLocaleString('uk-UA'), 'Ядро відкинуло пакети: буфер сокета був повний (колектор не встигав або сплеск більший за буфер)', c.socket_drops)}
+    ${cell('Відкинуто чергою', c.queue_drops.toLocaleString('uk-UA'), 'Воркери не встигали забирати пакети', c.queue_drops)}
+    ${cell('Втрачено записів', c.dropped_rows.toLocaleString('uk-UA'), 'Записи, які не вдалося зберегти: ClickHouse був недоступний занадто довго', c.dropped_rows)}
+    ${cell('Буфер сокета', `${fmtB(c.rcvbuf)} · пік ${fill}%`, 'Розмір буфера прийому і найбільше його заповнення (net.core.rmem_max обмежує розмір)', fill > 50)}
+    ${cell('Втрати', (lost ? pct.toFixed(pct < 0.01 ? 3 : 2) : '0') + '%', 'Частка пакетів, які колектор не обробив', lost)}</div>`;
 }
 // generic centered dialog; returns {root, close}
 const ROLE_UI = {lan:'LAN', wan:'WAN (інтернет)', local:'Сам пристрій'};

@@ -337,6 +337,22 @@ def interfaces_of(c, rows, seen_addrs):
     return sorted(out, key=lambda i: i['index'])
 
 
+def collector_health(minutes=15):
+    """Receiver totals for the last minutes (None before the collector wrote any)."""
+    try:
+        r = ch(f"""SELECT count() AS n, argMax(workers, ts) AS workers, argMax(rcvbuf, ts) AS rcvbuf, sum(packets) AS packets,
+                sum(socket_drops) AS socket_drops, sum(queue_drops) AS queue_drops, sum(dropped_rows) AS dropped_rows,
+                max(rx_queue_peak) AS rx_queue_peak, argMax(buffered, ts) AS buffered, toUnixTimestamp(max(ts)) AS last
+            FROM collector_stats WHERE ts >= now() - INTERVAL {int(minutes)} MINUTE""", fmt='JSON')[0]
+    except CHError:                    # table appears when the new collector starts
+        return None
+    if not int(r['n']):
+        return None
+    out = {k: int(v) for k, v in r.items() if k != 'n'}
+    out['minutes'] = minutes
+    return out
+
+
 def api_devices(q):
     exp = exporters_cfg()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
@@ -390,7 +406,7 @@ def api_devices(q):
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}))})
-    return {'devices': out}
+    return {'devices': out, 'collector': collector_health()}
 
 
 def api_host(q):
@@ -421,6 +437,16 @@ def api_alerts(q):
         pct = 100 * int(r['lost']) / max(1, int(r['packets']) + int(r['lost']))
         out.append({'sev': 'warn' if pct < 2 else 'crit', 'kind': 'export_loss', 'device': r['exporter'], 'title': 'Втрати експорту',
                     'text': f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: втрачено {r['lost']} пакетів ({pct:.2f}%) за годину. Перевірте канал до колектора.", 'when': 'за годину'})
+    col = collector_health(60)
+    if col and col['socket_drops'] + col['queue_drops']:
+        lost = col['socket_drops'] + col['queue_drops']
+        pct = 100 * lost / max(1, col['packets'] + lost)
+        out.append({'sev': 'warn' if pct < 1 else 'crit', 'kind': 'collector_drops', 'title': 'Колектор не встигає',
+                    'text': f"За годину відкинуто {lost} пакетів ({pct:.2f}%): буфер сокета — {col['socket_drops']}, черга воркерів — {col['queue_drops']}. "
+                            f"Збільште FT_WORKERS у /etc/flowtrack/env (зараз {col['workers']}) або net.core.rmem_max.", 'when': 'за годину'})
+    if col and col['dropped_rows']:
+        out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': 'Записи не збережено',
+                    'text': f"За годину {col['dropped_rows']} записів не потрапили в базу: ClickHouse був недоступний довше, ніж вміщує буфер колектора.", 'when': 'за годину'})
     for r in ch("""SELECT int_ip, country, min(ts) AS first FROM flows WHERE ts >= now() - INTERVAL 1 DAY AND country != '' GROUP BY int_ip, country
             HAVING (int_ip, country) NOT IN (SELECT int_ip, country FROM flows WHERE ts < now() - INTERVAL 1 DAY AND ts >= now() - INTERVAL 7 DAY GROUP BY int_ip, country)
                AND (SELECT min(ts) FROM flows) < now() - INTERVAL 2 DAY

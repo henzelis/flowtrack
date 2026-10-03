@@ -75,6 +75,26 @@ ENGINE = MergeTree
 ORDER BY (exporter, ts)
 TTL ts + INTERVAL 90 DAY;
 
+-- Receiver health, one row per minute: packets read from the socket and everything lost on the way.
+-- socket_drops: the kernel discarded datagrams because the socket buffer was full (collector too slow
+-- or a burst larger than the buffer); queue_drops: packets the workers could not take in time;
+-- dropped_rows: decoded flows discarded because ClickHouse was unreachable for too long.
+CREATE TABLE IF NOT EXISTS collector_stats
+(
+    ts            DateTime,
+    workers       UInt8,
+    packets       UInt64,
+    socket_drops  UInt64,
+    queue_drops   UInt64,
+    dropped_rows  UInt64,
+    rcvbuf        UInt32,
+    rx_queue_peak UInt32,
+    buffered      UInt32
+)
+ENGINE = MergeTree
+ORDER BY ts
+TTL ts + INTERVAL 90 DAY;
+
 -- columns added after the first release (no-ops on new databases)
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;

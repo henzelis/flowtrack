@@ -8,6 +8,7 @@ EnvironmentFile=/etc/flowtrack/env
 ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/app/collector.py
 Restart=always
 RestartSec=3
+TimeoutStopSec=90
 User=flowtrack
 Group=flowtrack
 NoNewPrivileges=yes

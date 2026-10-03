@@ -406,6 +406,7 @@ FT_BIND=0.0.0.0
 FT_PORT=$NF_PORT
 FT_EXPORTERS=$EXP_IP
 FT_FORWARD=
+FT_WORKERS=auto
 FT_WEB_BIND=0.0.0.0
 FT_WEB_PORT=$WEB_PORT
 ENV
@@ -486,6 +487,11 @@ install_units() {
      "$PREFIX/app/deploy/flowtrack-geoip.service" "$PREFIX/app/deploy/flowtrack-geoip.timer" /etc/systemd/system/
   systemctl daemon-reload
   systemctl enable -q flowtrack-geoip.timer $UNITS
+  # a larger UDP receive buffer absorbs export bursts (the collector asks for 32 MB; the kernel default cap is ~200 KB)
+  if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 33554432 ]; then
+    echo 'net.core.rmem_max = 33554432  # FlowTrack collector: room for NetFlow bursts' > /etc/sysctl.d/60-flowtrack.conf
+    sysctl -q -w net.core.rmem_max=33554432 || true
+  fi
 }
 step "$(t 'System services' 'Системні сервіси')" install_units
 
@@ -587,7 +593,7 @@ uninstall() {
   remove_all() {
     systemctl disable --now flowtrack-geoip.timer $UNITS 2>/dev/null || true
     rm -f /etc/systemd/system/flowtrack-collector.service /etc/systemd/system/flowtrack-web.service \
-          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer
+          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer /etc/sysctl.d/60-flowtrack.conf
     systemctl daemon-reload
     docker rm -f "$CH_NAME" 2>/dev/null || true
     if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowtrack 2>/dev/null || true
