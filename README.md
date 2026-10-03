@@ -155,10 +155,10 @@ device*, admins only; the collector picks changes up within a minute):
 ```json
 {
   "192.0.2.1": {
-    "name": "fw-main", "vendor": "Fortinet", "model": "FortiGate 40F",
-    "wan_ifs": [1], "local_if": 0, "public_ips": ["198.51.100.10"],
-    "city": "Kyiv", "country": "UA", "lat": 50.45, "lon": 30.52,
-    "if_names": {"1": "wan", "0": "local"}, "sampling": "1:1"
+    "name": "fw-main", "vendor": "Fortinet", "model": "FortiGate 100F",
+    "wan_ifs": [3], "local_if": 0, "public_ips": ["198.51.100.10"],
+    "city": "Amsterdam", "country": "NL", "lat": 52.37, "lon": 4.9,
+    "if_names": {"3": "wan1", "0": "local"}, "sampling": "1:1"
   }
 }
 ```

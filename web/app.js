@@ -832,8 +832,8 @@ function openDevice(dev){
         <div class="two"><label>Модель<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>Вибірка (sampling)<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
         <div class="two"><label>snmp-index WAN-інтерфейсів (через кому)<input id="fWan" value="${esc((c.wan_ifs || []).join(', '))}" placeholder="1"></label><label>Індекс «сам пристрій» (FortiOS: 0)<input id="fLocal" value="${c.local_if ?? ''}" placeholder="0"></label></div>
         <label>Публічні IP пристрою (через кому)<input id="fPub" value="${esc((c.public_ips || []).join(', '))}" placeholder="198.51.100.10"></label>
-        <div class="two"><label>Місто<input id="fCity" value="${esc(c.city || '')}" placeholder="Kyiv"></label><label>Код країни<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="UA"></label></div>
-        <div class="two"><label>Широта<input id="fLat" value="${c.lat ?? ''}" placeholder="50.45"></label><label>Довгота<input id="fLon" value="${c.lon ?? ''}" placeholder="30.52"></label></div>
+        <div class="two"><label>Місто<input id="fCity" value="${esc(c.city || '')}" placeholder="Amsterdam"></label><label>Код країни<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="NL"></label></div>
+        <div class="two"><label>Широта<input id="fLat" value="${c.lat ?? ''}" placeholder="52.37"></label><label>Довгота<input id="fLon" value="${c.lon ?? ''}" placeholder="4.90"></label></div>
         <p class="err" id="fErr" hidden></p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? 'Зберегти' : 'Додати пристрій'}</button>${editing && dev.configured ? '<button class="btn" type="button" id="fDel">Видалити опис</button>' : ''}<span class="nat" id="fDelAsk" hidden>Точно видалити? <button class="btn" type="button" id="fDelYes">Так, видалити</button></span></div></form></div>`, true);
     m.root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; keep(); draw(); restore(); });
