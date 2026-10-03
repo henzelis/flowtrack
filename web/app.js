@@ -694,6 +694,142 @@ function createDevMap(host, opts){
   cv.addEventListener('mouseleave', () => { hover = null; tip.hidden = true; draw(); });
   cv.addEventListener('click', e => { const h = pick(e); if (h && opts.onPick) opts.onPick(h.s); });
 }
+// ===================== device ring (LiveNX-style): the device is a circle, its interfaces sit on the rim =====================
+// Inside interfaces take the left half of the rim, WAN interfaces the right half; each owns an arc sized by
+// its volume. A path input -> output is a chord between the two arcs (through the middle: LAN -> internet
+// crosses the circle, LAN <-> LAN bends back inside the left half); traffic of the device itself goes to the
+// core. Badges on the rim show what enters and leaves each port; hosts sit outside next to their ports.
+function createDevRing(host, opts){
+  host.innerHTML = '<canvas></canvas><div class="rtip" hidden></div>';
+  const cv = host.querySelector('canvas'), tip = host.querySelector('.rtip'), ctx = cv.getContext('2d');
+  let W = 0, H = 0, dpr = 1, data = null, hover = null, shapes = [];
+  const {ifs, dev} = opts;
+  const roleOf = i => (ifs.get(i) || {}).role || (i === dev.config.local_if ? 'local' : 'lan');
+  const nameOf = i => { const x = ifs.get(i); return x ? (x.custom_name || x.name) : (i === 0 ? 'local' : `if ${i}`); };
+  const addrOf = i => { const x = ifs.get(i); return x ? ([...(x.addrs || []), ...(x.seen_addrs || [])][0] || '') : ''; };
+  const fmtV = v => state.metric === 'bytes' ? fmtB(v) : fmtN(v);
+  async function load(){ try { data = await opts.fetchData(); if (opts.onData) opts.onData(data); draw(); } catch (e) { host.innerHTML = errBox(e); } }
+  function size(){ const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; draw(); }
+  const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
+  load(); if (opts.refreshMs) every(opts.refreshMs, load);
+  const rr = (x, y, w, h, r) => { const p = new Path2D(); p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r); p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath(); return p; };
+  const pt = (cx, cy, r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  const clip = (str, font, max) => { ctx.font = font; if (ctx.measureText(str).width <= max) return str; while (str.length > 2 && ctx.measureText(str + '…').width > max) str = str.slice(0, -1); return str + '…'; };
+  function draw(){
+    if (!W || !H) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
+    if (!data) return;
+    ctx.textBaseline = 'middle';
+    const v = x => state.scale === 'lin' ? x : Math.sqrt(x);
+    const paths = data.paths.filter(p => p.v > 0);
+    if (!paths.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No traffic through this device for the selected filters', 'Немає трафіку через цей пристрій для вибраних фільтрів'), W / 2, H / 2); return; }
+    const sideOf = i => { const r = roleOf(i); return r === 'wan' ? 'R' : r === 'local' ? 'C' : 'L'; };
+    const enter = new Map(), leave = new Map(), tot = new Map();
+    paths.forEach(p => { enter.set(p.in_if, (enter.get(p.in_if) || 0) + p.v); leave.set(p.out_if, (leave.get(p.out_if) || 0) + p.v);
+      for (const i of [p.in_if, p.out_if]) tot.set(i, (tot.get(i) || 0) + p.v); });
+    const ports = {L:[], R:[]}; [...tot.keys()].sort((a, b) => a - b).forEach(i => { const sd = sideOf(i); if (sd !== 'C') ports[sd].push(i); });
+    // geometry
+    const cardW = Math.min(190, Math.max(124, W * .14)), cx = W / 2, cy = H / 2 + 18;
+    const R = Math.max(120, Math.min(H / 2 - 74, (W - 2 * cardW) / 2 - 104)), Ri = R - 10, core = {r:24}, BR = R + 40;
+    // arcs: left half 100°..260°, right half -80°..80°; size ∝ scaled volume, padding between ports
+    const deg = d => d * Math.PI / 180, arcs = new Map();
+    const lay = (list, a0, a1) => { if (!list.length) return; const pad = deg(4), span = a1 - a0 - pad * list.length, sc = list.map(i => Math.max(v(tot.get(i)), 1e-9)), sum = sc.reduce((a, b) => a + b, 0);
+      let a = a0 + pad / 2; list.forEach((i, k) => { const w = Math.max(deg(5), span * sc[k] / sum); arcs.set(i, {a0:a, a1:a + w, mid:a + w / 2, side:sideOf(i)}); a += w + pad; }); };
+    lay(ports.L, deg(118), deg(242)); lay(ports.R, deg(-62), deg(62));
+    // ring
+    const ring = new Path2D(); ring.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(30,60,140,.14)'; ctx.fill(ring); ctx.strokeStyle = 'rgba(110,160,255,.35)'; ctx.lineWidth = 1.2; ctx.stroke(ring);
+    // chords: each port's arc is shared by its paths in proportion to their volume
+    const used = new Map(), share = (i, val) => { const a = arcs.get(i); if (!a) return null; const span = (a.a1 - a.a0) * val / Math.max(1e-9, v(tot.get(i))), s0 = used.get(i) ?? a.a0; used.set(i, s0 + span); return [s0, s0 + span]; };
+    const colorOf = p => { if (state.ringColor === 'service') return keyColor((p.services || [])[0] || '?');
+      const si = sideOf(p.in_if), so = sideOf(p.out_if); return si === 'C' || so === 'C' ? '#6E7FA6' : si === 'L' && so === 'R' ? C.up : si === 'R' && so === 'L' ? C.down : si === 'L' ? C.int : C.ext; };
+    const order = [...paths].sort((a, b) => (arcs.get(a.in_if)?.mid ?? 0) - (arcs.get(b.in_if)?.mid ?? 0) || (arcs.get(a.out_if)?.mid ?? 0) - (arcs.get(b.out_if)?.mid ?? 0));
+    for (const p of order) {
+      const val = v(p.v), col = colorOf(p), path = new Path2D();
+      const sa = sideOf(p.in_if) === 'C' ? null : share(p.in_if, val), sb = sideOf(p.out_if) === 'C' ? null : share(p.out_if, val);
+      if (sa && sb) {          // chord between two arcs, bending through the middle
+        const [x0, y0] = pt(cx, cy, Ri, sa[0]); path.moveTo(x0, y0); path.arc(cx, cy, Ri, sa[0], sa[1]);
+        const [x1, y1] = pt(cx, cy, Ri, sb[0]); path.quadraticCurveTo(cx, cy, x1, y1); path.arc(cx, cy, Ri, sb[0], sb[1]);
+        path.quadraticCurveTo(cx, cy, x0, y0); path.closePath();
+      } else {                 // into / out of the core
+        const s = sa || sb; if (!s) continue; const [x0, y0] = pt(cx, cy, Ri, s[0]); path.moveTo(x0, y0); path.arc(cx, cy, Ri, s[0], s[1]);
+        const [ex, ey] = pt(cx, cy, core.r, (s[0] + s[1]) / 2 + Math.PI); path.quadraticCurveTo((cx + ex) / 2, (cy + ey) / 2, cx, cy); path.closePath();
+      }
+      const lit = !hover || (hover.kind === 'path' ? hover.in_if === p.in_if && hover.out_if === p.out_if : hover.kind === 'port' ? hover.i === p.in_if || hover.i === p.out_if : true);
+      ctx.fillStyle = hexA(col, lit ? (hover ? .62 : .34) : .06); ctx.fill(path); ctx.strokeStyle = hexA(col, lit ? .75 : .1); ctx.lineWidth = .7; ctx.stroke(path);
+      shapes.push({kind:'path', path, in_if:p.in_if, out_if:p.out_if,
+        tip:`<b>${esc(nameOf(p.in_if))} → ${esc(nameOf(p.out_if))}</b><br>${fmtV(p.v)} · ${T('hosts', 'хостів')}: ${p.hosts}${(p.services || []).length ? '<br>' + esc(p.services.map(dv).join(', ')) : ''}`});
+    }
+    // core and the device name
+    const corePath = new Path2D(); corePath.arc(cx, cy, core.r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(12,22,52,.96)'; ctx.fill(corePath); ctx.strokeStyle = hexA('#6E7FA6', .9); ctx.lineWidth = 1.4; ctx.stroke(corePath);
+    ctx.textAlign = 'center'; ctx.font = '700 14px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(dev.name, cx, 14);
+    ctx.font = '500 11.5px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.fillText([dev.model, dev.ip].filter(Boolean).join(' · '), cx, 31);
+    ctx.font = '600 10.5px Manrope, sans-serif'; ctx.fillStyle = C.ink2; ctx.fillText(T('device itself', 'сам пристрій'), cx, cy + core.r + 11);
+    const li = paths.find(p => sideOf(p.in_if) === 'C' || sideOf(p.out_if) === 'C');
+    if (li) { const idx = sideOf(li.in_if) === 'C' ? li.in_if : li.out_if; shapes.push({kind:'port', path:corePath, i:idx, tip:`<b>${T('The device itself', 'Сам пристрій')}</b> (${idx})<br>${T('in', 'вхід')} ${fmtV(leave.get(idx) || 0)} · ${T('out', 'вихід')} ${fmtV(enter.get(idx) || 0)}`}); }
+    // hosts outside the circle, next to their side, with ribbons to their port's badge
+    const maxPort = Math.max(...[...tot.values()]);
+    for (const side of ['L', 'R']) {
+      const list = side === 'L' ? data.inside : data.outside, cards = [];
+      for (const i of [...ports[side]].sort((a, b) => Math.sin(arcs.get(a).mid) - Math.sin(arcs.get(b).mid))) {
+        const own = list.filter(h => h.iface === i).sort((a, b) => b.v - a.v), shown = own.slice(0, side === 'L' ? 4 : 6);
+        shown.forEach(h => cards.push({port:i, h, v:h.v}));
+        const rest = Math.max(0, tot.get(i) - shown.reduce((a, h) => a + h.v, 0));
+        if (own.length > shown.length && rest > tot.get(i) * .03) cards.push({port:i, other:true, v:rest});
+      }
+      if (!cards.length) continue;
+      const n = cards.length, cg = 6, ch = Math.max(24, Math.min(44, (H - 16 - cg * (n - 1)) / n)), x = side === 'L' ? 0 : W - cardW;
+      let y = Math.max(6, (H - n * ch - (n - 1) * cg) / 2);
+      for (const c of cards) {
+        const a = arcs.get(c.port), [bx, by] = pt(cx, cy, BR, a.mid), t = Math.max(1.5, Math.min(ch - 12, 3 + 18 * v(c.v) / Math.max(1e-9, v(maxPort))));
+        const x0 = side === 'L' ? x + cardW : x, col = c.other ? C.other : side === 'L' ? C.int : C.ext;
+        const key = side + '|' + c.port + '|' + (c.other ? '*' : c.h.host);
+        const rib = new Path2D(); rib.moveTo(x0, y + ch / 2 - t / 2); rib.bezierCurveTo((x0 + bx) / 2, y + ch / 2 - t / 2, (x0 + bx) / 2, by - t / 2, bx, by - t / 2); rib.lineTo(bx, by + t / 2); rib.bezierCurveTo((x0 + bx) / 2, by + t / 2, (x0 + bx) / 2, y + ch / 2 + t / 2, x0, y + ch / 2 + t / 2); rib.closePath();
+        const lit = !hover || (hover.kind === 'host' && hover.key === key) || (hover.kind === 'port' && hover.i === c.port) || (hover.kind === 'path' && (hover.in_if === c.port || hover.out_if === c.port));
+        ctx.fillStyle = hexA(col, lit ? .38 : .08); ctx.fill(rib);
+        const box = rr(x + .5, y + .5, cardW - 1, ch - 1, 10);
+        ctx.fillStyle = 'rgba(14,26,58,.82)'; ctx.fill(box); ctx.strokeStyle = hover && hover.key === key ? hexA(col, .9) : 'rgba(110,160,255,.28)'; ctx.lineWidth = 1; ctx.stroke(box);
+        ctx.fillStyle = col; ctx.fill(rr(x + 6, y + 6, 4, ch - 12, 2));
+        const l1 = c.other ? T('Others', 'Інші') : side === 'L' ? (c.h.name || c.h.host) : c.h.host;
+        const l2 = c.other ? fmtV(c.v) : `${fmtV(c.v)} · ${side === 'L' ? (c.h.name ? c.h.host : nameOf(c.port)) : [dv(c.h.service), c.h.city || ccName(c.h.country)].filter(Boolean).join(' · ')}`;
+        ctx.textAlign = 'left'; ctx.fillStyle = C.ink;
+        if (ch >= 36) { ctx.fillText(clip(l1, '600 12px "JetBrains Mono", monospace', cardW - 26), x + 16, y + ch / 2 - 7); ctx.fillStyle = C.ink2; ctx.fillText(clip(l2, '500 11px Manrope, sans-serif', cardW - 26), x + 16, y + ch / 2 + 9); }
+        else ctx.fillText(clip(l1, '600 11.5px "JetBrains Mono", monospace', cardW - 26), x + 16, y + ch / 2);
+        if (!c.other) shapes.push({kind:'host', path:box, key, side, ip:c.h.host, tip:`<b>${esc(l1)}</b><br>${esc(c.h.host)} · ${esc(nameOf(c.port))}<br>↑ ${fmtV(c.h.up)} · ↓ ${fmtV(c.h.dn)}`});
+        y += ch + cg;
+      }
+    }
+    // port badges on the rim: name, address, what enters and what leaves the device through the port
+    const maxIO = Math.max(1e-9, ...[...enter.values(), ...leave.values()]);
+    for (const [i, a] of arcs) {
+      const role = roleOf(i), col = role === 'wan' ? C.up : '#2F7BFF', on = hover && hover.kind === 'port' && hover.i === i;
+      // the arc itself, thick, on the rim
+      const arcP = new Path2D(); arcP.arc(cx, cy, R - 4, a.a0, a.a1); ctx.strokeStyle = hexA(col, on ? 1 : .85); ctx.lineWidth = 8; ctx.lineCap = 'butt'; ctx.stroke(arcP);
+      const bw = 138, bh = 50, [px, py] = pt(cx, cy, BR, a.mid), bx = px - bw / 2, by = py - bh / 2;
+      const badge = rr(bx, by, bw, bh, 10);
+      ctx.fillStyle = 'rgba(8,16,40,.92)'; ctx.fill(badge); ctx.strokeStyle = hexA(col, on ? 1 : .6); ctx.lineWidth = on ? 1.6 : 1; ctx.stroke(badge);
+      ctx.textAlign = 'left'; ctx.font = '700 12px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink; ctx.fillText(clip(nameOf(i), '700 12px "JetBrains Mono", monospace', bw - 16), bx + 8, by + 11);
+      ctx.font = '500 10px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink3; ctx.fillText(clip(addrOf(i) || (role === 'wan' ? 'WAN' : 'LAN'), '500 10px "JetBrains Mono", monospace', bw - 16), bx + 8, by + 23);
+      // two meters: entering the device through the port (from outside) and leaving it
+      const meter = (yy, val, mc, label) => { ctx.fillStyle = 'rgba(255,255,255,.08)'; ctx.fill(rr(bx + 22, yy - 3, bw - 76, 6, 3)); ctx.fillStyle = mc; ctx.fill(rr(bx + 22, yy - 3, Math.max(2, (bw - 76) * val / maxIO), 6, 3));
+        ctx.font = '600 9.5px "JetBrains Mono", monospace'; ctx.fillStyle = C.ink2; ctx.textAlign = 'left'; ctx.fillText(label, bx + 8, yy); ctx.textAlign = 'right'; ctx.fillText(fmtV(val), bx + bw - 6, yy); };
+      meter(by + 34, enter.get(i) || 0, C.down, '↘'); meter(by + 43, leave.get(i) || 0, C.up, '↗');
+      const hit = new Path2D(); hit.addPath(badge); hit.addPath(arcP);
+      shapes.push({kind:'port', path:badge, i, tip:`<b>${esc(nameOf(i))}</b> (${i}) · ${role === 'wan' ? 'WAN' : 'LAN'}<br>${esc(addrOf(i))}<br>${T('enters the device', 'входить у пристрій')}: ${fmtV(enter.get(i) || 0)}<br>${T('leaves the device', 'виходить з пристрою')}: ${fmtV(leave.get(i) || 0)}`});
+    }
+  }
+  const pick = e => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    for (let i = shapes.length - 1; i >= 0; i--) if (ctx.isPointInPath(shapes[i].path, x * dpr, y * dpr)) return {s:shapes[i], x, y};
+    return null; };
+  const same = (a, b) => a === b || (a && b && a.kind === b.kind && a.key === b.key && a.i === b.i && a.in_if === b.in_if && a.out_if === b.out_if);
+  cv.addEventListener('mousemove', e => { const h = pick(e), n = h ? h.s : null;
+    if (!same(n, hover)) { hover = n; draw(); }
+    if (h) { tip.hidden = false; tip.innerHTML = h.s.tip; tip.style.left = Math.min(W - 240, h.x + 14) + 'px'; tip.style.top = (h.y + 14) + 'px'; cv.style.cursor = 'pointer'; } else { tip.hidden = true; cv.style.cursor = ''; } });
+  cv.addEventListener('mouseleave', () => { hover = null; tip.hidden = true; draw(); });
+  cv.addEventListener('click', e => { const h = pick(e); if (h && opts.onPick) opts.onPick(h.s); });
+}
 // ===================== through the device: input interface -> device -> output interface =====================
 const ROLE_COLOR = {wan:'#FF9F43', local:'#6E7FA6'};
 const IFPAL = ['#2F7BFF', '#27D3F5', '#8B5CFF', '#FF4FA0', '#2EE59D', '#FFD166', '#5AC8FA', '#F0508C'];
@@ -706,7 +842,7 @@ function vPaths(){
   const v = document.getElementById('view'), live = !!state.pathsLive;
   v.innerHTML = `<div class="grid">
     <section class="glass panel s9">${ph('nodes', T('Traffic through the device', 'Трафік через пристрій'), T('input interface → device → output interface · width = volume · click a ribbon or an interface to filter', 'вхідний інтерфейс → пристрій → вихідний інтерфейс · ширина = обсяг · клік по стрічці чи інтерфейсу — фільтр'),
-      `<span id="pDevSeg"></span>` + seg('pMetricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('pScaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small paths stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні шляхи помітні поруч із великими')], ['lin', T('Linear', 'Лінійний')]], state.scale) + seg('pLiveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], live ? 'live' : 'period'), true)}
+      `<span id="pDevSeg"></span>` + seg('pMetricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('pColorSeg', [['dir', T('Direction', 'Напрямок')], ['service', T('Service', 'Сервіс')]], state.ringColor || 'dir') + seg('pScaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small paths stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні шляхи помітні поруч із великими')], ['lin', T('Linear', 'Лінійний')]], state.scale) + seg('pLiveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], live ? 'live' : 'period'), true)}
       <div class="legend" id="pLegend" style="margin:-6px 0 10px"></div>
       <div class="river devmap" id="cPaths"></div>
       <p class="note">${T('All traffic of the device regardless of the Internet / Internal selector. Wi-Fi SSID (VAP) interfaces of FortiGate are not sampled: traffic between two SSIDs does not appear.', 'Увесь трафік пристрою незалежно від перемикача «Інтернет / Внутрішній». Wi-Fi-інтерфейси (VAP) FortiGate не експортують NetFlow: трафік між двома SSID тут не видно.')}</p></section>
@@ -717,6 +853,7 @@ function vPaths(){
     <section class="glass panel s7">${ph('conv', T('Paths', 'Шляхи'), T('input → output interface · click to filter', 'вхідний → вихідний інтерфейс · клік — фільтр'))}<div id="pTable" class="loading"></div></section>
     <section class="glass panel s5">${ph('ip', T('Interfaces', 'Інтерфейси'), T('traffic entering and leaving each interface', 'трафік, що входить і виходить через кожен інтерфейс'))}<div id="pIfs" class="loading"></div></section></div>`;
   wireSeg('pMetricSeg', m => { if (m === state.metric) return; state.metric = m; render(); });
+  wireSeg('pColorSeg', m => { if (m === (state.ringColor || 'dir')) return; state.ringColor = m; render(); });
   wireSeg('pScaleSeg', m => { if (m === state.scale) return; state.scale = m; render(); });
   wireSeg('pLiveSeg', m => { const l = m === 'live'; if (l === !!state.pathsLive) return; state.pathsLive = l; render(); });
   const seq = renderSeq;
@@ -755,6 +892,11 @@ function vPaths(){
       [...new Set(rows.flatMap(r => [r.in_if, r.out_if]))].sort((a, b) => a - b).forEach(ifColor);
       const ins = new Map(), outs = new Map();
       rows.forEach(r => { ins.set(r.in_if, (ins.get(r.in_if) || 0) + r.v); outs.set(r.out_if, (outs.get(r.out_if) || 0) + r.v); });
+      if (state.ringColor === 'service') {
+        const svcs = new Map(); rows.forEach(r => { const k = (r.services || [])[0]; if (k) svcs.set(k, (svcs.get(k) || 0) + r.v); });
+        fill('pLegend', [...svcs].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k]) => `<span><i class="bar" style="background:${keyColor(k)}"></i>${esc(dv(k))}</span>`).join('')
+          + `<span class="nat">${T('colour = main service of the path', 'колір = головний сервіс шляху')}</span>`);
+      } else
       fill('pLegend', `<span><i style="background:${C.int}"></i>${T('inside hosts · inside interfaces', 'локальні хости · локальні інтерфейси')}</span><span><i class="bar" style="background:${C.up}"></i>${T('to the internet', 'в інтернет')}</span><span><i class="bar" style="background:${C.down}"></i>${T('from the internet', 'з інтернету')}</span><span><i class="bar" style="background:${C.int}"></i>${T('between inside networks (arc)', 'між локальними мережами (дуга)')}</span><span><i class="bar" style="background:#6E7FA6"></i>${T('to / from the device itself', 'до / від самого пристрою')}</span><span style="margin-left:auto"><i style="background:${C.ext}"></i>${T('WAN · internet hosts', 'WAN · хости в інтернеті')}</span>` + (d.live && d.window_end ? `<span class="mono">${T(`2-min window to ${hms(d.window_end)}`, `вікно 2 хв до ${hms(d.window_end)}`)}</span>` : `<span class="mono">${rangeLabel()}</span>`));
       // KPIs, tables
       const by = f => rows.reduce((a, r) => a + (f(r) ? r.b : 0), 0), totB = by(() => true);
@@ -796,7 +938,7 @@ function vPaths(){
       if (!df) putFilter({k:'device', v:ip, neg:false});
       render(); };
     const mapEl = document.getElementById('cPaths');
-    if (mapEl) createDevMap(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap,
+    if (mapEl) createDevRing(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap,
       fetchData:() => api('devmap', {t:'all', metric:state.metric, live:live ? 1 : 0, win:120, top:6}, extra)});
     try { draw(await load()); } catch (e) { fill('pTable', errBox(e)); }
     if (live) every(10000, () => load().then(d => { if (seq === renderSeq) draw(d); }).catch(() => {}));

@@ -362,7 +362,8 @@ def api_devmap(q):
         where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     paths = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
-            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, count() AS fl, uniqExact(int_ip) AS hosts
+            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, count() AS fl, uniqExact(int_ip) AS hosts,
+            topKWeighted(3)(service, toUInt64({metric})) AS services
         FROM flows WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 60""", p, fmt='JSON')
     # an inside host enters the box through: in_if when it sends (up, or the source of an internal record),
     # out_if when it receives (down, or the destination of an internal record)
