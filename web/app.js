@@ -726,8 +726,14 @@ function vPaths(){
     if (!df && !devs.some(d => d.ip === state.pathDev)) state.pathDev = ([...devs].sort((a, b) => b.rps - a.rps)[0] || {}).ip;
     const ip = pathDevice(), dev = devs.find(d => d.ip === ip);
     // device switcher (only when the global device filter does not decide it)
-    fill('pDevSeg', df ? '' : seg('pDevBtns', devs.map(d => [d.ip, d.name]), ip));
-    wireSeg('pDevBtns', d => { state.pathDev = d; state.filters = state.filters.filter(f => f.k !== 'in_if' && f.k !== 'out_if'); render(); });
+    // device picker: a list (there may be many exporters); with a device filter set it changes that filter
+    const opts = [...devs].sort((a, b) => a.name.localeCompare(b.name)).map(d => `<option value="${esc(d.ip)}"${d.ip === ip ? ' selected' : ''}>${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''} (${esc(d.ip)})</option>`).join('');
+    fill('pDevSeg', `<label class="sel glass" title="${T('Device', 'Пристрій')}">${icon(ICO.dev, 16)}<select id="pDevSel" aria-label="${T('Device', 'Пристрій')}">${opts}</select></label>`);
+    const ds = document.getElementById('pDevSel');
+    if (ds) ds.onchange = () => { state.pathDev = ds.value;
+      state.filters = state.filters.filter(f => !['in_if', 'out_if', 'iface'].includes(f.k));
+      if (df) { state.filters = state.filters.filter(f => f.k !== 'device'); putFilter({k:'device', v:ds.value, neg:false}); }
+      render(); };
     if (!dev) { fill('cPaths', `<div class="empty">${T('No device has sent data yet', 'Ще жоден пристрій не надіслав дані')}</div>`); return; }
     const ifs = new Map(dev.interfaces.map(i => [i.index, i]));
     const extra = df ? [] : [{k:'device', v:ip}];

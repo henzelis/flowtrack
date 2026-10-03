@@ -360,3 +360,5 @@ tr.unseen td{opacity:.75}
 .col.fillcol > .grow{flex:1 1 auto;display:flex;flex-direction:column}
 .col.fillcol > .grow > .chart{flex:1 1 auto;min-height:260px}
 .river.devmap{height:620px}
+#pDevSeg .sel{height:36px;padding:0 10px}
+#pDevSeg select{max-width:280px}
