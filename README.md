@@ -55,7 +55,7 @@ curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh 
 ```
 
 The installer (English or Ukrainian) installs the dependencies — Python, Docker if missing (asks
-first), ClickHouse in Docker, DB-IP GeoIP databases with a monthly refresh — then asks a few questions
+first), ClickHouse in Docker, DB-IP GeoIP databases, refreshed when a new monthly edition is out (checked daily) — then asks a few questions
 with defaults: free NetFlow/IPFIX and web ports (busy ports are detected and the next free one is
 offered), your exporter type, its IP and WAN interface, the admin password and whether to open the ports
 in ufw/firewalld. The web interface is served over **HTTPS** with an automatically generated

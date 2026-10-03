@@ -390,7 +390,7 @@ step "$(t 'Python environment' 'Python-оточення')" make_venv
 
 if [ ! -s "$PREFIX/geoip/dbip-city.mmdb" ] || [ "$MODE" = upgrade ]; then
   if ! step "$(t 'GeoIP databases (DB-IP Lite)' 'Бази GeoIP (DB-IP Lite)')" env FT_GEOIP_DIR="$PREFIX/geoip" "$PREFIX/app/deploy/geoip-update.sh"; then
-    warn "$(t 'GeoIP download failed — FlowTrack works without countries/cities; the monthly timer will retry.' 'Не вдалося завантажити GeoIP — FlowTrack працює без країн/міст; щомісячний таймер спробує знову.')"
+    warn "$(t 'GeoIP download failed — FlowTrack works without countries/cities; the daily timer will retry.' 'Не вдалося завантажити GeoIP — FlowTrack працює без країн/міст; щоденний таймер спробує знову.')"
   fi
 fi
 

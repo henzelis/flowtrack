@@ -1,9 +1,9 @@
 [Unit]
-Description=Monthly FlowTrack GeoIP refresh
+Description=Daily FlowTrack GeoIP check (downloads only when a new monthly edition is out)
 
 [Timer]
-OnCalendar=*-*-03 04:30:00
-RandomizedDelaySec=6h
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=3h
 Persistent=true
 
 [Install]
