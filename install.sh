@@ -547,7 +547,7 @@ install_units() {
   systemctl enable -q flowtrack-geoip.timer $UNITS
   # a larger UDP receive buffer absorbs export bursts (the collector asks for 32 MB; the kernel default cap is ~200 KB)
   if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 33554432 ]; then
-    echo 'net.core.rmem_max = 33554432  # FlowTrack collector: room for NetFlow bursts' > /etc/sysctl.d/60-flowtrack.conf
+    printf '%s\n' '# FlowTrack collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowtrack.conf
     sysctl -q -w net.core.rmem_max=33554432 || true
   fi
 }
