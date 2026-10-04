@@ -136,14 +136,15 @@ main{min-width:0;padding:18px 22px 36px}
 .river.big{height:600px}
 .river canvas{position:absolute;inset:0;width:100%;height:100%}
 .rtip{position:absolute;pointer-events:none;z-index:5;padding:9px 12px;border-radius:12px;font-size:12px;white-space:nowrap;background:rgba(10,20,46,.92);border:1px solid var(--edge-hi);box-shadow:0 8px 24px rgba(0,0,0,.4)}
-.overlay{position:absolute;left:12px;right:12px;bottom:12px;display:flex;justify-content:space-between;gap:12px;align-items:flex-end;pointer-events:none;flex-wrap:wrap}
-.ovl{pointer-events:auto;display:flex;gap:18px;padding:10px 16px;border-radius:13px;background:rgba(8,16,40,.86);border:1px solid var(--edge);flex-wrap:wrap}
-.ovl div{display:grid;grid-template-columns:auto 1fr;gap:0 10px;align-items:center}
+.overlay{position:absolute;left:12px;right:12px;bottom:12px;display:flex;justify-content:space-between;gap:12px;align-items:flex-end;pointer-events:none}
+.ovl{pointer-events:auto;display:flex;gap:10px 18px;padding:10px 16px;border-radius:13px;background:rgba(8,16,40,.86);border:1px solid var(--edge);flex-wrap:wrap;min-width:0}
+.ovl div{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 10px;align-items:center;min-width:0;max-width:100%}
+.ovl b,.ovl small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ovl .ico{width:30px;height:30px;border-radius:9px;grid-row:span 3}
 .ovl span{font-size:11.5px;color:var(--ink2)}
 .ovl b{font:600 13.5px var(--f-mono);color:var(--blue-hi)}
 .ovl small{font:11.5px var(--f-mono);color:var(--ink2)}
-.livebadge{pointer-events:auto;padding:8px 14px;border-radius:12px;background:rgba(8,16,40,.72);border:1px solid var(--edge);font-size:12px;color:var(--ink2);display:grid}
+.livebadge{flex:none;pointer-events:auto;padding:8px 14px;border-radius:12px;background:rgba(8,16,40,.72);border:1px solid var(--edge);font-size:12px;color:var(--ink2);display:grid}
 .livebadge b{color:var(--ok);font-weight:700}
 .livebadge b::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);margin-right:7px}
 .hero{position:relative}
