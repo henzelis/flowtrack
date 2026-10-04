@@ -66,6 +66,13 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
 ```
 
+No `curl` on the host (e.g. a fresh Ubuntu Desktop)? Use `wget` — the installer then installs `curl`
+itself:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+```
+
 The installer (English or Ukrainian) installs the dependencies — Python, Docker if missing (asks
 first), ClickHouse in Docker, DB-IP GeoIP databases, refreshed when a new monthly edition is out (checked daily) — then asks a few questions
 with defaults: free NetFlow/IPFIX and web ports (busy ports are detected and the next free one is
