@@ -18,6 +18,7 @@ import socket
 import struct
 import sys
 import time
+from collections import deque
 from datetime import datetime, timezone
 
 from netflow import parse_packet
@@ -44,6 +45,7 @@ BUFFER_MAX = 500000        # rows kept in memory while ClickHouse is down
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 DISPATCH_EVERY = 64        # packets per batch handed to a worker (or after DISPATCH_SECONDS)
 DISPATCH_SECONDS = 0.02
+DUP_WINDOW = 2.0           # s: the same packet again from the same exporter within this time is a copy (dropped)
 QUEUE_MAX = 500            # batches waiting per worker (~32k packets, a few seconds of a burst); beyond that: queue drops
 
 
@@ -181,17 +183,33 @@ class Accounting:
         self.ex = {}
 
     def take(self):
-        """{ip: {packets, lost, version}} since the last call."""
-        out = {ip: {'packets': x['packets'], 'lost': x['lost'], 'version': x['version']} for ip, x in self.ex.items() if x['packets']}
+        """{ip: {packets, lost, version, dup_packets}} since the last call."""
+        out = {ip: {'packets': x['packets'], 'lost': x['lost'], 'version': x['version'], 'dup_packets': x['dups']}
+               for ip, x in self.ex.items() if x['packets'] or x['dups']}
         for x in self.ex.values():
-            x['packets'] = x['lost'] = 0
+            x['packets'] = x['lost'] = x['dups'] = 0
         return out
 
-    def account(self, ip, data):
-        """Count the packet; True if it carries templates or options records."""
+    def account(self, ip, data, now=None):
+        """Count the packet; True if it carries templates or options records, None if it repeats a packet
+        received within DUP_WINDOW (the caller drops it: neither stored nor counted for loss)."""
         x = self.ex.get(ip)
         if x is None:
-            x = self.ex[ip] = {'packets': 0, 'lost': 0, 'version': 0, 'tpl': {}, 'seq': {}}
+            x = self.ex[ip] = {'packets': 0, 'lost': 0, 'version': 0, 'tpl': {}, 'seq': {}, 'dups': 0, 'recent': {}, 'order': deque()}
+        # some exporters send the same packet several times (seen: RouterOS 7 after a traffic-flow change sent every
+        # packet 4x, each copy with its own sequence counter), so compare everything except the sequence number
+        now = time.monotonic() if now is None else now
+        recent, order = x['recent'], x['order']
+        while order and now - order[0][0] > DUP_WINDOW:
+            t, k = order.popleft()
+            if recent.get(k) == t:
+                del recent[k]
+        key = hash(packet_body(data))
+        if key in recent:
+            x['dups'] += 1
+            return None
+        recent[key] = now
+        order.append((now, key))
         x['packets'] += 1
         try:
             ver, seq, dom, nrec, shared = peek(data, x['tpl'])
@@ -226,6 +244,19 @@ def _tpl_fields(body, off, n, ipfix):
         elif length is not None:
             length += flen
     return length, off
+
+
+def packet_body(data):
+    """The packet without its sequence number (copies of one export differ only there)."""
+    if len(data) >= 20:
+        ver = data[1] if data[0] == 0 else 0
+        if ver == 9:
+            return data[:12] + data[16:]
+        if ver == 10:
+            return data[:8] + data[12:]
+        if ver == 5:
+            return data[:16] + data[20:]
+    return data
 
 
 def peek(data, tpl):
@@ -628,6 +659,7 @@ class Receiver:
                                              'decode_errors': 0, 'templates': 0, 'sampling': 1})
             a['packets'] += x['packets']
             a['lost'] += x['lost']
+            a['dup_packets'] = a.get('dup_packets', 0) + x['dup_packets']
             a['version'] = x['version'] or a['version']
         now = utc(time.time())
         rows = [{'ts': now, 'exporter': ip, **a} for ip, a in self.exp_acc.items() if a['packets'] or a['records']]
@@ -714,7 +746,10 @@ class Receiver:
                     if ALLOW and ip not in ALLOW and ip not in self.cfg:
                         continue
                     self.col_acc['packets'] += 1
-                    if self.acct.account(ip, data):
+                    shared = self.acct.account(ip, data)
+                    if shared is None:
+                        continue                         # a repeated copy of a packet already taken
+                    if shared:
                         for i in range(self.n):
                             self.pending[i].append((data, ip, i != self.rr))
                     else:

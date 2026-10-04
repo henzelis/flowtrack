@@ -102,3 +102,5 @@ ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS obs UInt8 DEFAULT 255;
 -- egress copies dropped because the same traffic was already reported on ingress
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_dropped UInt64 DEFAULT 0;
+-- packets the exporter sent again (identical except the sequence number), dropped by the receiver
+ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_packets UInt64 DEFAULT 0;
