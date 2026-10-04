@@ -324,6 +324,13 @@ function flatMap(el, geo, onConn){
           return {name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v, label:onSite ? {show:false} : undefined}; })},
       {id:'sites', type:'scatter', coordinateSystem:'geo', zlevel:4, symbolSize:12, itemStyle:{color:C.int, borderColor:'rgba(255,255,255,.85)', borderWidth:2, shadowBlur:10, shadowColor:C.int}, label:lbl('left', 13), data:sites},
     ]});
+  // pin the top of the map (Greenland) to the top edge of the panel; the default layout centres it vertically
+  let roamed = false; c.on('georoam', () => { roamed = true; });
+  const pinTop = () => { if (roamed || c.isDisposed() || !el.clientHeight) return;
+    const dy = c.convertToPixel({geoIndex:0}, [-40, 83.6])[1] - 6; if (Math.abs(dy) < 1) return;
+    c.setOption({geo:{center:c.convertFromPixel({geoIndex:0}, [el.clientWidth / 2, el.clientHeight / 2 + dy])}}); };
+  pinTop();
+  if (window.ResizeObserver) { const ro = new ResizeObserver(() => requestAnimationFrame(pinTop)); ro.observe(el); onCleanup(() => ro.disconnect()); }
   // live arcs: poll new flows, then release them gradually so bursts from the exporter become a steady stream
   let since = Math.floor(Date.now() / 1000) - 120, queue = [], live = [];
   const poll = async () => { try { const r = await api('live', {since}); since = r.rows.length ? r.rows[r.rows.length - 1].t : since; queue.push(...r.rows); if (queue.length > 400) queue = queue.slice(-400); } catch (e) {} };
@@ -349,7 +356,7 @@ function globe(el, geo){
     const rows = geo.rows.slice(0, 80);
     const cities = new Map(); for (const r of geo.rows.slice(0, 10)) cities.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]});
     c.setOption({globe:{baseTexture:tex, shading:'lambert', environment:'none', globeRadius:100, light:{ambient:{intensity:.55}, main:{intensity:1.1, alpha:30, beta:40}},
-        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:20, distance:112, minDistance:60, maxDistance:260, targetCoord:[25, 45]}},
+        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:20, distance:180, minDistance:60, maxDistance:260, targetCoord:[25, 45]}},
       series:[
         {type:'lines3D', coordinateSystem:'globe', blendMode:'lighter', effect:{show:!reduceMotion, trailWidth:2.5, trailLength:.22, trailOpacity:1, constantSpeed:28}, lineStyle:{width:1.2, opacity:.35},
           data:rows.map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean)},
