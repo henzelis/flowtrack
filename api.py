@@ -31,6 +31,25 @@ TLS_KEY = os.environ.get('FT_TLS_KEY', '')
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 RANGES = {'1h': 3600, '6h': 6 * 3600, '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400}
 STEP = {3600: 60, 6 * 3600: 300, 86400: 300, 7 * 86400: 3600, 30 * 86400: 4 * 3600}
+NICE_STEPS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 4 * 3600)
+MAX_SPAN = 31 * 86400    # raw flows are kept for 30 days
+
+
+def period(q):
+    """-> (t0, t1, custom): a preset ('range') ends now; a custom period is 'from'/'to' in unix seconds."""
+    now = int(time.time())
+    if q.get('from') and q.get('to'):
+        try:
+            t0, t1 = int(q['from'][0]), int(q['to'][0])
+        except ValueError:
+            raise BadRequest('bad from/to')
+        t1 = min(t1, now + 60)
+        if t1 - t0 < 60:
+            raise BadRequest('the period must be at least a minute long')
+        if t1 - t0 > MAX_SPAN:
+            raise BadRequest('the period can be at most 31 days long')
+        return t0, t1, True
+    return now - RANGES.get(q.get('range', ['24h'])[0], 86400), now, False
 
 # filter key -> (column, ClickHouse type)
 FILTERS = {
@@ -94,9 +113,13 @@ class BadRequest(Exception):
 
 
 def scope(q):
-    """-> (where_sql, params, range_seconds, step). Time window is anchored to now()."""
-    rng = RANGES.get(q.get('range', ['24h'])[0], 86400)
-    where, params = ['ts >= now() - toIntervalSecond({rng:UInt32})'], {'rng': rng}
+    """-> (where_sql, params, range_seconds, step). The window is a preset that ends now, or a custom from/to;
+    params carry t0/t1 (unix s) and 'custom'."""
+    t0, t1, custom = period(q)
+    rng = t1 - t0
+    where, params = ['ts >= toDateTime({t0:UInt32})'], {'t0': t0, 't1': t1, 'custom': custom}
+    if custom:
+        where.append('ts < toDateTime({t1:UInt32})')
     # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
     traffic = q.get('t', ['internet'])[0]
     if traffic == 'internet':
@@ -129,7 +152,10 @@ def scope(q):
             continue
         where.append(f'NOT ({cond})' if neg else cond)
         params[f'f{i}'] = v
-    return ' AND '.join(where), params, rng, STEP[rng]
+    step = STEP.get(rng) if not custom else None
+    if not step:    # custom: the smallest round step that keeps the chart within ~300 points
+        step = next((x for x in NICE_STEPS if rng / x <= 300), NICE_STEPS[-1])
+    return ' AND '.join(where), params, rng, step
 
 
 def q1(q, key, default, cast=str):
@@ -189,15 +215,15 @@ def api_meta(q):
 def api_summary(q):
     where, p, rng, step = scope(q)
     # current and previous window in one pass
-    wprev = where.replace('ts >= now() - toIntervalSecond({rng:UInt32})', 'ts >= now() - toIntervalSecond({rng2:UInt32})')
-    p['rng2'] = rng * 2
+    wprev = where.replace('ts >= toDateTime({t0:UInt32})', 'ts >= toDateTime({p0:UInt32})', 1)
+    p['p0'] = p['t0'] - rng
     r = ch(f"""SELECT
         sumIf(bytes, cur) AS s_bytes, sumIf(bytes, cur AND dir IN ('up', 'internal')) AS s_up, sumIf(bytes, cur AND dir NOT IN ('up', 'internal')) AS s_down,
         countIf(cur) AS s_flows, sumIf(packets, cur) AS s_packets,
         uniqExactIf(int_ip, cur) + uniqExactIf(ext_ip, cur) AS s_ips, uniqExactIf(int_ip, cur) AS s_hosts, uniqExactIf(int_ip, NOT cur) AS s_p_hosts,
         sumIf(bytes, NOT cur) AS s_p_bytes, countIf(NOT cur) AS s_p_flows, uniqExactIf(int_ip, NOT cur) + uniqExactIf(ext_ip, NOT cur) AS s_p_ips,
         toUnixTimestamp(min(ts)) AS s_oldest
-      FROM (SELECT ts, dir, bytes, packets, int_ip, ext_ip, ts >= now() - toIntervalSecond({{rng:UInt32}}) AS cur FROM flows WHERE {wprev})""", p, fmt='JSON')[0]
+      FROM (SELECT ts, dir, bytes, packets, int_ip, ext_ip, ts >= toDateTime({{t0:UInt32}}) AS cur FROM flows WHERE {wprev})""", p, fmt='JSON')[0]
     r = {k[2:]: v for k, v in r.items()}
     top = ch(f"SELECT service AS k, sum(bytes) AS b FROM flows WHERE {where} GROUP BY k ORDER BY b DESC LIMIT 1", p, fmt='JSON')
     r = {k: int(v) for k, v in r.items()}
@@ -205,8 +231,8 @@ def api_summary(q):
     started = ch("SELECT toUnixTimestamp(min(ts)) - 60 AS t FROM exporter_stats", fmt='JSON')
     if started and int(started[0]['t']) > 0:
         r['oldest'] = max(r['oldest'], int(started[0]['t']))
-    r['has_prev'] = r['oldest'] <= time.time() - 2 * rng + step
-    r['range'] = rng
+    r['has_prev'] = r['oldest'] <= p['t0'] - rng + step
+    r['range'], r['from'], r['to'], r['custom'] = rng, p['t0'], p['t1'], p['custom']
     r['top_service'] = top[0]['k'] if top else None
     r['top_service_bytes'] = int(top[0]['b']) if top else 0
     return r
@@ -224,11 +250,11 @@ def api_series(q):
         rows = ch(f"""WITH (SELECT groupArray(k) FROM (SELECT toString({col}) AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum(bytes) DESC LIMIT {{top:UInt8}})) AS tops
             SELECT {bucket} AS t, if(has(tops, toString({col})), toString({col}), '__other') AS k, sum(bytes) AS b
             FROM flows WHERE {where} GROUP BY t, k ORDER BY t""", p, fmt='JSON')
-        return {'step': step, 'range': rng, 'rows': [[int(r['t']), r['k'], int(r['b'])] for r in rows]}
+        return {'step': step, 'range': rng, 'from': p['t0'], 'to': p['t1'], 'rows': [[int(r['t']), r['k'], int(r['b'])] for r in rows]}
     rows = ch(f"""SELECT {bucket} AS t, sumIf(bytes, dir = 'down') AS dn, sumIf(bytes, dir IN ('up', 'internal')) AS up,
             sumIf(bytes, dir NOT IN ('up', 'down')) AS other, count() AS fl
         FROM flows WHERE {where} GROUP BY t ORDER BY t""", p, fmt='JSON')
-    return {'step': step, 'range': rng, 'rows': [[int(r['t']), int(r['dn']), int(r['up']), int(r['other']), int(r['fl'])] for r in rows]}
+    return {'step': step, 'range': rng, 'from': p['t0'], 'to': p['t1'], 'rows': [[int(r['t']), int(r['dn']), int(r['up']), int(r['other']), int(r['fl'])] for r in rows]}
 
 
 def api_top(q):
@@ -307,7 +333,7 @@ def api_river(q):
     where, p, rng, step = scope(q)
     metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
-    live = q1(q, 'live', '1') == '1'
+    live = q1(q, 'live', '1') == '1' and not p['custom']    # a past period has no live window
     win = max(60, min(q1(q, 'win', '120', int), 900))
     if live:    # the window ends at the newest collected record (of the chosen device), so filters never shift it
         p['wend'] = live_end(q)
@@ -338,7 +364,7 @@ def api_paths(q):
     The device comes from the 'device' filter; live = the last `win` seconds of data, otherwise the range."""
     where, p, rng, step = scope(q)
     metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
-    live = q1(q, 'live', '0') == '1'
+    live = q1(q, 'live', '0') == '1' and not p['custom']
     win = max(60, min(q1(q, 'win', '120', int), 900))
     wend = None
     if live:
@@ -361,7 +387,7 @@ def api_devmap(q):
     inside interface and the outside addresses behind each WAN interface. Same time window rules as api_paths."""
     where, p, rng, step = scope(q)
     metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
-    live = q1(q, 'live', '0') == '1'
+    live = q1(q, 'live', '0') == '1' and not p['custom']
     win = max(60, min(q1(q, 'win', '120', int), 900))
     wend = None
     if live:

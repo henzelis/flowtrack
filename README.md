@@ -56,6 +56,9 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   ASN and interfaces.
 - *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
   (sustained upload, bursts, new countries, export loss), *Devices* (exporters and interfaces).
+- Any period within the 30 days of detailed data: a preset, *Custom period…* (from / to, to the minute) or
+  drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
+  incident view can be bookmarked or shared.
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
 - Login with two roles: **admin** (users, devices) and **viewer** (read-only).
 - English and Ukrainian, switchable per browser (the user menu); the browser language picks the default.
@@ -288,7 +291,7 @@ snippets.
 ## API
 
 JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`, `6h`, `24h`, `7d`,
-`30d`) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip`, `dst`, `service`, `l7`,
+`30d`) or `from` + `to` (unix seconds, 1 minute to 31 days) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip`, `dst`, `service`, `l7`,
 `country`, `city`, `port`, `device`, `asn`, `dir`, `proto`).
 
 | Endpoint | Returns |

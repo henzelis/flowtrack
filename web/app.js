@@ -35,7 +35,7 @@ const FILTER_LABEL = {iface:T('interface','інтерфейс'), in_if:T('in via
 let renderSeq = 0;
 
 async function api(path, params = {}, extraFilters = []){
-  const qs = new URLSearchParams({range:state.range, t:state.traffic, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
+  const qs = new URLSearchParams({...periodParams(), t:state.traffic, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
   const r = await fetch(`api/${path}?${qs}`);
   if (r.status === 401) { showLogin(T('Session ended — sign in again', 'Сесія завершилась — увійдіть знову')); throw new Error(T('login required', 'потрібен вхід')); }
   const body = await r.json().catch(() => ({}));
@@ -76,8 +76,20 @@ const pct = (v, all) => all ? (100 * v / all).toFixed(1) + '%' : '—';
 const tot = r => (+r.up || 0) + (+r.dn || 0);
 const colorCache = new Map();
 const keyColor = k => { if (!colorCache.has(k)) colorCache.set(k, PAL[colorCache.size % (PAL.length - 1)]); return colorCache.get(k); };
-const rangeSecs = () => ({'1h':3600, '6h':21600, '24h':86400, '7d':604800, '30d':2592000})[state.range];
-const rangeLabel = () => ({'1h':T('Last hour','остання година'), '6h':T('Last 6 hours','останні 6 годин'), '24h':T('Last 24 hours','останні 24 години'), '7d':T('Last 7 days','останні 7 днів'), '30d':T('Last 30 days','останні 30 днів')})[state.range];
+const isCustom = () => state.range === 'custom';
+const periodParams = () => isCustom() ? {from:state.from, to:state.to} : {range:state.range};
+const rangeSecs = () => isCustom() ? state.to - state.from : ({'1h':3600, '6h':21600, '24h':86400, '7d':604800, '30d':2592000})[state.range];
+// '5 Oct, 14:05 – 14:20' or '4 Oct, 22:00 – 5 Oct, 01:00'
+function periodText(t0, t1){
+  const d = t => new Date(t * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'}), sameDay = d(t0) === d(t1 - 1);
+  return `${d(t0)}, ${hhmm(t0)} – ${sameDay ? '' : d(t1) + ', '}${hhmm(t1)}`;
+}
+// a custom period (unix s); the preset it replaced comes back with the period chip's ×
+function setPeriod(t0, t1){
+  if (!isCustom()) state.prevRange = state.range;
+  state.range = 'custom'; state.from = Math.floor(t0 / 60) * 60; state.to = Math.ceil(t1 / 60) * 60; state.sel = null; render();
+}
+const rangeLabel = () => isCustom() ? periodText(state.from, state.to) : ({'1h':T('Last hour','остання година'), '6h':T('Last 6 hours','останні 6 годин'), '24h':T('Last 24 hours','останні 24 години'), '7d':T('Last 7 days','останні 7 днів'), '30d':T('Last 30 days','останні 30 днів')})[state.range];
 const devName = ip => (META.devices.find(d => d.ip === ip) || {}).name || ip;
 const ifLabel = (ip, idx) => { const d = META.devices.find(x => x.ip === ip) || {}, n = (d.if_names || {})[String(idx)] || (d.local_if === idx ? 'local' : ''); return n ? `${n} (${idx})` : String(idx); };
 const hostLabel = h => h.name ? `${esc(h.name)}` : esc(h.ip);
@@ -105,11 +117,29 @@ function every(ms, fn){ const t = setInterval(() => { if (!document.hidden) fn()
 // ===================== chart helpers =====================
 const axisX = () => ({type:'time', axisLine:{lineStyle:{color:C.hair}}, axisTick:{show:false}, splitLine:{show:false},
   axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, hideOverlap:true, formatter:v => rangeSecs() > 86400 ? dmy(v / 1000) : hhmm(v / 1000)}});
+// drag across a time chart to look at that stretch of time (custom period for every page)
+function zoomable(c){
+  const zr = c.getZr(), gridRect = () => c.getModel().getComponent('grid').coordinateSystem.getRect();
+  let x0 = null, x1 = null;
+  const clear = () => { x0 = x1 = null; c.setOption({graphic:[{id:'zoomSel', type:'rect', $action:'remove'}]}); };
+  zr.on('mousedown', e => { if (e.event.button === 0 && c.containPixel('grid', [e.offsetX, e.offsetY])) { x0 = e.offsetX; x1 = null; } });
+  zr.on('mousemove', e => {
+    if (x0 == null) { zr.setCursorStyle(c.containPixel('grid', [e.offsetX, e.offsetY]) ? 'crosshair' : 'default'); return; }
+    const g = gridRect(); x1 = Math.max(g.x, Math.min(g.x + g.width, e.offsetX)); if (Math.abs(x1 - x0) < 4) return;
+    c.setOption({graphic:[{id:'zoomSel', type:'rect', silent:true, z:100, shape:{x:Math.min(x0, x1), y:g.y, width:Math.abs(x1 - x0), height:g.height},
+      style:{fill:'rgba(47,123,255,.16)', stroke:'rgba(110,160,255,.75)', lineWidth:1}}]});
+  });
+  zr.on('mouseup', () => { if (x0 == null) return; const a = x0, b = x1; clear(); if (b == null || Math.abs(b - a) < 4) return;
+    const t = [a, b].map(x => c.convertFromPixel({xAxisIndex:0}, x) / 1000).sort((u, v) => u - v);
+    if (t[1] - t[0] >= 60) setPeriod(t[0], t[1]); });
+  zr.on('globalout', () => { if (x0 != null) clear(); });
+  return c;
+}
 const axisY = fmt => ({type:'value', splitLine:{lineStyle:{color:C.hair}}, axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, formatter:v => String(fmt(v)).replace(/\.0 /, ' ')}});
 const tipBase = () => ({backgroundColor:'rgba(10,20,46,.94)', borderColor:'rgba(130,175,255,.45)', textStyle:{color:C.ink, fontFamily:'Manrope', fontSize:12}, extraCssText:'border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.4)'});
 // fill missing buckets with zeros so lines drop to 0 instead of interpolating across gaps
 function grid(series){
-  const step = series.step, end = Math.floor(Date.now() / 1000 / step) * step, start = end - series.range;
+  const step = series.step, to = series.to || Date.now() / 1000, end = Math.floor((series.from ? to - 1 : to) / step) * step, start = series.from || end - series.range;
   const ts = []; for (let t = Math.ceil(start / step) * step; t <= end; t += step) ts.push(t);
   return {ts, step};
 }
@@ -123,7 +153,7 @@ function trendChart(el, series, compact){
     series:[
       {name:'↓ Download', type:'line', smooth:.35, showSymbol:false, lineStyle:{width:2, color:C.down, shadowBlur:12, shadowColor:C.down}, itemStyle:{color:C.down}, areaStyle:area(C.down), data:ts.map(t => [t * 1000, ((m.get(t) || [])[1] || 0) * 8 / step])},
       {name:'↑ Upload', type:'line', smooth:.35, showSymbol:false, lineStyle:{width:2, color:C.up, shadowBlur:12, shadowColor:C.up}, itemStyle:{color:C.up}, areaStyle:area(C.up), data:ts.map(t => [t * 1000, ((m.get(t) || [])[2] || 0) * 8 / step])}]});
-  return c;
+  return compact ? c : zoomable(c);
 }
 function stackChart(el, series, label, onPick){
   const {ts, step} = grid(series), keys = new Map();
@@ -135,6 +165,7 @@ function stackChart(el, series, label, onPick){
     series:order.map(k => { const col = k === '__other' ? C.other : keyColor(k); return {name:k === '__other' ? T('Others', 'інше') : label(k), id:k, type:'line', stack:'a', smooth:.25, showSymbol:false,
       lineStyle:{width:1.4, color:col}, itemStyle:{color:col}, areaStyle:{opacity:k === '__other' ? .2 : .35}, emphasis:{focus:'series'}, data:ts.map(t => [t * 1000, (keys.get(k).get(t) || 0) * 8 / step])}; })});
   c.on('click', p => p.seriesId !== '__other' && onPick && onPick(p.seriesId));
+  zoomable(c);
 }
 function donut(el, rows, colorOf, center){
   const c = mkChart(el);
@@ -345,6 +376,7 @@ function flatMap(el, geo, onConn){
     lastLen = live.length;
   };
   let lastLen = -1;
+  if (isCustom()) return;    // a past period: no live arcs
   poll(); every(4000, poll); every(reduceMotion ? 3000 : 1000, tick);
 }
 function globe(el, geo){
@@ -381,6 +413,9 @@ const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2
   users:navIcon('talkers'), shield:navIcon('threats'), dev:navIcon('devices'), pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
 const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
+const flowLive = () => state.flowLive && !isCustom();
+// a past period has no live window: the Live button stays visible but off
+const lockLive = id => { if (!isCustom()) return; const b = document.querySelector(`#${id} button[data-v="live"]`); if (b) { b.disabled = true; b.title = T('Live shows the last minutes — choose a preset period to use it', 'Наживо показує останні хвилини — виберіть готовий період, щоб увімкнути'); } };
 const wireSeg = (id, fn) => document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => fn(b.dataset.v));
 const hostCell = (ip, name) => `<span class="idot int"></span><b class="mono">${esc(name || ip)}</b>${name ? ` <span class="nat">${esc(ip)}</span>` : ''}`;
 // values stored in English (service / protocol names made by the collector) shown in the UI language
@@ -409,7 +444,7 @@ async function kpiCards(){
   const [s, ser] = await Promise.all([api('summary'), api('series')]);
   // trend vs the previous equal period; until enough history exists, say since when data is collected and when the comparison appears
   const since = s.oldest ? (Date.now() / 1000 - s.oldest > 86400 ? dmy(s.oldest) + ' ' : '') + hhmm(s.oldest) : '';
-  const ready = s.oldest ? s.oldest + 2 * s.range : 0, readyTxt = ready ? new Date(ready * 1000).toLocaleString(LOC, {day:'numeric', month:'long', hour:'2-digit', minute:'2-digit'}) : '';
+  const ready = s.oldest && !s.custom ? s.oldest + 2 * s.range : 0, readyTxt = ready ? new Date(ready * 1000).toLocaleString(LOC, {day:'numeric', month:'long', hour:'2-digit', minute:'2-digit'}) : '';
   const noPrev = `<span class="tr nodata" style="color:var(--ink3)" title="${T('Comparison with the previous equal period will appear once twice as much data is collected', 'Порівняння з попереднім таким самим періодом з’явиться, коли назбирається вдвічі більше даних')}${readyTxt ? T(' — approx. ', ' — орієнтовно ') + readyTxt : ''}">${since ? T('data since ', 'дані з ') + since : T('no data', 'немає даних')}</span>`;
   const trend = (a, b) => !s.has_prev || !b ? noPrev : `<span class="tr ${a < b ? 'dn' : ''}" title="${T('compared to the previous equal period', 'порівняно з попереднім таким самим періодом')}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
   const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]);
@@ -424,7 +459,7 @@ function mountHero(){
   if (heroScope) heroScope.dispose();
   heroScope = childScope();
   const g = state.heroMode === 'graph' || isInternal();     // no geography for inside <-> inside traffic
-  fill('heroSec', `${ph('flow', T('Network traffic', 'Мережевий трафік'), g ? `<span id="heroLbl" class="tnum">${T('live · window 2 min · updating…', 'наживо · вікно 2 хв · оновлюється…')}</span>` : T('connections for the selected period · new lines appear live', 'з’єднання за вибраний період · нові лінії з’являються наживо'),
+  fill('heroSec', `${ph('flow', T('Network traffic', 'Мережевий трафік'), g ? `<span id="heroLbl" class="tnum">${T('live · window 2 min · updating…', 'наживо · вікно 2 хв · оновлюється…')}</span>` : (isCustom() ? T('connections for the selected period', 'з’єднання за вибраний період') : T('connections for the selected period · new lines appear live', 'з’єднання за вибраний період · нові лінії з’являються наживо')),
       (g ? seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stand out next to large ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) : '') + (isInternal() ? '' : seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode))
       + (isInternal() ? `<span class="legend"><span><i class="bar" style="background:${C.up}"></i>${T('source → destination', 'джерело → отримувач')}</span></span>`
         : `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('inside', 'внутр.')}</span><span><i style="background:${C.ext}"></i>${T('outside', 'зовн.')}</span></span>`))}
@@ -433,8 +468,8 @@ function mountHero(){
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
   const hb = document.getElementById('heroBody'), myScope = heroScope;
   heroScope.run(() => {
-    if (g) createRiver(hb, {compact:true, refreshMs:10000, fetchData:() => api('river', {top:8, live:1, win:120, metric:state.metric}),
-      onData:() => fill('heroLbl', `${T(`live · window 2 min · updated ${hms(Math.floor(Date.now() / 1000))}`, `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}`)}${scaleNote()}`)});
+    if (g) createRiver(hb, {compact:true, refreshMs:isCustom() ? 0 : 10000, fetchData:() => api('river', {top:8, live:isCustom() ? 0 : 1, win:120, metric:state.metric}),
+      onData:() => fill('heroLbl', isCustom() ? rangeLabel() : `${T(`live · window 2 min · updated ${hms(Math.floor(Date.now() / 1000))}`, `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}`)}${scaleNote()}`)});
   });
   if (!g) {
     api('geo').then(geo => { if (!hb.isConnected || heroScope !== myScope) return; myScope.run(() => state.heroMode === 'map' ? flatMap(hb, geo) : globe(hb, geo)); }).catch(e => fill('heroBody', errBox(e)));
@@ -446,7 +481,7 @@ function mountHero(){
         <div><span class="ico">${icon(ICO.users, 15)}</span><span>${T('Top source', 'Топ джерело')}</span><b>${esc(a ? a.name || a.k : '—')}</b><small>${a ? fmtB(tot(a)) : ''}</small></div>
         <div><span class="ico">${icon(ICO.globe, 15)}</span><span>${T('Top destination', 'Топ призначення')}</span><b>${esc(b ? b.k : '—')}</b><small>${b ? [b.city, fmtB(tot(b))].filter(Boolean).join(' · ') : ''}</small></div>
         <div><span class="ico">${icon(ICO.grid, 15)}</span><span>${T('Top service', 'Топ сервіс')}</span><b>${esc(c ? c.k : '—')}</b><small>${c ? pct(tot(c), s.total) : ''}</small></div></div>
-        <div class="livebadge"><b>${T('Live', 'Наживо')}</b>${T('new connections', 'нові з’єднання')}</div></div>`;
+        ${isCustom() ? '' : `<div class="livebadge"><b>${T('Live', 'Наживо')}</b>${T('new connections', 'нові з’єднання')}</div>`}</div>`;
     });
   }
 }
@@ -508,7 +543,7 @@ function vFlows(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
     <section class="glass panel s9">${ph('flow', isInternal() ? T('Exchange between inside addresses', 'Обмін між внутрішніми адресами') : T('Exchange between inside and outside addresses', 'Обмін між внутрішніми та зовнішніми адресами'), isInternal() ? T('source → destination · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»', 'джерело → отримувач · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»') : T('Colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»', 'Колір = напрямок · ширина = обсяг (стиснений масштаб показує й дрібні потоки) · топ-10 з кожного боку, решта в «Інші»'),
-      seg('metricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) + seg('liveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], state.flowLive ? 'live' : 'period'), true)}
+      seg('metricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) + seg('liveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], flowLive() ? 'live' : 'period'), true)}
       <div class="legend" style="margin:-6px 0 10px">${isInternal() ? `<span><i class="bar" style="background:${C.up}"></i>${T('source → destination', 'джерело → отримувач')}</span><span><i style="background:${C.int}"></i>${T('inside address', 'внутрішня адреса')}</span>` : `<span><i class="bar" style="background:${C.down}"></i>${T('download (outside → inside)', 'download (зовн. → внутр.)')}</span><span><i class="bar" style="background:${C.up}"></i>${T('upload (inside → outside)', 'upload (внутр. → зовн.)')}</span><span><i style="background:${C.int}"></i>${T('inside address', 'внутрішня адреса')}</span><span><i style="background:${C.ext}"></i>${T('outside address', 'зовнішня адреса')}</span>`}<span id="winLbl" class="mono" style="margin-left:auto"></span></div>
       <div class="river big" id="river"></div></section>
     <div class="col s3">
@@ -535,12 +570,13 @@ function vFlows(){
   const mountRiver = () => {
     if (riverScope) riverScope.dispose();
     riverScope = childScope();
-    riverScope.run(() => createRiver(document.getElementById('river'), {compact:false, refreshMs:state.flowLive ? 10000 : 0, onSelect:onRiverSelect,
-      fetchData:() => api('river', {top:10, live:state.flowLive ? 1 : 0, win:120, metric:state.metric}), onData:d => { lastData = d; winLbl(d); }}));
+    riverScope.run(() => createRiver(document.getElementById('river'), {compact:false, refreshMs:flowLive() ? 10000 : 0, onSelect:onRiverSelect,
+      fetchData:() => api('river', {top:10, live:flowLive() ? 1 : 0, win:120, metric:state.metric}), onData:d => { lastData = d; winLbl(d); }}));
   };
   mountRiver();
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); if (lastData) winLbl(lastData); });
   wireSeg('metricSeg', m => { if (m === state.metric) return; state.metric = m; setPressed('metricSeg', m); mountRiver(); });
+  lockLive('liveSeg');
   wireSeg('liveSeg', m => { const live = m === 'live'; if (live === state.flowLive) return; state.flowLive = live; setPressed('liveSeg', m); mountRiver(); });
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
@@ -705,7 +741,7 @@ function pathDevice(){
   return df ? df.v : state.pathDev || (META.devices[0] || {}).ip;
 }
 function vPaths(){
-  const v = document.getElementById('view'), live = !!state.pathsLive;
+  const v = document.getElementById('view'), live = !!state.pathsLive && !isCustom();
   v.innerHTML = `<div class="grid">
     <section class="glass panel s9">${ph('nodes', T('Traffic through the device', 'Трафік через пристрій'), T('input interface → device → output interface · width = volume · click a ribbon or an interface to filter', 'вхідний інтерфейс → пристрій → вихідний інтерфейс · ширина = обсяг · клік по стрічці чи інтерфейсу — фільтр'),
       `<span id="pDevSeg"></span>` + seg('pMetricSeg', [['bytes', T('Bytes', 'Байти')], ['packets', T('Packets', 'Пакети')], ['flows', 'Flows']], state.metric) + seg('pColorSeg', [['dir', T('Direction', 'Напрямок')], ['service', T('Service', 'Сервіс')]], state.ringColor || 'dir') + seg('pScaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small paths stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні шляхи помітні поруч із великими')], ['lin', T('Linear', 'Лінійний')]], state.scale) + seg('pLiveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], live ? 'live' : 'period'), true)}
@@ -721,6 +757,7 @@ function vPaths(){
   wireSeg('pMetricSeg', m => { if (m === state.metric) return; state.metric = m; render(); });
   wireSeg('pColorSeg', m => { if (m === (state.ringColor || 'dir')) return; state.ringColor = m; render(); });
   wireSeg('pScaleSeg', m => { if (m === state.scale) return; state.scale = m; render(); });
+  lockLive('pLiveSeg');
   wireSeg('pLiveSeg', m => { const l = m === 'live'; if (l === !!state.pathsLive) return; state.pathsLive = l; render(); });
   const seq = renderSeq;
   (async () => {
@@ -857,11 +894,11 @@ function vTalkers(){
       ['flow', T('Flow details', 'Деталі потоків'), T('the Flows page with a filter', 'сторінка Потоки з фільтром'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
       ['users', T('Host card', 'Картка хоста'), T('services, protocols, destinations', 'сервіси, протоколи, напрямки'), () => openHost(h.k)],
       ['globe', T('Geolocation', 'Геолокація'), T('connection map of this host', 'карта з’єднань цього хоста'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
-      ['list', T('Export CSV', 'Експорт CSV'), T('the top hosts table', 'таблиця топ-хостів'), () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
+      ['list', T('Export CSV', 'Експорт CSV'), T('the top hosts table', 'таблиця топ-хостів'), () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
         topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))],
     ].map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join('') : '');
     if (box && h) { const acts = [() => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
-      () => downloadCsv(`flowtrack-top-hosts-${state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'], topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))];
+      () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'], topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))];
       box.querySelectorAll('[data-qa]').forEach(b => b.onclick = acts[+b.dataset.qa]); }
   };
   section('tKpi', async () => {
@@ -1276,22 +1313,62 @@ const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, talkers:vTalkers,
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
-  document.getElementById('chips').innerHTML = state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter', 'Прибрати фільтр')}" data-i="${i}">×</button></span>`).join('')
+  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period', 'період')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period', 'Змінити період')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to', 'Повернутися до')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to', 'Повернутися до')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter', 'Прибрати фільтр')}" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all', 'Скинути всі')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
+  const px = document.getElementById('periodX'); if (px) px.onclick = () => { state.range = state.prevRange || '24h'; render(); };
+  const pe = document.getElementById('periodEdit'); if (pe) pe.onclick = openPeriod;
   const ds = document.getElementById('devSel'), df = state.filters.find(f => f.k === 'device' && !f.neg);
   ds.innerHTML = `<option value="">${T(`All devices (${META.devices.length})`, `Усі пристрої (${META.devices.length})`)}</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = df ? df.v : '';
-  document.getElementById('rangeSel').value = state.range;
+  const rs = document.getElementById('rangeSel');
+  rs.querySelectorAll('option[data-x]').forEach(o => o.remove());
+  if (isCustom()) rs.insertAdjacentHTML('beforeend', `<option data-x value="custom">${esc(rangeLabel())}</option>`);
+  rs.insertAdjacentHTML('beforeend', `<option data-x value="pick">${T('Custom period…', 'Свій період…')}</option>`);
+  rs.value = state.range;
   document.getElementById('trafSel').value = state.traffic;
 }
-function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
-function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
+function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
+function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
 function render(){ if (state.view === 'users' && !isAdmin()) state.view = 'overview'; renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
 
 document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) putFilter({k:'device', v:e.target.value, neg:false}); render(); };
-document.getElementById('rangeSel').onchange = e => { state.range = e.target.value; render(); };
+document.getElementById('rangeSel').onchange = e => { const v = e.target.value; if (v === 'pick') { e.target.value = state.range; openPeriod(); return; } if (v !== 'custom') { state.range = v; render(); } };
+const presetLabel = r => ({'1h':T('Last hour','Остання година'), '6h':T('Last 6 hours','Останні 6 годин'), '24h':T('Last 24 hours','Останні 24 години'), '7d':T('Last 7 days','Останні 7 днів'), '30d':T('Last 30 days','Останні 30 днів')})[r] || r;
+// the custom period dialog: from / to to the minute, within the 30 days of detailed data
+function openPeriod(){
+  closePeriod();
+  const now = Math.floor(Date.now() / 1000), t1 = isCustom() ? state.to : now, t0 = isCustom() ? state.from : now - rangeSecs();
+  const loc = t => { const d = new Date(t * 1000 - new Date(t * 1000).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+  const min = loc(now - 30 * 86400), max = loc(now + 60);
+  const el = document.createElement('div'); el.className = 'glass period-pop'; el.id = 'periodPop'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', T('Custom period', 'Свій період'));
+  el.innerHTML = `<h3>${T('Custom period', 'Свій період')}</h3>
+    <label>${T('From', 'Від')}<input type="datetime-local" id="pFrom" step="60" min="${min}" max="${max}" value="${loc(t0)}"></label>
+    <label>${T('To', 'До')}<input type="datetime-local" id="pTo" step="60" min="${min}" max="${max}" value="${loc(t1)}"></label>
+    <div class="quick">${[[15, T('15 min', '15 хв')], [60, T('1 hour', '1 год')], [240, T('4 hours', '4 год')]].map(([m, l]) => `<button class="btn" data-m="${m}" title="${T('this long, ending at «To»', 'стільки, до «До»')}">${l}</button>`).join('')}</div>
+    <p class="note" id="pErr" role="alert"></p>
+    <p class="note">${T('Detailed data is kept for 30 days. Tip: drag across any traffic chart to zoom in.', 'Детальні дані зберігаються 30 днів. Порада: виділіть мишею проміжок на будь-якому графіку трафіку.')}</p>
+    <div class="acts"><button class="btn" id="pCancel">${T('Cancel', 'Скасувати')}</button><button class="btn primary" id="pApply">${T('Show', 'Показати')}</button></div>`;
+  document.body.appendChild(el);
+  const r = document.getElementById('rangeLbl').getBoundingClientRect();
+  el.style.top = (r.bottom + 8) + 'px'; el.style.left = Math.max(8, Math.min(r.left, innerWidth - el.offsetWidth - 8)) + 'px';
+  const val = id => { const v = document.getElementById(id).value; return v ? Math.floor(new Date(v).getTime() / 1000) : NaN; };
+  el.querySelectorAll('[data-m]').forEach(b => b.onclick = () => { const e1 = val('pTo'); if (!isNaN(e1)) document.getElementById('pFrom').value = loc(e1 - b.dataset.m * 60); });
+  document.getElementById('pCancel').onclick = closePeriod;
+  document.getElementById('pApply').onclick = () => {
+    const a = val('pFrom'), b = val('pTo'), err = document.getElementById('pErr');
+    if (isNaN(a) || isNaN(b)) { err.textContent = T('Enter both dates.', 'Вкажіть обидві дати.'); return; }
+    if (b - a < 60) { err.textContent = T('«To» must be at least a minute after «From».', '«До» має бути щонайменше на хвилину пізніше за «Від».'); return; }
+    if (b - a > 31 * 86400) { err.textContent = T('The period can be at most 31 days long.', 'Період може бути не довшим за 31 день.'); return; }
+    closePeriod(); setPeriod(a, Math.min(b, now + 60));
+  };
+  el.addEventListener('keydown', e => { if (e.key === 'Escape') closePeriod(); if (e.key === 'Enter') document.getElementById('pApply').click(); });
+  setTimeout(() => document.addEventListener('mousedown', periodOutside), 0);
+  document.getElementById('pFrom').focus();
+}
+function periodOutside(e){ const el = document.getElementById('periodPop'); if (el && !el.contains(e.target)) closePeriod(); }
+function closePeriod(){ const el = document.getElementById('periodPop'); if (el) el.remove(); document.removeEventListener('mousedown', periodOutside); }
 document.getElementById('trafSel').onchange = e => { state.traffic = e.target.value; state.sel = null; render(); };
 const q = document.getElementById('q');
 q.addEventListener('keydown', e => {
