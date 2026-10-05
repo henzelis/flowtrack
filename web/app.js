@@ -115,7 +115,8 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 function every(ms, fn){ const t = setInterval(() => { if (!document.hidden) fn(); }, ms); onCleanup(() => clearInterval(t)); }   // paused while the tab is hidden
 
 // ===================== chart helpers =====================
-const axisX = () => ({type:'time', axisLine:{lineStyle:{color:C.hair}}, axisTick:{show:false}, splitLine:{show:false},
+// the axis spans the whole period even without data, so an empty chart still maps a drag to real times
+const axisX = ts => ({type:'time', ...(ts && ts.length ? {min:ts[0] * 1000, max:ts[ts.length - 1] * 1000} : {}), axisLine:{lineStyle:{color:C.hair}}, axisTick:{show:false}, splitLine:{show:false},
   axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, hideOverlap:true, formatter:v => rangeSecs() > 86400 ? dmy(v / 1000) : hhmm(v / 1000)}});
 // drag across a time chart to look at that stretch of time (custom period for every page)
 function zoomable(c){
@@ -150,7 +151,7 @@ function trendChart(el, series, compact){
   const c = mkChart(el);
   c.setOption({animation:false, grid:compact ? {left:12, right:8, top:8, bottom:4, containLabel:true} : {left:14, right:10, top:30, bottom:4, containLabel:true},
     legend:{show:!compact, top:0, right:0, icon:'roundRect', itemWidth:14, itemHeight:6, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
-    tooltip:{...tipBase(), trigger:'axis', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
+    tooltip:{...tipBase(), trigger:'axis', valueFormatter:v => fmtR(v)}, xAxis:axisX(ts), yAxis:axisY(v => fmtR(v)),
     series:[
       {name:'↓ Download', type:'line', smooth:.35, showSymbol:false, lineStyle:{width:2, color:C.down, shadowBlur:12, shadowColor:C.down}, itemStyle:{color:C.down}, areaStyle:area(C.down), data:ts.map(t => [t * 1000, ((m.get(t) || [])[1] || 0) * 8 / step])},
       {name:'↑ Upload', type:'line', smooth:.35, showSymbol:false, lineStyle:{width:2, color:C.up, shadowBlur:12, shadowColor:C.up}, itemStyle:{color:C.up}, areaStyle:area(C.up), data:ts.map(t => [t * 1000, ((m.get(t) || [])[2] || 0) * 8 / step])}]});
@@ -162,7 +163,7 @@ function stackChart(el, series, label, onPick){
   const order = [...keys.keys()].sort((a, b) => (a === '__other') - (b === '__other'));
   const c = mkChart(el);
   c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
-    tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
+    tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(ts), yAxis:axisY(v => fmtR(v)),
     series:order.map(k => { const col = k === '__other' ? C.other : keyColor(k); return {name:k === '__other' ? T('Others', 'інше') : label(k), id:k, type:'line', stack:'a', smooth:.25, showSymbol:false,
       lineStyle:{width:1.4, color:col}, itemStyle:{color:col}, areaStyle:{opacity:k === '__other' ? .2 : .35}, emphasis:{focus:'series'}, data:ts.map(t => [t * 1000, (keys.get(k).get(t) || 0) * 8 / step])}; })});
   // ECharts reports clicks on the line only; find the stacked band under the pointer instead (acted on after the event,
@@ -948,10 +949,11 @@ function vTalkers(){
       const order = [...keys.keys()].sort((a, b) => (a === '__other') - (b === '__other'));
       const c = mkChart(el);
       c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
-        tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
+        tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(t5), yAxis:axisY(v => fmtR(v)),
         series:order.map(k => { const col = k === '__other' ? C.other : (colorOf.get(k) || C.other), r = t.rows.find(x => x.k === k);
           return {name:k === '__other' ? T('others', 'інші') : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
             areaStyle:{color:new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset:0, color:hexA(col, .45)}, {offset:1, color:hexA(col, .05)}])}, data:t5.map(x => [x * 1000, (keys.get(k).get(x) || 0) * 8 / step])}; })});
+      zoomable(c);
     }).catch(e => fill('cTop5', errBox(e)));
   }).catch(e => fill('tBox', errBox(e)));
   section('tSvc', async () => { const p = await api('top', {dim:'service', limit:6}); const rows = p.rows.slice(0, 5), rest = p.total - rows.reduce((a, r) => a + tot(r), 0);
