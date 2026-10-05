@@ -398,3 +398,16 @@ tr.unseen td{opacity:.75}
 .edbadge.crit{color:var(--crit);background:rgba(255,92,122,.16);border-color:rgba(255,92,122,.45)}
 .edbadge:hover{filter:brightness(1.25)}
 .edbadge:focus-visible{outline:2px solid var(--blue-hi);outline-offset:2px}
+/* settings: tabs on top of the page */
+.settabs{display:flex;gap:4px;padding:5px;margin-bottom:16px;border-radius:14px;overflow-x:auto;scrollbar-width:none}
+.settabs::-webkit-scrollbar{display:none}
+.settabs button{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:10px;font-size:13.5px;font-weight:700;color:var(--ink2);white-space:nowrap}
+.settabs button:hover{color:var(--ink);background:rgba(255,255,255,.05)}
+.settabs button[aria-selected="true"]{color:#fff;background:linear-gradient(180deg,var(--blue-hi),var(--blue));box-shadow:0 0 14px rgba(47,123,255,.45)}
+.settabs button:focus-visible{outline:2px solid var(--blue-hi);outline-offset:1px}
+.about{display:grid;gap:10px}
+.about>div{display:grid;grid-template-columns:140px 1fr auto;align-items:center;gap:10px;padding:9px 12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid var(--edge)}
+.about span{font-size:12.5px;color:var(--ink3)}
+.about a{color:var(--blue-hi);font-weight:600;text-decoration:none;word-break:break-all}
+@media (max-width:600px){.about>div{grid-template-columns:1fr auto}.about>div>span{grid-column:1/-1}}
+.grid.top{align-items:start}

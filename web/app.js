@@ -414,14 +414,15 @@ function globe(el, geo){
 const NAV = [
   ['overview',T('Overview','Огляд'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows','Потоки'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device','Через пристрій'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 5 6 5M6 14c3 0 3-10 6-10M6 9h6'], ['talkers',T('Top hosts','Топ хостів'),'M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
   ['apps',T('Services','Сервіси'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports','Порти'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation','Геолокація'),'M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
-  ['threats',T('Events','Події'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'], ['devices',T('Devices','Пристрої'),'M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6'],
-  ['users',T('Users','Користувачі'),'M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4', 'admin'],
+  ['threats',T('Events','Події'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'],
+  ['settings',T('Settings','Налаштування'),'M9 6.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5zM9 1.5v2M9 14.5v2M1.5 9h2M14.5 9h2M3.7 3.7l1.4 1.4M12.9 12.9l1.4 1.4M3.7 14.3l1.4-1.4M12.9 5.1l1.4-1.4'],
 ];
-const navIcon = k => NAV.find(n => n[0] === k)[2];
+const DEV_ICON = 'M2 5h14v6H2zM5 8h.01M8 8h.01M6 14h6', USER_ICON = 'M6.5 7.5a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M12 4.5h4M14 2.5v4';
+const navIcon = k => (NAV.find(n => n[0] === k) || [])[2];
 const icon = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2 0 1 0 0 .01M14 13a2 2 0 1 0 0 .01M8 5l-3 6M10 5l3 6', ip:'M3 5h12v6H3zM6 14h6M7 8h.01M10 8h.01', grid:navIcon('apps'), flow:navIcon('flows'),
   globe:'M9 2a7 7 0 1 0 0 14A7 7 0 0 0 9 2zM2 9h14M9 2c2.5 2.5 2.5 11.5 0 14M9 2c-2.5 2.5-2.5 11.5 0 14', chart:'M2 15l4-6 3 3 5-8 2 2', conv:'M3 5h8l-2-2M15 13H7l2 2', list:'M3 5h12M3 9h12M3 13h8',
-  users:navIcon('talkers'), shield:navIcon('threats'), dev:navIcon('devices'), pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
+  users:navIcon('talkers'), shield:navIcon('threats'), dev:DEV_ICON, pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
 const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const flowLive = () => state.flowLive && !isCustom();
@@ -1060,7 +1061,7 @@ async function editionPanel(){
   const soon = pro && lic.days_left != null && lic.days_left < 30;
   const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // keys end at 23:59 UTC of their last day
   box.innerHTML = `<div class="edition">
-    <div class="ed-name"><b>${name}</b><span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : ed.status === 'expired' ? 'crit' : 'warn'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
+    <div class="ed-name"><b>${name}</b>${ed.module_version ? `<span class="nat">${T('Pro module', 'Модуль Pro')} ${esc(ed.module_version)}</span>` : ''}<span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : ed.status === 'expired' ? 'crit' : 'warn'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
     <div class="ed-lim">
       <div><span>${T('Records per second', 'Записів за секунду')}</span><b>${ed.rps ? T('up to ', 'до ') + fmtInt(ed.rps) : T('no limit', 'без обмежень')}</b></div>
       <div><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}</b></div>
@@ -1073,7 +1074,6 @@ async function editionPanel(){
       <div class="acts"><span class="nat" id="edMsg" role="status"></span>${ed.status !== 'community' ? `<button class="btn" id="edDel">${T('Remove key', 'Видалити ключ')}</button>` : ''}<button class="btn primary" id="edSave">${T('Apply', 'Застосувати')}</button></div></details>` : ''}
   </div>`;
   box.classList.remove('loading');
-  if (state.toLicense) { state.toLicense = false; box.closest('section').scrollIntoView({behavior:reduceMotion ? 'auto' : 'smooth', block:'start'}); }
   const say = (t, c) => { const m = document.getElementById('edMsg'); m.textContent = t; m.style.color = c || ''; };
   const send = async key => { say(T('Checking…', 'Перевіряю…'));
     try { await apiPost('license', {key}); META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionBadge(); editionPanel(); }
@@ -1098,14 +1098,49 @@ function editionBadge(){
   b.title = (pro ? 'FlowTrack Pro' + (left != null ? T(` · ${left} days left`, ` · лишилось днів: ${left}`) : '') : `FlowTrack Community · ${T('up to', 'до')} ${fmtInt(ed.rps)} ${T('records/s', 'записів/с')}`)
     + (ed.status === 'expired' ? T(' · license expired', ' · ліцензія закінчилась') : '') + ' — ' + T('edition and license', 'редакція і ліцензія');
   b.hidden = false;
-  b.onclick = () => { state.view = 'devices'; state.toLicense = true; render(); };
+  b.onclick = () => { state.view = 'settings'; state.setTab = 'license'; render(); };
+}
+// ===================== settings: one page, tabs on top =====================
+const SET_TABS = () => [['general', T('General', 'Загальні'), ICO.grid], ['devices', T('Devices', 'Пристрої'), DEV_ICON],
+  ...(isAdmin() ? [['users', T('Users', 'Користувачі'), USER_ICON]] : []), ['license', T('License', 'Ліцензія'), ICO.shield]];
+function vSettings(){
+  const tabs = SET_TABS(); if (!tabs.some(t => t[0] === state.setTab)) state.setTab = 'general';
+  document.getElementById('view').innerHTML = `<nav class="settabs glass" role="tablist" aria-label="${T('Settings', 'Налаштування')}">${tabs.map(([k, l, ic]) =>
+    `<button role="tab" data-tab="${k}" aria-selected="${k === state.setTab}" ${k === state.setTab ? '' : 'tabindex="-1"'}>${icon(ic, 16)}${l}</button>`).join('')}</nav><div id="setBody"></div>`;
+  const bar = document.querySelector('.settabs');
+  bar.querySelectorAll('button').forEach(b => b.onclick = () => { if (b.dataset.tab === state.setTab) return;
+    if (state.ifEdit && !confirm(T('Discard unsaved interface changes?', 'Скасувати незбережені зміни інтерфейсів?'))) return;
+    state.setTab = b.dataset.tab; render(); });
+  bar.addEventListener('keydown', e => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;   // arrow keys move between tabs
+    const i = tabs.findIndex(t => t[0] === state.setTab), n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length][0];
+    state.setTab = n; render(); setTimeout(() => { const b = document.querySelector(`.settabs [data-tab="${n}"]`); if (b) b.focus(); }); });
+  ({general:vGeneral, devices:vDevices, users:vUsers, license:vLicense})[state.setTab]();
+}
+function vGeneral(){
+  const ed = META.edition || {};
+  document.getElementById('setBody').innerHTML = `<div class="grid top">
+    <section class="glass panel s6">${ph('globe', T('Language', 'Мова'), T('of this browser · other users keep their own', 'цього браузера · інші користувачі мають свою'))}
+      <div class="seg" id="langSeg" role="group">${[['en', 'English'], ['uk', 'Українська']].map(([v, l]) => `<button data-v="${v}" aria-pressed="${LANG === v}">${l}</button>`).join('')}</div></section>
+    <section class="glass panel s6">${ph('list', T('About', 'Про програму'), T('version and edition', 'версія і редакція'))}
+      <div class="about">
+        <div><span>${T('Version', 'Версія')}</span><b class="mono">FlowTrack ${esc(META.version || '—')}</b></div>
+        <div><span>${T('Edition', 'Редакція')}</span><b>${ed.status === 'active' ? 'Pro' : 'Community'}</b><button class="lnk" id="toLic">${T('License', 'Ліцензія')} →</button></div>
+        <div><span>${T('Source code', 'Код')}</span><a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">github.com/henzelis/flowtrack</a></div>
+        <div><span>${T('Account', 'Обліковий запис')}</span><b class="mono">${esc(ME.name)}</b><button class="lnk" id="myPass">${T('Change my password', 'Змінити мій пароль')}</button></div>
+      </div></section></div>`;
+  document.querySelectorAll('#langSeg button').forEach(b => b.onclick = () => { if (b.dataset.v !== LANG) setLang(b.dataset.v); });
+  document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
+  document.getElementById('myPass').onclick = openPassword;
+}
+function vLicense(){
+  document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license', 'Редакція і ліцензія'), T('limits in effect · a FlowTrack Pro key raises them', 'чинні ліміти · ключ FlowTrack Pro їх знімає'))}<div id="edBox" class="loading"></div></section></div>`;
+  editionPanel();
 }
 function vDevices(){
-  const v = document.getElementById('view'); state.ifEdit = null;
+  const v = document.getElementById('setBody'); state.ifEdit = null;
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', T('Exporter devices', 'Пристрої-експортери'), T('NetFlow v5/v9 and IPFIX from any vendor · statistics for 15 min', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв'), isAdmin() ? `<button class="btn primary" id="addDev">${T('+ Connect a device', '+ Підключити пристрій')}</button>` : `<span class="nat">${T('an administrator can add devices', 'додавати пристрої може адміністратор')}</span>`)}<div id="dBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('ip', T('Interfaces', 'Інтерфейси'), T('indexes the collector saw in 24 h · the WAN role defines what is upload and download', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download'))}<div id="ifBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('shield', T('Edition and license', 'Редакція і ліцензія'), T('limits in effect · a FlowTrack Pro key raises them', 'чинні ліміти · ключ FlowTrack Pro їх знімає'))}<div id="edBox" class="loading"></div></section></div>`;
-  editionPanel();
+</div>`;
   if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
   section('dBox', async () => { const res = await api('devices'), d = res.devices; window.__devs = d;
     // the interfaces panel shows one device: the one picked in the table, else the global device filter, else the first
@@ -1264,7 +1299,7 @@ function openDevice(dev){
 // ===================== users (admin) =====================
 const ROLE_LABEL = {admin:T('Administrator', 'Адміністратор'), viewer:T('Viewer', 'Перегляд')};
 function vUsers(){
-  const v = document.getElementById('view');
+  const v = document.getElementById('setBody');
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', T('Users', 'Користувачі'), T('an administrator manages everything; «Viewer» is read-only, no changes to devices or users', 'адміністратор керує всім; «Перегляд» — лише читання, без змін пристроїв і користувачів'), `<button class="btn primary" id="addUser">${T('+ New user', '+ Новий користувач')}</button>`)}<div id="uBox" class="loading"></div></section></div>`;
   document.getElementById('addUser').onclick = () => openUser(null);
   section('uBox', async () => { const r = await fetch('api/users'); if (!r.ok) throw new Error((await r.json()).error || r.status); const users = (await r.json()).users;
@@ -1311,7 +1346,7 @@ function renderUser(){
   document.getElementById('miPass').onclick = openPassword;
   document.getElementById('miLang').onclick = () => setLang(T('uk', 'en'));
   const pw = document.getElementById('pwWarn'); if (pw) pw.onclick = openPassword;
-  const mu = document.getElementById('miUsers'); if (mu) mu.onclick = () => { state.view = 'users'; render(); };
+  const mu = document.getElementById('miUsers'); if (mu) mu.onclick = () => { state.view = 'settings'; state.setTab = 'users'; render(); };
   document.getElementById('miOut').onclick = async () => { try { await apiPost('logout', {}); } catch (e) {} ME = null; showLogin(); };
 }
 function closeUserMenu(){ const m = document.getElementById('userMenu'), b = document.getElementById('userBtn'); if (m) m.hidden = true; if (b) b.setAttribute('aria-expanded', 'false'); }
@@ -1377,10 +1412,13 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, devices:vDevices, users:vUsers};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
+  // on narrow screens the menu is a scrolling row: keep the current page in sight
+  const cur = document.querySelector('#nav [aria-current="page"]'), navEl = document.getElementById('nav');
+  if (cur && navEl.scrollWidth > navEl.clientWidth) navEl.scrollLeft += cur.getBoundingClientRect().left - navEl.getBoundingClientRect().left - (navEl.clientWidth - cur.offsetWidth) / 2;
   document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period', 'період')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period', 'Змінити період')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to', 'Повернутися до')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to', 'Повернутися до')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter', 'Прибрати фільтр')}" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all', 'Скинути всі')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
@@ -1391,6 +1429,7 @@ function renderShell(){
   ds.innerHTML = `<option value="">${T(`All devices (${META.devices.length})`, `Усі пристрої (${META.devices.length})`)}</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = df ? df.v : '';
   editionBadge();
+  const fv = document.getElementById('ftVer'); if (fv && META.version) fv.textContent = 'FlowTrack ' + META.version;
   const rs = document.getElementById('rangeSel');
   rs.querySelectorAll('option[data-x]').forEach(o => o.remove());
   if (isCustom()) rs.insertAdjacentHTML('beforeend', `<option data-x value="custom">${esc(rangeLabel())}</option>`);
@@ -1398,9 +1437,9 @@ function renderShell(){
   rs.value = state.range;
   document.getElementById('trafSel').value = state.traffic;
 }
-function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
-function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
-function render(){ if (state.view === 'users' && !isAdmin()) state.view = 'overview'; renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
+function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.view === 'settings') p.set('tab', state.setTab || 'general'); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
+function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') === 'devices' || p.get('v') === 'users') { state.view = 'settings'; state.setTab = p.get('v'); } else if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('tab')) state.setTab = p.get('tab'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
+function render(){ if (state.view === 'devices' || state.view === 'users') { state.setTab = state.view; state.view = 'settings'; } renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
 
 document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) putFilter({k:'device', v:e.target.value, neg:false}); render(); };
 document.getElementById('rangeSel').onchange = e => { const v = e.target.value; if (v === 'pick') { e.target.value = state.range; openPeriod(); return; } if (v !== 'custom') { state.range = v; render(); } };

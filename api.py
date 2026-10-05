@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, pro_module, save_license, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, pro_module, save_license, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
@@ -220,7 +220,7 @@ def api_meta(q):
                         'city': c.get('city', ''), 'country': c.get('country', ''), 'lat': c.get('lat'), 'lon': c.get('lon'), 'last': r['last']})
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
-            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info()}
+            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION}
 
 
 def edition_info(admin=False):
@@ -228,6 +228,8 @@ def edition_info(admin=False):
     ed = edition()
     out = {'name': ed['name'], 'status': ed['status'], 'rps': ed['rps'], 'retention_days': retention_days(),
            'features': ed['features'], 'module': ed['module'], 'ui_scripts': pro_ui_scripts()}
+    if ed['module']:
+        out['module_version'] = getattr(pro_module(), '__version__', '')
     col = collector_health(24 * 60)
     out['license_drops_24h'] = col['license_drops'] if col else 0
     lic = ed['license'] or {}
@@ -529,7 +531,8 @@ def interfaces_of(c, rows, seen_addrs):
 def collector_health(minutes=15):
     """Receiver totals for the last minutes (None before the collector wrote any)."""
     try:
-        r = ch(f"""SELECT count() AS n, argMax(workers, ts) AS workers, argMax(rcvbuf, ts) AS rcvbuf, sum(packets) AS packets,
+        # workers: the newest non-zero value — a collector that stops writes a last row with its workers already gone
+        r = ch(f"""SELECT count() AS n, if(countIf(workers > 0) > 0, argMaxIf(workers, ts, workers > 0), 0) AS workers, argMax(rcvbuf, ts) AS rcvbuf, sum(packets) AS packets,
                 sum(socket_drops) AS socket_drops, sum(queue_drops) AS queue_drops, sum(dropped_rows) AS dropped_rows, sum(license_drops) AS license_drops,
                 max(rx_queue_peak) AS rx_queue_peak, argMax(buffered, ts) AS buffered, toUnixTimestamp(max(ts)) AS last
             FROM collector_stats WHERE ts >= now() - INTERVAL {int(minutes)} MINUTE""", fmt='JSON')[0]
@@ -651,8 +654,8 @@ def api_alerts(q):
     lic = ed['license'] or {}
     if ed['status'] == 'expired':
         out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowTrack Pro license expired', 'Ліцензія FlowTrack Pro закінчилась'),
-                    'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s); stored data is kept. Enter a renewed key on the Devices page.",
-                               f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Введіть подовжений ключ на сторінці «Пристрої»."),
+                    'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s); stored data is kept. Enter a renewed key in Settings → License.",
+                               f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Введіть подовжений ключ у «Налаштування → Ліцензія»."),
                     'when': time.strftime('%Y-%m-%d', time.gmtime(lic.get('expires') or 0))})
     elif ed['status'] == 'active' and lic.get('days_left', 99) < 14:
         out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon', 'Ліцензія FlowTrack Pro скоро закінчиться'),

@@ -26,7 +26,7 @@ from netflow.ipfix import IPFIXTemplateNotRecognized, TemplateField, TemplateFie
 from netflow.v9 import V9OptionsTemplateRecord, V9TemplateField, V9TemplateNotRecognized, V9TemplateRecord
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (STATE_DIR, CHError, Geo, RateLimit, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
+from common import (STATE_DIR, VERSION, CHError, Geo, RateLimit, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_retention_days, ipstr, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
@@ -718,7 +718,7 @@ class Receiver:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
         ed = edition()
-        log(f"edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
+        log(f"FlowTrack {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
         self.apply_retention()
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)

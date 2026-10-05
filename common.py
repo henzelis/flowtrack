@@ -21,6 +21,11 @@ CH_DB = os.environ.get('FT_CH_DB', 'flowtrack')
 
 
 STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
+try:                                  # the release number, one file at the top of the repository
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'VERSION')) as _f:
+        VERSION = _f.read().strip()
+except OSError:
+    VERSION = 'dev'
 UI_EXPORTERS = os.path.join(STATE_DIR, 'exporters.json')
 
 

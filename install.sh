@@ -665,12 +665,13 @@ print("licensed to", lic.get("customer"))'
 }
 if [ -n "$LIC_KEY" ] && ! step "$(t 'FlowTrack Pro license' 'Ліцензія FlowTrack Pro')" install_license; then
   die "$(t 'The license key was not installed' 'Ключ ліцензії не встановлено'): $(tail -n 1 "$LOG")
-  $(t 'FlowTrack is installed and running with its previous edition. Fix the key and run the command again, or enter it on the Devices page.' 'FlowTrack встановлено й запущено з попередньою редакцією. Виправте ключ і запустіть команду ще раз або введіть його на сторінці «Пристрої».')"
+  $(t 'FlowTrack is installed and running with its previous edition. Fix the key and run the command again, or enter it in Settings → License.' 'FlowTrack встановлено й запущено з попередньою редакцією. Виправте ключ і запустіть команду ще раз або введіть його у «Налаштування → Ліцензія».')"
 fi
 
 # ------------------------------------------------------------------ done
 say ""
-say "${G}${B}$(t 'FlowTrack is running.' 'FlowTrack працює.')${N}"
+FT_VERSION=$(cat "$PREFIX/app/VERSION" 2>/dev/null || echo dev)
+say "${G}${B}$(t "FlowTrack $FT_VERSION is running." "FlowTrack $FT_VERSION працює.")${N}"
 say ""
 for ip in $(bind_ips "$WEB_BIND"); do say "  ${B}$PROTO://$ip:$WEB_PORT${N}"; done
 if [ "$USE_TLS" = yes ]; then

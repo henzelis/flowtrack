@@ -45,7 +45,7 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   packets over the workers, templates go to all of them — so even a single busy exporter uses many
   cores, and a slow database never stalls the socket.
 - Collector health: packets dropped by the kernel (socket buffer full), by the worker queues, and records
-  lost while ClickHouse was unreachable — shown on the Devices page and raised as an event.
+  lost while ClickHouse was unreachable — shown in Settings → Devices and raised as an event.
 - Optional raw forwarding (`FT_FORWARD`) so another collector keeps receiving the same feed.
 
 **Web UI**
@@ -55,7 +55,8 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   direction), inspector for the selected host or conversation, protocols, raw flow records with NAT,
   ASN and interfaces.
 - *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
-  (sustained upload, bursts, new countries, export loss), *Devices* (exporters and interfaces).
+  (sustained upload, bursts, new countries, export loss), *Settings* — tabs for language and version, devices
+  (exporters and interfaces), users, and the edition / license.
 - Any period within the kept flow details (14 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
   drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
   incident view can be bookmarked or shared.
@@ -174,7 +175,7 @@ users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`
 | `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
 
-Devices can be described in `/etc/flowtrack/exporters.json` or from the UI (*Devices → Connect
+Devices can be described in `/etc/flowtrack/exporters.json` or from the UI (*Settings → Devices → Connect
 device*, admins only; the collector picks changes up within a minute):
 
 ```json
@@ -197,7 +198,7 @@ the device itself originates; coordinates place the site on the map.
 internet traffic, internal interfaces (LAN, VLANs, VPN tunnels) for traffic between your own networks.
 Monitoring both directions (ingress and egress) is fine: when a flow is reported on the way in and again
 on the way out, FlowTrack keeps one copy if the record carries the direction field (NetFlow v9
-`DIRECTION` / IPFIX `flowDirection`), and the Devices page warns when an exporter sends copies that
+`DIRECTION` / IPFIX `flowDirection`), and Settings → Devices warns when an exporter sends copies that
 cannot be told apart. The *Internet / Internal / All* selector in the top bar switches between internet
 traffic and traffic between inside addresses.
 
@@ -317,17 +318,17 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 | Pro features (notifications, reports, API tokens, …) | — | ✓ as they ship |
 
 5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
-few thousand. Above the limit, records are not stored but counted: the Devices page and an event show how many.
+few thousand. Above the limit, records are not stored but counted: Settings → License and an event show how many.
 Installs made before the limits keep their 30 days of flow details; retention is never shortened
 automatically, not even when a license expires. A Pro license comes as two files — the module
-`flowtrack-pro-<version>.tar.gz` and the key. Install the module once (as root), then enter the key on the Devices
-page (administrators) or give it to the installer as well:
+`flowtrack-pro-<version>.tar.gz` and the key. Install the module once (as root), then enter the key in Settings → License
+(administrators) or give it to the installer as well:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash -s -- --upgrade --pro ./flowtrack-pro-0.1.0.tar.gz --license ./license.key
 ```
 
-The Devices page warns 30 days before a license ends and an event two weeks before.
+Settings → License (and the badge under the logo) warns 30 days before a license ends and an event two weeks before.
 
 ## Performance
 
@@ -342,7 +343,7 @@ NetFlow v9 packets offered for 15 s, counting what was stored after the queues d
 
 One worker decodes and enriches about **30,000 records per second** on one core; the receiver itself needs about a
 quarter of a core at 125,000 records/s. For scale: a small office firewall exports a few records per
-second, a busy 1 Gbit/s internet edge typically a few thousand. If the Devices page reports drops, raise
+second, a busy 1 Gbit/s internet edge typically a few thousand. If Settings → Devices reports drops, raise
 `FT_WORKERS` or use sampling on the exporter. The figures above are the decoder itself; FlowTrack Community stores
 up to 5,000 records/s (see [Editions](#editions)).
 
