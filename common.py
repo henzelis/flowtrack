@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -259,6 +260,125 @@ def apply_schema(path):
     for stmt in text.split(';'):
         if stmt.strip():
             ch(stmt)
+
+
+# ---------------------------------------------------------------- editions
+# FlowTrack Community is this repository. FlowTrack Pro is a separate module (`flowtrack_pro`, installed into
+# FT_PRO_DIR) that checks a license key and then raises the limits below and adds its own API routes and UI
+# scripts. The core knows nothing about what Pro does: it only asks `edition()` for limits and extensions.
+COMMUNITY = {'name': 'community', 'rps': 5000, 'retention_days': 14, 'features': []}
+LICENSE_FILE = os.path.join(STATE_DIR, 'license.key')
+PRO_DIR = os.environ.get('FT_PRO_DIR', '/opt/flowtrack/pro')
+_edition = {'key': None, 'value': None}
+
+
+def pro_module():
+    """The installed Pro module, or None."""
+    if PRO_DIR not in sys.path and os.path.isdir(PRO_DIR):
+        sys.path.insert(0, PRO_DIR)
+    try:
+        import flowtrack_pro
+        return flowtrack_pro
+    except ImportError:
+        return None
+
+
+def read_license():
+    try:
+        with open(LICENSE_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def edition():
+    """Limits and extensions in effect: {'name', 'rps' (None = unlimited), 'retention_days', 'features',
+    'license': {...} or None, 'status': 'community' | 'active' | 'expired' | 'no_module' | 'invalid', 'message', 'module'}.
+    Licenses are time-limited: after the end date the Community limits apply again (stored data is kept).
+    Cached until the license file changes."""
+    try:
+        mt = os.stat(LICENSE_FILE).st_mtime
+    except OSError:
+        mt = None
+    if _edition['key'] == mt and _edition['value'] is not None:
+        return _edition['value']
+    text, mod = read_license(), pro_module()
+    out = dict(COMMUNITY, license=None, status='community', message='', module=bool(mod))
+    if text and not mod:
+        out.update(status='no_module', message='a license key is installed, but the FlowTrack Pro module is not')
+    elif text:
+        try:
+            ed = mod.activate(text)
+            out.update(name=ed.get('name', 'pro'), rps=ed.get('rps'), features=list(ed.get('features', [])),
+                       retention_days=max(COMMUNITY['retention_days'], int(ed.get('retention_days') or 0)),
+                       license=ed.get('license'), status='active')
+        except Exception as ex:          # any problem with the key leaves the Community limits in place
+            out.update(status='expired' if getattr(ex, 'code', '') == 'expired' else 'invalid', message=str(ex)[:200],
+                       license=getattr(ex, 'license', None))
+    _edition.update(key=mt, value=out)
+    return out
+
+
+def save_license(text):
+    """Store a license key (the Pro module must accept it); '' removes it. -> edition()."""
+    text = (text or '').strip()
+    if text:
+        mod = pro_module()
+        if not mod:
+            raise ValueError('the FlowTrack Pro module is not installed')
+        mod.activate(text)                   # raises with the reason if the key is not valid
+        tmp = LICENSE_FILE + '.tmp'
+        with open(tmp, 'w') as f:
+            f.write(text + '\n')
+        os.chmod(tmp, 0o640)
+        os.replace(tmp, LICENSE_FILE)
+    elif os.path.exists(LICENSE_FILE):
+        os.remove(LICENSE_FILE)
+    _edition['value'] = None
+    return edition()
+
+
+_TTL_RE = None
+
+
+def flows_retention_days(target=None):
+    """Days of flow details ClickHouse keeps (the TTL of `flows`). With `target`, the TTL is raised to it when
+    shorter — never lowered, so an expired license or a smaller edition never deletes stored data, and installs
+    made before the 14-day Community limit keep their 30 days."""
+    global _TTL_RE
+    if _TTL_RE is None:
+        import re
+        _TTL_RE = re.compile(r'TTL ts \+ (?:toIntervalDay\((\d+)\)|INTERVAL (\d+) DAY)')
+    rows = ch("SELECT create_table_query AS q FROM system.tables WHERE database = currentDatabase() AND name = 'flows'", fmt='JSON')
+    m = _TTL_RE.search(rows[0]['q']) if rows else None
+    cur = int(m.group(1) or m.group(2)) if m else 0
+    if target and cur and target > cur:
+        ch(f'ALTER TABLE flows MODIFY TTL ts + INTERVAL {int(target)} DAY')
+        cur = int(target)
+    return cur
+
+
+class RateLimit:
+    """Token bucket for the records/s limit, averaged over `window` seconds so short bursts pass.
+    rate None = unlimited. take() -> True if the record may be stored."""
+    def __init__(self, rate, window=60, clock=None):
+        self.clock = clock or __import__('time').monotonic
+        self.set_rate(rate, window)
+
+    def set_rate(self, rate, window=60):
+        self.rate, self.cap = rate, (rate * window if rate else 0)
+        self.tokens, self.t = self.cap, self.clock()
+
+    def take(self):
+        if not self.rate:
+            return True
+        now = self.clock()
+        self.tokens = min(self.cap, self.tokens + (now - self.t) * self.rate)
+        self.t = now
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True
+        return False
 
 
 # ---------------------------------------------------------------- enrichment

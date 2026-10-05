@@ -34,9 +34,9 @@ CREATE TABLE IF NOT EXISTS flows
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, int_ip, ext_ip)
-TTL ts + INTERVAL 30 DAY;
+TTL ts + INTERVAL 14 DAY;   -- new installs (Community); the collector extends it for a Pro license and never shortens it
 
--- Long-term usage per hour x exporter x inside host x direction (kept for years; raw flows for 30 days).
+-- Long-term usage per hour x exporter x inside host x direction (kept for years; raw flows for 14+ days).
 CREATE TABLE IF NOT EXISTS usage_1h
 (
     ts       DateTime,
@@ -104,3 +104,5 @@ ALTER TABLE flows ADD COLUMN IF NOT EXISTS obs UInt8 DEFAULT 255;
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_dropped UInt64 DEFAULT 0;
 -- packets the exporter sent again (identical except the sequence number), dropped by the receiver
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_packets UInt64 DEFAULT 0;
+-- records not stored because the edition's records/s limit was exceeded
+ALTER TABLE collector_stats ADD COLUMN IF NOT EXISTS license_drops UInt64 DEFAULT 0;

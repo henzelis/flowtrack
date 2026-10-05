@@ -56,7 +56,7 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   ASN and interfaces.
 - *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
   (sustained upload, bursts, new countries, export loss), *Devices* (exporters and interfaces).
-- Any period within the 30 days of detailed data: a preset, *Custom period…* (from / to, to the minute) or
+- Any period within the kept flow details (14 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
   drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
   incident view can be bookmarked or shared.
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
@@ -291,7 +291,7 @@ snippets.
 ## API
 
 JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`, `6h`, `24h`, `7d`,
-`30d`) or `from` + `to` (unix seconds, 1 minute to 31 days) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip`, `dst`, `service`, `l7`,
+`30d`) or `from` + `to` (unix seconds, from 1 minute up to the retention of flow details) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip`, `dst`, `service`, `l7`,
 `country`, `city`, `port`, `device`, `asn`, `dir`, `proto`).
 
 | Endpoint | Returns |
@@ -305,6 +305,22 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 | `GET /api/devices`, `GET /api/alerts`, `GET /api/meta` | exporters and interfaces; detections; metadata |
 | `POST /api/login`, `/api/logout`, `/api/me/password` | session and own password |
 | `GET/POST /api/users…`, `POST /api/devices/save`, `/api/devices/delete` | admin only |
+
+## Editions
+
+| | **FlowTrack Community** (this repository, MIT) | **FlowTrack Pro** (license key) |
+|---|---|---|
+| Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit |
+| Flow details kept | **14 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
+| Term | — | subscription with an end date; afterwards the Community limits apply again |
+| Everything in [Features](#features) | ✓ | ✓ |
+| Pro features (notifications, reports, API tokens, …) | — | ✓ as they ship |
+
+5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
+few thousand. Above the limit, records are not stored but counted: the Devices page and an event show how many.
+Installs made before the limits keep their 30 days of flow details; retention is never shortened
+automatically, not even when a license expires. A Pro key is entered on the Devices page (administrators); the page
+and an event warn two weeks before it ends.
 
 ## Performance
 
@@ -320,7 +336,8 @@ NetFlow v9 packets offered for 15 s, counting what was stored after the queues d
 One worker decodes and enriches about **30,000 records per second** on one core; the receiver itself needs about a
 quarter of a core at 125,000 records/s. For scale: a small office firewall exports a few records per
 second, a busy 1 Gbit/s internet edge typically a few thousand. If the Devices page reports drops, raise
-`FT_WORKERS` or use sampling on the exporter.
+`FT_WORKERS` or use sampling on the exporter. The figures above are the decoder itself; FlowTrack Community stores
+up to 5,000 records/s (see [Editions](#editions)).
 
 ## Roadmap
 

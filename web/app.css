@@ -378,3 +378,16 @@ tr.unseen td{opacity:.75}
 .period-pop #pErr:empty{display:none}
 .period-pop .acts{display:flex;justify-content:flex-end;gap:8px}
 .seg button:disabled{opacity:.4;cursor:not-allowed}
+/* edition and license (Devices) */
+.edition{display:grid;gap:14px}
+.ed-name{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ed-name b{font-size:16px}
+.ed-lim{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.ed-lim>div{display:grid;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid var(--edge)}
+.ed-lim span{font-size:12px;color:var(--ink3)}
+.ed-lim b{font:700 15px var(--f-mono)}
+.ed-lim b.warnc{color:var(--warn)}
+.ed-key summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--blue-hi)}
+.ed-key textarea{width:100%;margin-top:10px;box-sizing:border-box;border:1px solid var(--edge);border-radius:10px;padding:10px;background:rgba(0,0,0,.3);font:500 12.5px var(--f-mono);color:var(--ink);resize:vertical}
+.ed-key .acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px}
+.ed-key .acts .nat{margin-right:auto}

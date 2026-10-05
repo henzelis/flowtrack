@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
-from common import (STATE_DIR, CHError, ch, describe_listeners, exporters_mtime, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, pro_module, save_license, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
@@ -32,7 +32,18 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 RANGES = {'1h': 3600, '6h': 6 * 3600, '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400}
 STEP = {3600: 60, 6 * 3600: 300, 86400: 300, 7 * 86400: 3600, 30 * 86400: 4 * 3600}
 NICE_STEPS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 4 * 3600)
-MAX_SPAN = 31 * 86400    # raw flows are kept for 30 days
+_retention = {'t': 0, 'days': 30}
+
+
+def retention_days():
+    """Days of flow details kept (the TTL of `flows`), re-read every minute."""
+    if time.time() - _retention['t'] > 60:
+        try:
+            _retention['days'] = flows_retention_days() or _retention['days']
+        except (CHError, OSError):
+            pass
+        _retention['t'] = time.time()
+    return _retention['days']
 
 
 def period(q):
@@ -46,8 +57,8 @@ def period(q):
         t1 = min(t1, now + 60)
         if t1 - t0 < 60:
             raise BadRequest('the period must be at least a minute long')
-        if t1 - t0 > MAX_SPAN:
-            raise BadRequest('the period can be at most 31 days long')
+        if t1 - t0 > (retention_days() + 1) * 86400:
+            raise BadRequest(f'the period can be at most {retention_days() + 1} days long')
         return t0, t1, True
     return now - RANGES.get(q.get('range', ['24h'])[0], 86400), now, False
 
@@ -209,7 +220,42 @@ def api_meta(q):
                         'city': c.get('city', ''), 'country': c.get('country', ''), 'lat': c.get('lat'), 'lon': c.get('lon'), 'last': r['last']})
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
-            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0'}
+            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info()}
+
+
+def edition_info(admin=False):
+    """What the UI shows about the edition; the license's customer/expiry and the error message only to admins."""
+    ed = edition()
+    out = {'name': ed['name'], 'status': ed['status'], 'rps': ed['rps'], 'retention_days': retention_days(),
+           'features': ed['features'], 'module': ed['module'], 'ui_scripts': pro_ui_scripts()}
+    col = collector_health(24 * 60)
+    out['license_drops_24h'] = col['license_drops'] if col else 0
+    if admin:
+        out['license'], out['message'] = ed['license'], ed['message']
+    return out
+
+
+def pro_ui_scripts():
+    """UI scripts of an active Pro module, served under /pro/."""
+    if edition()['status'] != 'active':
+        return []
+    mod = pro_module()
+    return [f'pro/{x}' for x in getattr(mod, 'UI_SCRIPTS', [])]
+
+
+def pro_route(path):
+    """An API route added by an active Pro module."""
+    if edition()['status'] != 'active':
+        return None
+    return getattr(pro_module(), 'ROUTES', {}).get(path)
+
+
+def post_license(body):
+    try:
+        save_license(body.get('key', ''))
+    except ValueError as ex:
+        raise BadRequest(str(ex)) from None
+    return edition_info(admin=True)
 
 
 def api_summary(q):
@@ -482,7 +528,7 @@ def collector_health(minutes=15):
     """Receiver totals for the last minutes (None before the collector wrote any)."""
     try:
         r = ch(f"""SELECT count() AS n, argMax(workers, ts) AS workers, argMax(rcvbuf, ts) AS rcvbuf, sum(packets) AS packets,
-                sum(socket_drops) AS socket_drops, sum(queue_drops) AS queue_drops, sum(dropped_rows) AS dropped_rows,
+                sum(socket_drops) AS socket_drops, sum(queue_drops) AS queue_drops, sum(dropped_rows) AS dropped_rows, sum(license_drops) AS license_drops,
                 max(rx_queue_peak) AS rx_queue_peak, argMax(buffered, ts) AS buffered, toUnixTimestamp(max(ts)) AS last
             FROM collector_stats WHERE ts >= now() - INTERVAL {int(minutes)} MINUTE""", fmt='JSON')[0]
     except CHError:                    # table appears when the new collector starts
@@ -599,6 +645,24 @@ def api_alerts(q):
                                f"Raise FT_WORKERS in /etc/flowtrack/env (now {col['workers']}) or net.core.rmem_max.",
                                f"За годину відкинуто {lost} пакетів ({pct:.2f}%): буфер сокета — {col['socket_drops']}, черга воркерів — {col['queue_drops']}. "
                                f"Збільште FT_WORKERS у /etc/flowtrack/env (зараз {col['workers']}) або net.core.rmem_max."), 'when': tr('last hour', 'за годину')})
+    ed = edition()
+    lic = ed['license'] or {}
+    if ed['status'] == 'expired':
+        out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowTrack Pro license expired', 'Ліцензія FlowTrack Pro закінчилась'),
+                    'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s); stored data is kept. Enter a renewed key on the Devices page.",
+                               f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Введіть подовжений ключ на сторінці «Пристрої»."),
+                    'when': time.strftime('%Y-%m-%d', time.gmtime(lic.get('expires') or 0))})
+    elif ed['status'] == 'active' and lic.get('days_left', 99) < 14:
+        out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon', 'Ліцензія FlowTrack Pro скоро закінчиться'),
+                    'text': tr(f"The license ends on {time.strftime('%Y-%m-%d', time.gmtime(lic['expires']))} ({lic['days_left']} day{'' if lic['days_left'] == 1 else 's'} left). After that the Community limits apply.",
+                               f"Ліцензія діє до {time.strftime('%d.%m.%Y', time.gmtime(lic['expires']))} (лишилось днів: {lic['days_left']}). Після цього діятимуть ліміти Community."),
+                    'when': tr(f"{lic['days_left']} day{'' if lic['days_left'] == 1 else 's'} left", f"лишилось {lic['days_left']} дн.")})
+    if col and col.get('license_drops'):
+        out.append({'sev': 'warn', 'kind': 'license_limit', 'title': tr('Edition limit reached', 'Досягнуто ліміту редакції'),
+                    'text': tr(f"{col['license_drops']} records were not stored in the last hour: the traffic exceeds {ed['rps']:,} records/s, the limit of FlowTrack Community. "
+                               "FlowTrack Pro has no limit.",
+                               f"За годину {col['license_drops']} записів не збережено: трафік перевищує {ed['rps']:,} записів/с — ліміт FlowTrack Community. "
+                               "У FlowTrack Pro ліміту немає."), 'when': tr('last hour', 'за годину')})
     if col and col['dropped_rows']:
         out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': tr('Records not stored', 'Записи не збережено'),
                     'text': tr(f"{col['dropped_rows']} records did not reach the database in the last hour: ClickHouse was unavailable longer than the collector buffer lasts.",
@@ -799,11 +863,13 @@ class H(BaseHTTPRequestHandler):
                 return self.json(401, {'error': 'login required'})
             if u.path == '/api/me':
                 return self.json(200, AUTH.public(user))
+            if u.path == '/api/edition':
+                return self.json(200, edition_info(admin=AUTH.users[user]['role'] == 'admin'))
             if u.path in ADMIN_GET:
                 if AUTH.users[user]['role'] != 'admin':
                     return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
                 return self.json(200, {'users': AUTH.list_users()})
-        fn = ROUTES.get(u.path)
+        fn = ROUTES.get(u.path) or (pro_route(u.path) if u.path.startswith('/api/') else None)
         if fn:
             try:
                 return self.send(200, json.dumps(fn(parse_qs(u.query)), default=str).encode(), 'application/json')
@@ -813,8 +879,14 @@ class H(BaseHTTPRequestHandler):
                 print(f'[flowtrack-api] {u.path}: {e}', flush=True)
                 return self.send(502, json.dumps({'error': 'database error'}).encode(), 'application/json')
         path = 'index.html' if u.path in ('/', '') else u.path.lstrip('/')
-        full = os.path.realpath(os.path.join(WEB_DIR, path))
-        if not full.startswith(os.path.realpath(WEB_DIR) + os.sep) or not os.path.isfile(full):
+        root = WEB_DIR
+        if path.startswith('pro/'):         # UI files of an active Pro module
+            mod = pro_module() if edition()['status'] == 'active' else None
+            if not mod or not getattr(mod, 'WEB_DIR', None):
+                return self.send(404, b'not found', 'text/plain')
+            root, path = mod.WEB_DIR, path[4:]
+        full = os.path.realpath(os.path.join(root, path))
+        if not full.startswith(os.path.realpath(root) + os.sep) or not os.path.isfile(full):
             return self.send(404, b'not found', 'text/plain')
         with open(full, 'rb') as f:
             body = f.read()
@@ -861,6 +933,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/devices/save': lambda: post_device_save(body, user),
                 '/api/devices/delete': lambda: post_device_delete(body, user),
                 '/api/devices/interfaces': lambda: post_device_interfaces(body, user),
+                '/api/license': lambda: post_license(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})

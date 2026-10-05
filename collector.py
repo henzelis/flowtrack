@@ -26,8 +26,8 @@ from netflow.ipfix import IPFIXTemplateNotRecognized, TemplateField, TemplateFie
 from netflow.v9 import V9OptionsTemplateRecord, V9TemplateField, V9TemplateNotRecognized, V9TemplateRecord
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (STATE_DIR, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, exporters_mtime,  # noqa: E402
-                    ipstr, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
+from common import (STATE_DIR, CHError, Geo, RateLimit, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
+                    exporters_mtime, flows_retention_days, ipstr, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -313,8 +313,15 @@ def peek(data, tpl):
 class Collector:
     """Decodes packets and writes flows to ClickHouse. One per worker process; the receiver feeds it.
     Used directly (tests, benchmarks), it also does the packet accounting itself."""
-    def __init__(self, worker=0, accounting=True):
+    def __init__(self, worker=0, accounting=True, workers=1, rate_limit=True):
         self.worker = worker
+        self.workers = max(1, workers)
+        # the edition's records/s limit, shared evenly by the workers (the receiver spreads packets round-robin);
+        # rate_limit=False is for benchmarks that measure the decoder itself
+        self.rate_limited = rate_limit
+        self.rps = edition()['rps'] if rate_limit else None
+        self.limit = RateLimit(self.rps / self.workers if self.rps else None)
+        self.license_dropped = 0
         self.geo = Geo()
         self.cfg = load_exporters()
         self.cfg_mtime = exporters_mtime()
@@ -386,6 +393,10 @@ class Collector:
             e.ingress_ifs.add(in_if)
         elif obs == 1 and in_if in e.ingress_ifs:
             e.dup_dropped += 1
+            return
+        if not self.limit.take():           # over the edition's records/s limit: received and counted, not stored
+            e.records += 1
+            self.license_dropped += 1
             return
 
         # inside / outside endpoint and direction
@@ -496,8 +507,8 @@ class Collector:
                              'templates': len(e.templates['netflow']) + len(e.templates['ipfix']),
                              'sampling': max(e.max_sampling, e.opt_sampling or 1, e.cfg_sampling)}
                 e.reset()
-        out = {'exp': exp, 'buffered': len(self.buf), 'dropped_rows': self.dropped}
-        self.dropped = 0
+        out = {'exp': exp, 'buffered': len(self.buf), 'dropped_rows': self.dropped, 'license_dropped': self.license_dropped}
+        self.dropped = self.license_dropped = 0
         return out
 
     def save_templates(self):
@@ -554,13 +565,17 @@ class Collector:
             if self.worker == 0:            # every worker sees every template; one of them saves them
                 self.save_templates()
             self.reload_config()
+            rps = edition()['rps'] if self.rate_limited else None   # a license change applies without a restart
+            if rps != self.rps:
+                self.rps = rps
+                self.limit.set_rate(rps / self.workers if rps else None)
 
 
-def worker_main(n, q, results, ppid):
+def worker_main(n, q, results, ppid, workers=1):
     """Decoding process: batches of (packet, exporter ip, learn_only) from the receiver -> ClickHouse."""
     signal.signal(signal.SIGTERM, signal.SIG_IGN)     # the receiver stops us with a sentinel after draining
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    c = Collector(worker=n, accounting=False)
+    c = Collector(worker=n, accounting=False, workers=workers)
     c.load_templates()
     last_report = time.time()
     while True:
@@ -608,10 +623,10 @@ class Receiver:
 
     @staticmethod
     def empty_col():
-        return {'packets': 0, 'socket_drops': 0, 'queue_drops': 0, 'dropped_rows': 0, 'rx_queue_peak': 0}
+        return {'packets': 0, 'socket_drops': 0, 'queue_drops': 0, 'dropped_rows': 0, 'license_drops': 0, 'rx_queue_peak': 0}
 
     def start_worker(self, i):
-        p = self.ctx.Process(target=worker_main, args=(i, self.queues[i], self.results, os.getpid()), name=f'flowtrack-worker-{i}', daemon=True)
+        p = self.ctx.Process(target=worker_main, args=(i, self.queues[i], self.results, os.getpid(), self.n), name=f'flowtrack-worker-{i}', daemon=True)
         p.start()
         self.procs[i] = p
 
@@ -634,6 +649,7 @@ class Receiver:
                 return
             self.worker_state[n] = st['buffered']
             self.col_acc['dropped_rows'] += st['dropped_rows']
+            self.col_acc['license_drops'] += st.get('license_dropped', 0)
             for ip, x in st['exp'].items():
                 a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0, 'dup_dropped': 0,
                                                  'decode_errors': 0, 'templates': 0, 'sampling': 1})
@@ -690,6 +706,12 @@ class Receiver:
         else:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
+        ed = edition()
+        try:
+            days = flows_retention_days(ed['retention_days'])
+            log(f"edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s, flow details kept {days} days")
+        except (CHError, OSError) as ex:
+            log(f'WARN could not check the retention of flows: {ex}')
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:

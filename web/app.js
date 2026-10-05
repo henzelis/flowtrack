@@ -1046,10 +1046,53 @@ const VENDORS = {
   Juniper:(ip, port) => `set services flow-monitoring version-ipfix template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} version-ipfix template FT`,
   'Linux / pmacct':(ip, port) => `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: 10\npcap_interface: eth0`,
 };
+// ---- edition: limits in effect, the license key (admin), and UI scripts of an active Pro module
+const fmtInt = n => (+n || 0).toLocaleString(LOC);
+async function editionPanel(){
+  const box = document.getElementById('edBox'); if (!box) return;
+  let ed; try { ed = await api('edition'); } catch (e) { box.innerHTML = errBox(e); box.classList.remove('loading'); return; }
+  if (!box.isConnected) return;
+  const pro = ed.status === 'active', lic = ed.license || {};
+  const name = pro ? 'FlowTrack Pro' : 'FlowTrack Community';
+  const status = {community:T('free edition', 'безкоштовна редакція'), active:T('license active', 'ліцензія активна'),
+    no_module:T('a key is installed, but the Pro module is not', 'ключ встановлено, але модуля Pro немає'), invalid:T('the license key is not valid', 'ключ ліцензії недійсний'),
+    expired:T('license expired — Community limits apply', 'ліцензія закінчилась — діють ліміти Community')}[ed.status] || ed.status;
+  const soon = pro && lic.days_left != null && lic.days_left < 30;
+  const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // keys end at 23:59 UTC of their last day
+  box.innerHTML = `<div class="edition">
+    <div class="ed-name"><b>${name}</b><span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : ed.status === 'expired' ? 'crit' : 'warn'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
+    <div class="ed-lim">
+      <div><span>${T('Records per second', 'Записів за секунду')}</span><b>${ed.rps ? T('up to ', 'до ') + fmtInt(ed.rps) : T('no limit', 'без обмежень')}</b></div>
+      <div><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}</b></div>
+      <div><span>${T('Not stored over the limit, 24 h', 'Не збережено понад ліміт, 24 год')}</span><b class="${ed.license_drops_24h ? 'warnc' : ''}">${fmtInt(ed.license_drops_24h)}</b></div>
+      ${lic.customer ? `<div><span>${T('Licensed to', 'Ліцензіат')}</span><b>${esc(lic.customer)}</b></div><div><span>${pro ? T('Valid until', 'Діє до') : T('Expired on', 'Закінчилась')}</span><b class="${soon || !pro ? 'warnc' : ''}">${until}</b></div>` : ''}
+    </div>
+    ${isAdmin() ? `<details class="ed-key"${['invalid', 'no_module', 'expired'].includes(ed.status) || soon ? ' open' : ''}><summary>${pro || ed.status === 'expired' ? T('Enter a renewed key or remove it', 'Ввести подовжений ключ або видалити') : T('Enter a FlowTrack Pro license key', 'Ввести ключ ліцензії FlowTrack Pro')}</summary>
+      <textarea id="edKey" rows="3" spellcheck="false" placeholder="${T('paste the key here', 'вставте ключ сюди')}"></textarea>
+      <div class="acts"><span class="nat" id="edMsg" role="status"></span>${ed.status !== 'community' ? `<button class="btn" id="edDel">${T('Remove key', 'Видалити ключ')}</button>` : ''}<button class="btn primary" id="edSave">${T('Apply', 'Застосувати')}</button></div></details>` : ''}
+  </div>`;
+  box.classList.remove('loading');
+  const say = (t, c) => { const m = document.getElementById('edMsg'); m.textContent = t; m.style.color = c || ''; };
+  const send = async key => { say(T('Checking…', 'Перевіряю…'));
+    try { await apiPost('license', {key}); META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionPanel(); }
+    catch (e) { say(e.message, 'var(--crit)'); } };
+  const sv = document.getElementById('edSave'); if (sv) sv.onclick = () => { const k = document.getElementById('edKey').value.trim(); if (k) send(k); else say(T('Paste a key first', 'Спершу вставте ключ'), 'var(--crit)'); };
+  const dl = document.getElementById('edDel'); if (dl) dl.onclick = () => { if (confirm(T('Remove the license key? The Community limits apply again; stored data is kept.', 'Видалити ключ ліцензії? Знову діятимуть ліміти Community; збережені дані лишаться.'))) send(''); };
+}
+// the small API Pro scripts use to add pages
+window.FT = {T, api, apiPost, esc, ph, fill, section, icon, state, render: () => render(),
+  registerView(key, label, iconPath, fn, role){ if (!VIEWS[key]) { VIEWS[key] = fn; NAV.push([key, label, iconPath, role]); if (state.view === key) render(); else if (ME) renderShell(); } }};
+const proLoaded = new Set();
+function loadProScripts(){
+  for (const src of ((META.edition || {}).ui_scripts || [])) { if (proLoaded.has(src)) continue; proLoaded.add(src);
+    const el = document.createElement('script'); el.src = src; el.defer = true; document.head.appendChild(el); }
+}
 function vDevices(){
   const v = document.getElementById('view'); state.ifEdit = null;
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('dev', T('Exporter devices', 'Пристрої-експортери'), T('NetFlow v5/v9 and IPFIX from any vendor · statistics for 15 min', 'NetFlow v5/v9 та IPFIX від будь-якого виробника · статистика за 15 хв'), isAdmin() ? `<button class="btn primary" id="addDev">${T('+ Connect a device', '+ Підключити пристрій')}</button>` : `<span class="nat">${T('an administrator can add devices', 'додавати пристрої може адміністратор')}</span>`)}<div id="dBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('ip', T('Interfaces', 'Інтерфейси'), T('indexes the collector saw in 24 h · the WAN role defines what is upload and download', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download'))}<div id="ifBox" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('ip', T('Interfaces', 'Інтерфейси'), T('indexes the collector saw in 24 h · the WAN role defines what is upload and download', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download'))}<div id="ifBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('shield', T('Edition and license', 'Редакція і ліцензія'), T('limits in effect · a FlowTrack Pro key raises them', 'чинні ліміти · ключ FlowTrack Pro їх знімає'))}<div id="edBox" class="loading"></div></section></div>`;
+  editionPanel();
   if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
   section('dBox', async () => { const res = await api('devices'), d = res.devices; window.__devs = d;
     // the interfaces panel shows one device: the one picked in the table, else the global device filter, else the first
@@ -1295,7 +1338,7 @@ function showLogin(msg){
     try {
       ME = await apiPost('login', {username:document.getElementById('lUser').value.trim(), password:document.getElementById('lPass').value});
       box.remove(); loginShown = false; document.querySelector('.app').hidden = false;
-      META = await fetch('api/meta').then(r => r.json()); render(); health();
+      META = await fetch('api/meta').then(r => r.json()); loadProScripts(); render(); health();
     } catch (err) { formErr('lErr', err.message); document.getElementById('lPass').select(); } });
 }
 
@@ -1353,14 +1396,14 @@ function openPeriod(){
   closePeriod();
   const now = Math.floor(Date.now() / 1000), t1 = isCustom() ? state.to : now, t0 = isCustom() ? state.from : now - rangeSecs();
   const loc = t => { const d = new Date(t * 1000 - new Date(t * 1000).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
-  const min = loc(now - 30 * 86400), max = loc(now + 60);
+  const keep = (META.edition || {}).retention_days || 30, min = loc(now - keep * 86400), max = loc(now + 60);
   const el = document.createElement('div'); el.className = 'glass period-pop'; el.id = 'periodPop'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', T('Custom period', 'Свій період'));
   el.innerHTML = `<h3>${T('Custom period', 'Свій період')}</h3>
     <label>${T('From', 'Від')}<input type="datetime-local" id="pFrom" step="60" min="${min}" max="${max}" value="${loc(t0)}"></label>
     <label>${T('To', 'До')}<input type="datetime-local" id="pTo" step="60" min="${min}" max="${max}" value="${loc(t1)}"></label>
     <div class="quick">${[[15, T('15 min', '15 хв')], [60, T('1 hour', '1 год')], [240, T('4 hours', '4 год')]].map(([m, l]) => `<button class="btn" data-m="${m}" title="${T('this long, ending at «To»', 'стільки, до «До»')}">${l}</button>`).join('')}</div>
     <p class="note" id="pErr" role="alert"></p>
-    <p class="note">${T('Detailed data is kept for 30 days. Tip: drag across any traffic chart to zoom in.', 'Детальні дані зберігаються 30 днів. Порада: виділіть мишею проміжок на будь-якому графіку трафіку.')}</p>
+    <p class="note">${T(`Detailed data is kept for ${keep} days. Tip: drag across any traffic chart to zoom in.`, `Детальні дані зберігаються ${keep} днів. Порада: виділіть мишею проміжок на будь-якому графіку трафіку.`)}</p>
     <div class="acts"><button class="btn" id="pCancel">${T('Cancel', 'Скасувати')}</button><button class="btn primary" id="pApply">${T('Show', 'Показати')}</button></div>`;
   document.body.appendChild(el);
   const r = document.getElementById('rangeLbl').getBoundingClientRect();
@@ -1372,7 +1415,7 @@ function openPeriod(){
     const a = val('pFrom'), b = val('pTo'), err = document.getElementById('pErr');
     if (isNaN(a) || isNaN(b)) { err.textContent = T('Enter both dates.', 'Вкажіть обидві дати.'); return; }
     if (b - a < 60) { err.textContent = T('«To» must be at least a minute after «From».', '«До» має бути щонайменше на хвилину пізніше за «Від».'); return; }
-    if (b - a > 31 * 86400) { err.textContent = T('The period can be at most 31 days long.', 'Період може бути не довшим за 31 день.'); return; }
+    if (b - a > (keep + 1) * 86400) { err.textContent = T(`The period can be at most ${keep + 1} days long.`, `Період може бути не довшим за ${keep + 1} днів.`); return; }
     closePeriod(); setPeriod(a, Math.min(b, now + 60));
   };
   el.addEventListener('keydown', e => { if (e.key === 'Escape') closePeriod(); if (e.key === 'Enter') document.getElementById('pApply').click(); });
@@ -1424,5 +1467,5 @@ async function health(){
   if (!r || r.status === 401) { showLogin(); setInterval(() => ME && health(), 60000); return; }
   ME = await r.json();
   try { META = await fetch('api/meta').then(x => x.json()); } catch (e) {}
-  render(); health(); setInterval(() => ME && health(), 60000);
+  loadProScripts(); render(); health(); setInterval(() => ME && health(), 60000);
 })();
