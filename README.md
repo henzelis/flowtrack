@@ -319,8 +319,15 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
 few thousand. Above the limit, records are not stored but counted: the Devices page and an event show how many.
 Installs made before the limits keep their 30 days of flow details; retention is never shortened
-automatically, not even when a license expires. A Pro key is entered on the Devices page (administrators); the page
-and an event warn two weeks before it ends.
+automatically, not even when a license expires. A Pro license comes as two files — the module
+`flowtrack-pro-<version>.tar.gz` and the key. Install the module once (as root), then enter the key on the Devices
+page (administrators) or give it to the installer as well:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash -s -- --upgrade --pro ./flowtrack-pro-0.1.0.tar.gz --license ./license.key
+```
+
+The Devices page warns 30 days before a license ends and an event two weeks before.
 
 ## Performance
 

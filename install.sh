@@ -10,6 +10,9 @@
 #           --upgrade      update code of an existing install, keep settings
 #           --uninstall    remove FlowTrack (asks whether to keep the data)
 #           --lang en|uk   installer language
+#           --pro FILE|URL       install the FlowTrack Pro module (flowtrack-pro-<version>.tar.gz you received)
+#           --license KEY|FILE   install a FlowTrack Pro license key (needs the Pro module: now or installed before)
+#                          e.g. … | sudo bash -s -- --upgrade --pro ./flowtrack-pro-0.1.0.tar.gz --license ./license.key
 # Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_NETFLOW_IFACE FT_WEB_IFACE (interface name, IP or
 #                       'all'; default: the interface of the default route) FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
 #                       FT_WAN_IFS FT_CITY FT_COUNTRY FT_ADMIN_PASSWORD FT_OPEN_FIREWALL=yes|no
@@ -37,9 +40,13 @@ TLS_DIR=$ETC/tls
 USE_TLS=yes; case "${FT_TLS:-yes}" in no|NO|0|false|off) USE_TLS=no ;; esac
 PROTO=https; [ "$USE_TLS" = yes ] || PROTO=http
 
-YES=0; MODE=""; LANG_SEL=""
+YES=0; MODE=""; LANG_SEL=""; PRO_SRC=""; LIC_SRC=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --pro) PRO_SRC=${2:-}; shift ;;
+    --pro=*) PRO_SRC=${1#--pro=} ;;
+    --license) LIC_SRC=${2:-}; shift ;;
+    --license=*) LIC_SRC=${1#--license=} ;;
     --yes|-y) YES=1 ;;
     --upgrade) MODE=upgrade ;;
     --uninstall) MODE=uninstall ;;
@@ -50,6 +57,16 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# FlowTrack Pro: resolve local paths now (relative to where the command was typed); a key may be given as a file
+case "$PRO_SRC" in
+  ''|http://*|https://*) ;;
+  *) [ -f "$PRO_SRC" ] || { echo "--pro: file not found: $PRO_SRC" >&2; exit 2; }; PRO_SRC=$(cd "$(dirname "$PRO_SRC")" && pwd)/$(basename "$PRO_SRC") ;;
+esac
+LIC_KEY=""
+if [ -n "$LIC_SRC" ]; then
+  if [ -f "$LIC_SRC" ]; then LIC_KEY=$(tr -d '[:space:]' < "$LIC_SRC"); else LIC_KEY=$(printf '%s' "$LIC_SRC" | tr -d '[:space:]'); fi
+  case "$LIC_KEY" in FT1.*.*) ;; *) echo "--license: not a FlowTrack license key (expected FT1.…): $LIC_SRC" >&2; exit 2 ;; esac
+fi
 
 # ------------------------------------------------------------------ output helpers
 if [ -t 1 ]; then B=$'\e[1m'; D=$'\e[2m'; R=$'\e[31m'; G=$'\e[32m'; Y=$'\e[33m'; C=$'\e[36m'; N=$'\e[0m'; else B= D= R= G= Y= C= N=; fi
@@ -443,8 +460,31 @@ make_venv() {
   "$PREFIX/venv/bin/python" -m pip install -q --upgrade pip
   "$PREFIX/venv/bin/python" -m pip install -q "netflow==0.12.2" "maxminddb>=2.2,<3"
   "$PREFIX/venv/bin/python" -c 'import netflow, maxminddb'
+  # FlowTrack Pro checks license signatures with `cryptography`; keep it when the venv is rebuilt
+  if [ -d "$PREFIX/pro/flowtrack_pro" ] || [ -n "$PRO_SRC" ]; then "$PREFIX/venv/bin/python" -m pip install -q "cryptography>=41"; fi
 }
 step "$(t 'Python environment' 'Python-оточення')" make_venv
+
+install_pro() {
+  local tmp init d
+  tmp=$(mktemp -d)
+  case "$PRO_SRC" in
+    http://*|https://*) curl -fsSL "$PRO_SRC" -o "$tmp/pro.tgz" ;;
+    *) cp "$PRO_SRC" "$tmp/pro.tgz" ;;
+  esac
+  mkdir "$tmp/x"; tar -xzf "$tmp/pro.tgz" -C "$tmp/x"
+  init=$(find "$tmp/x" -maxdepth 3 -path '*/flowtrack_pro/__init__.py' | head -1)
+  [ -n "$init" ] || { echo "not a FlowTrack Pro bundle: $PRO_SRC"; rm -rf "$tmp"; return 1; }
+  d=$(dirname "$init")
+  rm -rf "$PREFIX/pro.new"; mkdir -p "$PREFIX/pro.new"; cp -a "$d" "$PREFIX/pro.new/flowtrack_pro"
+  [ -f "$(dirname "$d")/LICENSE" ] && cp "$(dirname "$d")/LICENSE" "$PREFIX/pro.new/"
+  chown -R root:root "$PREFIX/pro.new"; chmod -R go-w,a+rX "$PREFIX/pro.new"
+  "$PREFIX/venv/bin/python" -c "import sys; sys.path.insert(0, '$PREFIX/pro.new'); import flowtrack_pro; print('FlowTrack Pro', flowtrack_pro.__version__)"
+  rm -rf "$PREFIX/pro.old"; [ -d "$PREFIX/pro" ] && mv "$PREFIX/pro" "$PREFIX/pro.old"
+  mv "$PREFIX/pro.new" "$PREFIX/pro"; rm -rf "$PREFIX/pro.old" "$tmp"
+}
+[ -z "$PRO_SRC" ] || step "$(t 'FlowTrack Pro module' 'Модуль FlowTrack Pro')" install_pro
+
 
 if [ ! -s "$PREFIX/geoip/dbip-city.mmdb" ] || [ "$MODE" = upgrade ]; then
   if ! step "$(t 'GeoIP databases (DB-IP Lite)' 'Бази GeoIP (DB-IP Lite)')" env FT_GEOIP_DIR="$PREFIX/geoip" "$PREFIX/app/deploy/geoip-update.sh"; then
@@ -610,6 +650,24 @@ start_all() {
 }
 step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
 
+# the license last: the install or upgrade above is complete either way; a refused key leaves the previous edition
+install_license() {
+  [ -d "$PREFIX/pro/flowtrack_pro" ] || { echo "$(t 'A license key needs the FlowTrack Pro module: add --pro flowtrack-pro-<version>.tar.gz' 'Ключу ліцензії потрібен модуль FlowTrack Pro: додайте --pro flowtrack-pro-<версія>.tar.gz')"; return 1; }
+  printf '%s' "$LIC_KEY" | runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" -c '
+import sys; sys.path.insert(0, "'"$PREFIX"'/app")
+import common
+try:
+    ed = common.save_license(sys.stdin.read())
+except ValueError as ex:
+    sys.exit(f"license key refused: {ex}")
+lic = ed["license"] or {}
+print("licensed to", lic.get("customer"))'
+}
+if [ -n "$LIC_KEY" ] && ! step "$(t 'FlowTrack Pro license' 'Ліцензія FlowTrack Pro')" install_license; then
+  die "$(t 'The license key was not installed' 'Ключ ліцензії не встановлено'): $(tail -n 1 "$LOG")
+  $(t 'FlowTrack is installed and running with its previous edition. Fix the key and run the command again, or enter it on the Devices page.' 'FlowTrack встановлено й запущено з попередньою редакцією. Виправте ключ і запустіть команду ще раз або введіть його на сторінці «Пристрої».')"
+fi
+
 # ------------------------------------------------------------------ done
 say ""
 say "${G}${B}$(t 'FlowTrack is running.' 'FlowTrack працює.')${N}"
@@ -622,6 +680,15 @@ if [ "$USE_TLS" = yes ]; then
 fi
 if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwords are unchanged.' 'Вхід: ваші користувачі й паролі не змінились.')"
 else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
+EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" -c '
+import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")
+import common
+e = common.edition(); lic = e["license"] or {}
+if e["status"] == "active":
+    print("FlowTrack Pro —", lic.get("customer"), "— until", time.strftime("%Y-%m-%d", time.gmtime(lic["expires"])))
+else:
+    print("FlowTrack Community — up to %d records/s" % e["rps"] + ("" if e["status"] == "community" else " (" + e["status"] + ": " + e["message"] + ")"))' 2>/dev/null || true)
+[ -z "$EDITION" ] || say "  $(t 'Edition' 'Редакція'): ${B}$EDITION${N}"
 say ""
 if [ "$MODE" != upgrade ]; then
   CIP=$(bind_ips "$NF_BIND" | head -1); CIP=${CIP:-${LAN_IP:-<collector-ip>}}

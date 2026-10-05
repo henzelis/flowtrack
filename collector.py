@@ -690,6 +690,17 @@ class Receiver:
         except (CHError, OSError) as ex:
             log(f'WARN stats insert failed: {str(ex)[:200]}')
 
+    def apply_retention(self):
+        """A license entered in the UI may keep flow details longer: raise the TTL without a restart (never lower it)."""
+        days = edition()['retention_days']
+        if days != getattr(self, 'retention_target', None):
+            try:
+                kept = flows_retention_days(days)
+                self.retention_target = days
+                log(f'flow details kept {kept} days')
+            except (CHError, OSError) as ex:
+                log(f'WARN could not check the retention of flows: {ex}')
+
     def reload_config(self):
         mt = exporters_mtime()
         if mt != self.cfg_mtime:
@@ -707,11 +718,8 @@ class Receiver:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
         ed = edition()
-        try:
-            days = flows_retention_days(ed['retention_days'])
-            log(f"edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s, flow details kept {days} days")
-        except (CHError, OSError) as ex:
-            log(f'WARN could not check the retention of flows: {ex}')
+        log(f"edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
+        self.apply_retention()
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:
@@ -794,6 +802,7 @@ class Receiver:
                 last_min = now
                 self.write_stats()
                 self.reload_config()
+                self.apply_retention()
                 sig = listen_signature(BIND)
                 if sig != self.listen_sig:          # an interface got another address (DHCP): systemd restarts us
                     log(f'listening addresses changed ({", ".join(self.listen_sig)} -> {", ".join(sig or ["none"])}); restarting')
