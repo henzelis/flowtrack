@@ -120,18 +120,19 @@ const axisX = () => ({type:'time', axisLine:{lineStyle:{color:C.hair}}, axisTick
 // drag across a time chart to look at that stretch of time (custom period for every page)
 function zoomable(c){
   const zr = c.getZr(), gridRect = () => c.getModel().getComponent('grid').coordinateSystem.getRect();
-  let x0 = null, x1 = null;
-  const clear = () => { x0 = x1 = null; c.setOption({graphic:[{id:'zoomSel', type:'rect', $action:'remove'}]}); };
+  let x0 = null, x1 = null, drawn = false;
+  // remove the selection only if it was drawn: ECharts throws when asked to remove a graphic it does not have
+  const clear = () => { x0 = x1 = null; if (drawn && !c.isDisposed()) c.setOption({graphic:[{id:'zoomSel', type:'rect', $action:'remove'}]}); drawn = false; };
   zr.on('mousedown', e => { if (e.event.button === 0 && c.containPixel('grid', [e.offsetX, e.offsetY])) { x0 = e.offsetX; x1 = null; } });
   zr.on('mousemove', e => {
     if (x0 == null) { zr.setCursorStyle(c.containPixel('grid', [e.offsetX, e.offsetY]) ? 'crosshair' : 'default'); return; }
     const g = gridRect(); x1 = Math.max(g.x, Math.min(g.x + g.width, e.offsetX)); if (Math.abs(x1 - x0) < 4) return;
-    c.setOption({graphic:[{id:'zoomSel', type:'rect', silent:true, z:100, shape:{x:Math.min(x0, x1), y:g.y, width:Math.abs(x1 - x0), height:g.height},
+    drawn = true; c.setOption({graphic:[{id:'zoomSel', type:'rect', silent:true, z:100, shape:{x:Math.min(x0, x1), y:g.y, width:Math.abs(x1 - x0), height:g.height},
       style:{fill:'rgba(47,123,255,.16)', stroke:'rgba(110,160,255,.75)', lineWidth:1}}]});
   });
   zr.on('mouseup', () => { if (x0 == null) return; const a = x0, b = x1; clear(); if (b == null || Math.abs(b - a) < 4) return;
     const t = [a, b].map(x => c.convertFromPixel({xAxisIndex:0}, x) / 1000).sort((u, v) => u - v);
-    if (t[1] - t[0] >= 60) setPeriod(t[0], t[1]); });
+    if (t[1] - t[0] >= 60) setTimeout(() => setPeriod(t[0], t[1])); });   // after ECharts finishes this event: render() disposes the chart
   zr.on('globalout', () => { if (x0 != null) clear(); });
   return c;
 }
@@ -164,7 +165,16 @@ function stackChart(el, series, label, onPick){
     tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(), yAxis:axisY(v => fmtR(v)),
     series:order.map(k => { const col = k === '__other' ? C.other : keyColor(k); return {name:k === '__other' ? T('Others', 'інше') : label(k), id:k, type:'line', stack:'a', smooth:.25, showSymbol:false,
       lineStyle:{width:1.4, color:col}, itemStyle:{color:col}, areaStyle:{opacity:k === '__other' ? .2 : .35}, emphasis:{focus:'series'}, data:ts.map(t => [t * 1000, (keys.get(k).get(t) || 0) * 8 / step])}; })});
-  c.on('click', p => p.seriesId !== '__other' && onPick && onPick(p.seriesId));
+  // ECharts reports clicks on the line only; find the stacked band under the pointer instead (acted on after the event,
+  // because the filter re-renders the page and disposes this chart)
+  if (onPick) c.getZr().on('click', e => {
+    if (c.isDisposed() || !c.containPixel('grid', [e.offsetX, e.offsetY]) || !ts.length) return;
+    const [x, y] = c.convertFromPixel({gridIndex:0}, [e.offsetX, e.offsetY]);
+    const i = Math.max(0, Math.min(ts.length - 1, Math.round((x / 1000 - ts[0]) / step)));
+    let cum = 0;
+    for (const k of order) { const v = (keys.get(k).get(ts[i]) || 0) * 8 / step;
+      if (v > 0 && y >= cum && y <= cum + v) { if (k !== '__other') setTimeout(() => onPick(k)); return; } cum += v; }
+  });
   zoomable(c);
 }
 function donut(el, rows, colorOf, center){
