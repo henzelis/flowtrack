@@ -392,3 +392,9 @@ tr.unseen td{opacity:.75}
 .ed-key .acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px}
 .ed-key .acts .nat{margin-right:auto}
 .ed-key .note code{word-break:break-all;color:var(--ink);font-size:12px}
+.edbadge{all:unset;display:table;cursor:pointer;margin-top:5px;padding:0 7px;border-radius:8px;font:800 9.5px Manrope,sans-serif;letter-spacing:.6px;text-transform:uppercase;line-height:16px;vertical-align:1px;color:var(--down);background:rgba(39,211,245,.14);border:1px solid rgba(39,211,245,.35)}
+.edbadge.pro{color:var(--ok);background:rgba(46,229,157,.14);border-color:rgba(46,229,157,.4)}
+.edbadge.warn{color:var(--warn);background:rgba(255,195,77,.16);border-color:rgba(255,195,77,.45)}
+.edbadge.crit{color:var(--crit);background:rgba(255,92,122,.16);border-color:rgba(255,92,122,.45)}
+.edbadge:hover{filter:brightness(1.25)}
+.edbadge:focus-visible{outline:2px solid var(--blue-hi);outline-offset:2px}

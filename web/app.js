@@ -1073,9 +1073,10 @@ async function editionPanel(){
       <div class="acts"><span class="nat" id="edMsg" role="status"></span>${ed.status !== 'community' ? `<button class="btn" id="edDel">${T('Remove key', 'Видалити ключ')}</button>` : ''}<button class="btn primary" id="edSave">${T('Apply', 'Застосувати')}</button></div></details>` : ''}
   </div>`;
   box.classList.remove('loading');
+  if (state.toLicense) { state.toLicense = false; box.closest('section').scrollIntoView({behavior:reduceMotion ? 'auto' : 'smooth', block:'start'}); }
   const say = (t, c) => { const m = document.getElementById('edMsg'); m.textContent = t; m.style.color = c || ''; };
   const send = async key => { say(T('Checking…', 'Перевіряю…'));
-    try { await apiPost('license', {key}); META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionPanel(); }
+    try { await apiPost('license', {key}); META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionBadge(); editionPanel(); }
     catch (e) { say(e.message, 'var(--crit)'); } };
   const sv = document.getElementById('edSave'); if (sv) sv.onclick = () => { const k = document.getElementById('edKey').value.trim(); if (k) send(k); else say(T('Paste a key first', 'Спершу вставте ключ'), 'var(--crit)'); };
   const dl = document.getElementById('edDel'); if (dl) dl.onclick = () => { if (confirm(T('Remove the license key? The Community limits apply again; stored data is kept.', 'Видалити ключ ліцензії? Знову діятимуть ліміти Community; збережені дані лишаться.'))) send(''); };
@@ -1087,6 +1088,17 @@ const proLoaded = new Set();
 function loadProScripts(){
   for (const src of ((META.edition || {}).ui_scripts || [])) { if (proLoaded.has(src)) continue; proLoaded.add(src);
     const el = document.createElement('script'); el.src = src; el.defer = true; document.head.appendChild(el); }
+}
+// edition badge under the logo: Community / Pro, coloured when a license ends soon or has ended; opens the license panel
+function editionBadge(){
+  const b = document.getElementById('edBadge'), ed = META.edition; if (!b || !ed) return;
+  const pro = ed.status === 'active', left = ed.days_left;
+  b.textContent = pro ? 'Pro' : 'Community';
+  b.className = 'edbadge' + (pro ? ' pro' : '') + (pro && left != null && left < 30 ? ' warn' : '') + (ed.status === 'expired' || ed.status === 'invalid' ? ' crit' : '');
+  b.title = (pro ? 'FlowTrack Pro' + (left != null ? T(` · ${left} days left`, ` · лишилось днів: ${left}`) : '') : `FlowTrack Community · ${T('up to', 'до')} ${fmtInt(ed.rps)} ${T('records/s', 'записів/с')}`)
+    + (ed.status === 'expired' ? T(' · license expired', ' · ліцензія закінчилась') : '') + ' — ' + T('edition and license', 'редакція і ліцензія');
+  b.hidden = false;
+  b.onclick = () => { state.view = 'devices'; state.toLicense = true; render(); };
 }
 function vDevices(){
   const v = document.getElementById('view'); state.ifEdit = null;
@@ -1378,6 +1390,7 @@ function renderShell(){
   const ds = document.getElementById('devSel'), df = state.filters.find(f => f.k === 'device' && !f.neg);
   ds.innerHTML = `<option value="">${T(`All devices (${META.devices.length})`, `Усі пристрої (${META.devices.length})`)}</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = df ? df.v : '';
+  editionBadge();
   const rs = document.getElementById('rangeSel');
   rs.querySelectorAll('option[data-x]').forEach(o => o.remove());
   if (isCustom()) rs.insertAdjacentHTML('beforeend', `<option data-x value="custom">${esc(rangeLabel())}</option>`);

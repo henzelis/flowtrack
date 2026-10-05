@@ -230,6 +230,8 @@ def edition_info(admin=False):
            'features': ed['features'], 'module': ed['module'], 'ui_scripts': pro_ui_scripts()}
     col = collector_health(24 * 60)
     out['license_drops_24h'] = col['license_drops'] if col else 0
+    lic = ed['license'] or {}
+    out['expires'], out['days_left'] = lic.get('expires'), lic.get('days_left')    # every user sees when the edition ends
     if admin:
         out['license'], out['message'] = ed['license'], ed['message']
     return out
