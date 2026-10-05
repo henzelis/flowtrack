@@ -487,7 +487,7 @@ function selFilters(sel){
   return out;
 }
 async function inspectorHtml(sel){
-  if (!sel) return `<p class="note" style="margin:0">${T('Hover a ribbon or node to see the volume. A click adds it to the filters and shows the details here.', 'Наведіть на стрічку чи вузол, щоб побачити обсяг. Клік додає вибране у фільтри й показує деталі тут.')}</p>`;
+  if (!sel) return `<p class="note" style="margin:0">${T('Hover a ribbon or node to see the volume. A click highlights its links and shows the details here; Shift+click on a node adds it to the filters.', 'Наведіть на стрічку чи вузол, щоб побачити обсяг. Клік виділяє зв’язки й показує деталі тут; Shift+клік на вузлі додає його у фільтри.')}</p>`;
   const extra = selFilters(sel);
   let title, subtitle = '';
   const isOther = k => k === '__other';
@@ -527,10 +527,8 @@ function vFlows(){
     if (el) api('series', {}, JSON.parse(el.dataset.extra)).then(s => { if (el.isConnected) trendChart(el, s, true); });
   };
   showInsp(state.sel);
-  // a click on the river works like everywhere else: the selection goes into the filters (and stays selected)
-  const onRiverSelect = sel => { const ex = selFilters(sel);
-    if (!ex.length) return showInsp(sel);
-    ex.forEach(f => putFilter({...f, neg:false})); state.sel = sel; render(); };
+  // a click on the river highlights the links and shows the details; Shift+click on a node adds a filter (createRiver)
+  const onRiverSelect = sel => showInsp(sel);
   let riverScope = null;
   const winLbl = d => { const el = document.getElementById('winLbl'); if (el) el.textContent = (d.live && d.window_end ? T(`2-min window to ${hms(d.window_end)} · updated ${hms(Math.floor(Date.now() / 1000))}`, `вікно 2 хв до ${hms(d.window_end)} · оновлено ${hms(Math.floor(Date.now() / 1000))}`) : rangeLabel()) + scaleNote(); };
   let lastData = null;
