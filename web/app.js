@@ -580,7 +580,7 @@ function createDevMap(host, opts){
     ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
     const v = x => state.scale === 'lin' ? x : Math.sqrt(x);
     const paths = data.paths.filter(p => p.v > 0);
-    if (!paths.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No traffic through this device for the selected filters', 'Немає трафіку через цей пристрій для вибраних фільтрів'), W / 2, H / 2); return; }
+    if (!paths.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(data.live ? T(`No traffic through this device under these filters in the last ${Math.round(data.window / 60)} min — Period shows the whole range`, `Немає трафіку через цей пристрій під ці фільтри за останні ${Math.round(data.window / 60)} хв — «За період» покаже весь діапазон`) : T('No traffic through this device for the selected filters', 'Немає трафіку через цей пристрій для вибраних фільтрів'), W / 2, H / 2); return; }
     const sideOf = i => { const r = roleOf(i); return r === 'wan' ? 'R' : r === 'local' ? 'C' : 'L'; };
     const enter = new Map(), leave = new Map(), tot = new Map();
     paths.forEach(p => { enter.set(p.in_if, (enter.get(p.in_if) || 0) + p.v); leave.set(p.out_if, (leave.get(p.out_if) || 0) + p.v);

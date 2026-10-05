@@ -288,6 +288,19 @@ def api_top(q):
     return {'total': int(tot), 'rows': rows}
 
 
+def live_end(q):
+    """End of a live window: the newest record of the chosen device(s), or of all exporters. Only the device
+    filter counts, so adding other filters never moves the window back in time."""
+    try:
+        flt = json.loads(q.get('f', ['[]'])[0])
+    except ValueError:
+        flt = []
+    devs = [str(f.get('v')) for f in (flt if isinstance(flt, list) else []) if isinstance(f, dict) and f.get('k') == 'device' and not f.get('neg')]
+    cond = ' AND exporter IN {devs:Array(String)}' if devs else ''
+    last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE ts >= now() - INTERVAL 15 MINUTE{cond}", {'devs': devs}, fmt='JSON')
+    return int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+
+
 def api_river(q):
     """Top-N inside x top-N outside endpoints with link values, all from one window: the live window (the last
     `win` seconds of collected data) or the whole range."""
@@ -296,9 +309,8 @@ def api_river(q):
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     live = q1(q, 'live', '1') == '1'
     win = max(60, min(q1(q, 'win', '120', int), 900))
-    if live:    # the window ends at the newest collected record, whatever the filters, so a filter never shifts it
-        last = ch("SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE ts >= now() - INTERVAL 15 MINUTE", {}, fmt='JSON')
-        p['wend'] = int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+    if live:    # the window ends at the newest collected record (of the chosen device), so filters never shift it
+        p['wend'] = live_end(q)
         p['win'] = win
         where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     tops = ch(f"""SELECT
@@ -330,8 +342,7 @@ def api_paths(q):
     win = max(60, min(q1(q, 'win', '120', int), 900))
     wend = None
     if live:
-        last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE {where} AND ts >= now() - INTERVAL 15 MINUTE", p, fmt='JSON')
-        wend = int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+        wend = live_end(q)
         p['wend'], p['win'] = wend, win
         where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     rows = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sum(bytes) AS b, sum(packets) AS pk, count() AS fl,
@@ -354,8 +365,7 @@ def api_devmap(q):
     win = max(60, min(q1(q, 'win', '120', int), 900))
     wend = None
     if live:
-        last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE {where} AND ts >= now() - INTERVAL 15 MINUTE", p, fmt='JSON')
-        wend = int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+        wend = live_end(q)
         p['wend'], p['win'] = wend, win
         where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
