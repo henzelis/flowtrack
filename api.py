@@ -289,29 +289,27 @@ def api_top(q):
 
 
 def api_river(q):
-    """Top-N inside x top-N outside endpoints; link values for the live window (last 15 min) or the whole range."""
+    """Top-N inside x top-N outside endpoints with link values, all from one window: the live window (the last
+    `win` seconds of collected data) or the whole range."""
     where, p, rng, step = scope(q)
     metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     live = q1(q, 'live', '1') == '1'
     win = max(60, min(q1(q, 'win', '120', int), 900))
-    if live:    # nodes = what is active in the last 15 min; values = the last `win` seconds
-        where = where + ' AND ts >= now() - INTERVAL 15 MINUTE'
+    if live:    # the window ends at the newest collected record, whatever the filters, so a filter never shifts it
+        last = ch("SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE ts >= now() - INTERVAL 15 MINUTE", {}, fmt='JSON')
+        p['wend'] = int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
+        p['win'] = win
+        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     tops = ch(f"""SELECT
             (SELECT groupArray(k) FROM (SELECT int_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS l,
             (SELECT groupArray(k) FROM (SELECT ext_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS r,
-            (SELECT uniqExact(int_ip) FROM flows WHERE {where}) AS nl, (SELECT uniqExact(ext_ip) FROM flows WHERE {where}) AS nr,
-            (SELECT toUnixTimestamp(max(ts)) FROM flows WHERE {where}) AS last""", p, fmt='JSON')[0]
+            (SELECT uniqExact(int_ip) FROM flows WHERE {where}) AS nl, (SELECT uniqExact(ext_ip) FROM flows WHERE {where}) AS nr""", p, fmt='JSON')[0]
     left, right = tops['l'], tops['r']
     p['L'], p['R'] = left, right
-    wwin = where
-    if live:
-        p['wend'] = int(tops['last'] or time.time())
-        p['win'] = win
-        wwin = where + ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     links = ch(f"""SELECT if(has({{L:Array(String)}}, int_ip), int_ip, '__other') AS l, if(has({{R:Array(String)}}, ext_ip), ext_ip, '__other') AS r,
             sumIf({metric}, dir IN ('up', 'internal')) AS up, sumIf({metric}, dir NOT IN ('up', 'internal')) AS dn, toUnixTimestamp(max(ts)) AS t
-        FROM flows WHERE {wwin} GROUP BY l, r""", p, fmt='JSON')
+        FROM flows WHERE {where} GROUP BY l, r""", p, fmt='JSON')
     info = {}
     if right:
         for r in ch(f"SELECT ext_ip, any(service) AS service, any(country) AS country, any(city) AS city FROM flows WHERE {where} AND has({{R:Array(String)}}, ext_ip) GROUP BY ext_ip", p, fmt='JSON'):

@@ -234,7 +234,7 @@ function createRiver(host, opts){
     const L = layout();
     ctx.font = `600 ${compact ? 11.5 : 13}px Manrope, sans-serif`; ctx.fillStyle = C.ink2; ctx.textBaseline = 'middle';
     ctx.textAlign = 'left'; ctx.fillText(isInternal() ? T('Sources', 'Джерела') : T('Inside addresses', 'Внутрішні адреси'), 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText(isInternal() ? T('Destinations', 'Отримувачі') : T('Outside addresses', 'Зовнішні адреси'), W - 2, L.headH / 2 - 2);
-    if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText(T('No traffic under this filter for the selected period', 'Немає трафіку під цей фільтр за вибраний період'), W / 2, H / 2); return; }
+    if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText(data.live ? T(`No traffic under this filter in the last ${Math.round(data.window / 60)} min — Period shows the whole range`, `Немає трафіку під цей фільтр за останні ${Math.round(data.window / 60)} хв — «За період» покаже весь діапазон`) : T('No traffic under this filter for the selected period', 'Немає трафіку під цей фільтр за вибраний період'), W / 2, H / 2); return; }
     ctx.globalCompositeOperation = 'lighter';
     for (const b of bands) {
       const col = b.dir === 'up' ? C.up : C.down, fl = flash.get(b.key) || 0, a = ease(alphas, b.key + b.dir, related(b) ? 1 : 0.13) * (1 + 0.55 * fl);
