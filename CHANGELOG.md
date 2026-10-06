@@ -3,6 +3,20 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.3.0 — unreleased
+
+- **Online activation with a license key.** Paste a license key (`FTK-…`) in Settings → License, run
+  `sudo flowtrack-license activate FTK-…`, or give it to the installer (`--license FTK-…`): FlowTrack activates it
+  at the FlowTrack license server and receives a license for this server. Licenses from a key are confirmed by the
+  license server every day (a lease of 30 days, so a few days without internet do not matter); Settings → License
+  shows until when, the last check and a "Check now" button. Deactivating frees the key for another server at
+  once; a renewed key reaches the server at its next check; a revoked one falls back to the Community limits.
+- Licenses issued offline (`FTL-…`) work as before and need no network.
+- The license server is `https://lic.telesphera.net:8443` with a pinned certificate; `FT_LICENSE_SERVER` in
+  `/etc/flowtrack/env` points FlowTrack to another address (e.g. inside the network of the server itself), and
+  the installer keeps that setting.
+- Compiled core 1.3.0: trusts the license server's key for online licenses and their confirmations only.
+
 ## 1.2.0 — 2026-10-06
 
 - **License: Elastic License 2.0** instead of MIT (1.1.0 and earlier stay MIT). FlowTrack stays free to use and
