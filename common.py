@@ -325,11 +325,27 @@ def save_license(text):
         text = licensing.activate_key(text)              # raises licensing.ServerError with the server's reason
     if text:
         licensing.check(text)                # raises LicenseError (a ValueError) with the reason
+        _release_replaced(text)
         _write_license(text)
     elif os.path.exists(LICENSE_FILE):
         os.remove(LICENSE_FILE)
     _edition['value'] = None
     return edition()
+
+
+def _release_replaced(new):
+    """An online license replaced by another one is given back to the license server, so its key is free again
+    (best effort: without the server the vendor releases it)."""
+    import licensing
+    old = read_license()
+    if not old:
+        return
+    try:
+        lic = licensing.verify(old)
+        if lic.get('lease_days') and lic['id'] != licensing.verify(new)['id']:
+            licensing.release_online(old)
+    except ValueError:
+        pass
 
 
 def license_checkin():
