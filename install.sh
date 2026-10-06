@@ -504,6 +504,7 @@ fi
 if [ "$MODE" != upgrade ]; then
   write_config() {
     umask 027
+    local keep; keep=$(grep -E '^FT_LICENSE_SERVER' "$ETC/env" 2>/dev/null || true)   # a license server set by hand stays
     cat > "$ETC/env" <<ENV
 FT_CH_URL=http://127.0.0.1:$CH_PORT
 FT_CH_USER=flowtrack
@@ -517,6 +518,7 @@ FT_WORKERS=auto
 FT_WEB_BIND=$WEB_BIND
 FT_WEB_PORT=$WEB_PORT
 ENV
+    [ -z "$keep" ] || printf '%s\n' "$keep" >> "$ETC/env"
     chown root:flowtrack "$ETC/env"; chmod 640 "$ETC/env"
     [ -f "$ETC/hosts.json" ] || echo '{}' > "$ETC/hosts.json"
     if [ "$WRITE_DEVICE" = y ]; then

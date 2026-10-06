@@ -1,5 +1,5 @@
 # The compiled FlowTrack core this version runs with: release core-v<version> on GitHub, SHA-256 of each build.
 # The installer downloads the file for the server's CPU and refuses one that does not match.
-version 1.2.0
-x86_64 dfbea40c90e433e7c7af90a7d2c5b10f89444f4541417b67c5ccc39dd04954a8
-aarch64 ec4e6b241f430340f39cd91b3075e3654dd446d63d81ee626e8e7e57ea1b455c
+version 1.3.0
+x86_64 974187c700d2b0710a46a77316780e3b01ef6a69db0ae22a3cbac5c9f8e4525f
+aarch64 7ce6f6a649791a1f76ae5565fed54cd8ba5cdf74c452a70af7aec04eda94f848
