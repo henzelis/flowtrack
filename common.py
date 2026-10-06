@@ -270,25 +270,12 @@ def apply_schema(path):
 
 
 # ---------------------------------------------------------------- editions
-# FlowTrack Community is this repository. A license (licensing.py) bound to this installation raises the limits
-# below; FlowTrack Pro features come from a module (`flowtrack_pro` in FT_PRO_DIR) that adds API routes and UI
-# scripts while the license is active. The core knows nothing about what Pro does: it only asks `edition()`.
+# Every edition has every feature; a license (licensing.py) bound to this installation raises the records/s limit
+# and how long flow details are kept. The compiled core (ftcore) checks it and enforces the limits.
 # for display only: the limits themselves are enforced by the compiled core
 COMMUNITY = {'name': 'community', 'rps': ftcore.COMMUNITY_RPS, 'retention_days': ftcore.COMMUNITY_RETENTION_DAYS}
 LICENSE_FILE = os.path.join(STATE_DIR, 'license.key')
-PRO_DIR = os.environ.get('FT_PRO_DIR', '/opt/flowtrack/pro')
 _edition = {'key': None, 'value': None}
-
-
-def pro_module():
-    """The installed Pro module, or None."""
-    if PRO_DIR not in sys.path and os.path.isdir(PRO_DIR):
-        sys.path.insert(0, PRO_DIR)
-    try:
-        import flowtrack_pro
-        return flowtrack_pro
-    except ImportError:
-        return None
 
 
 def read_license():
@@ -300,9 +287,9 @@ def read_license():
 
 
 def edition():
-    """Limits and extensions in effect: {'name', 'rps' (None = unlimited), 'retention_days', 'features',
+    """Limits in effect: {'name', 'rps' (None = unlimited), 'retention_days', 'features',
     'license': {...} or None, 'status': 'community' | 'active' | 'expired' | 'invalid' | 'other_instance' |
-    'returned' | 'clock', 'message', 'module'}. The compiled core decides (and its RateLimit follows the result).
+    'returned' | 'clock', 'message'}. The compiled core decides (and its RateLimit follows the result).
     Licenses are time-limited: after the end date the Community limits apply again (stored data is kept). Cached
     until the license file changes, re-checked every minute."""
     import time as _t
@@ -313,7 +300,7 @@ def edition():
     key = (mt, int(_t.time() // 60))
     if _edition['key'] == key and _edition['value'] is not None:
         return _edition['value']
-    out = dict(ftcore.edition(os.path.dirname(LICENSE_FILE)), module=bool(pro_module()))
+    out = ftcore.edition(os.path.dirname(LICENSE_FILE))
     _edition.update(key=key, value=out)
     return out
 

@@ -128,9 +128,14 @@ for f in city asn; do
 done
 
 # 4. Code and Python environment
-sudo mkdir -p /opt/flowtrack/app && sudo cp -r *.py schema.sql web deploy /opt/flowtrack/app/
+sudo mkdir -p /opt/flowtrack/app && sudo cp -r *.py schema.sql web deploy ftcore.lock /opt/flowtrack/app/
+# the compiled core named in ftcore.lock, from the GitHub release core-v<version> (x86_64 or aarch64)
+V=$(awk '$1 == "version" {print $2}' ftcore.lock); A=$(uname -m | sed 's/arm64/aarch64/')
+sudo curl -fsSL -o /opt/flowtrack/app/ftcore.abi3.so \
+  https://github.com/henzelis/flowtrack/releases/download/core-v$V/ftcore-$V-linux-$A.so
+grep -q "$(sha256sum /opt/flowtrack/app/ftcore.abi3.so | cut -d' ' -f1)" ftcore.lock && echo core ok
 sudo python3 -m venv /opt/flowtrack/venv
-sudo /opt/flowtrack/venv/bin/pip install netflow==0.12.2 maxminddb
+sudo /opt/flowtrack/venv/bin/pip install maxminddb
 
 # 5. Configuration
 sudo cp deploy/flowtrack.env.example /etc/flowtrack/env
@@ -314,10 +319,9 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 | Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit, or per license |
 | Flow details kept | **14 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
 | Term | — | subscription with an end date; afterwards the Community limits apply again |
-| Everything in [Features](#features) | ✓ | ✓ |
-| Pro features (notifications, reports, API tokens, …) | — | ✓ as they ship |
+| Every feature, now and in future versions | ✓ | ✓ |
 
-5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
+Both editions are the same software: a license changes only the limits. 5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
 few thousand. Above the limit, records are not stored but counted: Settings → License and an event show how many.
 Installs made before the limits keep their 30 days of flow details; retention is never shortened
 automatically, not even when a license expires.

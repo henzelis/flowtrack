@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import licensing  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, pro_module, save_license, deactivate_license, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, save_license, deactivate_license, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
@@ -227,10 +227,7 @@ def api_meta(q):
 def edition_info(admin=False):
     """What the UI shows about the edition; the license's customer/expiry and the error message only to admins."""
     ed = edition()
-    out = {'name': ed['name'], 'status': ed['status'], 'rps': ed['rps'], 'retention_days': retention_days(),
-           'features': ed['features'], 'module': ed['module'], 'ui_scripts': pro_ui_scripts()}
-    if ed['module']:
-        out['module_version'] = getattr(pro_module(), '__version__', '')
+    out = {'name': ed['name'], 'status': ed['status'], 'rps': ed['rps'], 'retention_days': retention_days()}
     col = collector_health(24 * 60)
     out['license_drops_24h'] = col['license_drops'] if col else 0
     lic = ed['license'] or {}
@@ -261,21 +258,6 @@ def license_message(code, msg, lic=None):
     if code == 'other_instance':
         return tr(msg, f"цю ліцензію видано для інсталяції {lic.get('instance')}, а не для цієї ({licensing.instance_id()})")
     return tr(msg, _LICENSE_UK.get(msg, msg)) if msg else ''
-
-
-def pro_ui_scripts():
-    """UI scripts of an active Pro module, served under /pro/."""
-    if edition()['status'] != 'active':
-        return []
-    mod = pro_module()
-    return [f'pro/{x}' for x in getattr(mod, 'UI_SCRIPTS', [])]
-
-
-def pro_route(path):
-    """An API route added by an active Pro module."""
-    if edition()['status'] != 'active':
-        return None
-    return getattr(pro_module(), 'ROUTES', {}).get(path)
 
 
 def post_license(body):
@@ -911,7 +893,7 @@ class H(BaseHTTPRequestHandler):
                 if AUTH.users[user]['role'] != 'admin':
                     return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
                 return self.json(200, {'users': AUTH.list_users()})
-        fn = ROUTES.get(u.path) or (pro_route(u.path) if u.path.startswith('/api/') else None)
+        fn = ROUTES.get(u.path)
         if fn:
             try:
                 return self.send(200, json.dumps(fn(parse_qs(u.query)), default=str).encode(), 'application/json')
@@ -922,11 +904,6 @@ class H(BaseHTTPRequestHandler):
                 return self.send(502, json.dumps({'error': 'database error'}).encode(), 'application/json')
         path = 'index.html' if u.path in ('/', '') else u.path.lstrip('/')
         root = WEB_DIR
-        if path.startswith('pro/'):         # UI files of an active Pro module
-            mod = pro_module() if edition()['status'] == 'active' else None
-            if not mod or not getattr(mod, 'WEB_DIR', None):
-                return self.send(404, b'not found', 'text/plain')
-            root, path = mod.WEB_DIR, path[4:]
         full = os.path.realpath(os.path.join(root, path))
         if not full.startswith(os.path.realpath(root) + os.sep) or not os.path.isfile(full):
             return self.send(404, b'not found', 'text/plain')

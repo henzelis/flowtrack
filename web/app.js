@@ -1047,7 +1047,7 @@ const VENDORS = {
   Juniper:(ip, port) => `set services flow-monitoring version-ipfix template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} version-ipfix template FT`,
   'Linux / pmacct':(ip, port) => `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: 10\npcap_interface: eth0`,
 };
-// ---- edition: limits in effect, the license key (admin), and UI scripts of an active Pro module
+// ---- edition: limits in effect and the license key (admin)
 const fmtInt = n => (+n || 0).toLocaleString(LOC);
 const LIC_BAD = ['invalid', 'other_instance', 'returned', 'clock', 'expired'];
 function copyText(text, btn){
@@ -1073,7 +1073,7 @@ async function editionPanel(returned){
   const soon = pro && lic.days_left != null && lic.days_left < 30;
   const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // licenses end at 23:59 UTC of their last day
   box.innerHTML = `<div class="edition">
-    <div class="ed-name"><b>${name}</b>${ed.module_version ? `<span class="nat">${T('Pro module', 'Модуль Pro')} ${esc(ed.module_version)}</span>` : ''}<span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : 'crit'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
+    <div class="ed-name"><b>${name}</b><span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : 'crit'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
     <div class="ed-lim">
       <div><span>${T('Records per second', 'Записів за секунду')}</span><b>${ed.rps ? T('up to ', 'до ') + fmtInt(ed.rps) : T('no limit', 'без обмежень')}</b></div>
       <div><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}</b></div>
@@ -1107,7 +1107,7 @@ async function editionPanel(returned){
     <p class="note">${T('Deactivation removes the license from this server and gives a return code for the vendor. Community limits apply here again; stored data is kept.', 'Деактивація знімає ліцензію з цього сервера і дає код повернення для постачальника. Тут знову діятимуть ліміти Community; збережені дані лишаться.')}</p></div>
     <button class="btn danger" id="licOff">${ed.status === 'active' ? T('Deactivate…', 'Деактивувати…') : T('Remove…', 'Видалити…')}</button></div>` : ''}`;
   const say = (t, c) => { const m = document.getElementById('edMsg'); m.textContent = t; m.style.color = c || ''; };
-  const refresh = async ret => { META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionBadge(); editionPanel(ret); };
+  const refresh = async ret => { META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(ret); };
   document.getElementById('reqCopy').onclick = e => copyText(ed.request, e.currentTarget);
   document.getElementById('reqSave').onclick = () => saveText(`flowtrack-request-${(ed.instance || '').replace(/-/g, '')}.txt`,
     `# FlowTrack activation request\n# Instance ID: ${ed.instance}\n# FlowTrack ${META.version || ''}, ${new Date().toISOString().slice(0, 10)}\n${ed.request}\n`);
@@ -1126,14 +1126,6 @@ async function editionPanel(returned){
     if (!confirm(T('Deactivate the license on this server? Community limits apply here again, and this server will not accept this license again. You get a return code to move the license to another server.',
       'Деактивувати ліцензію на цьому сервері? Тут знову діятимуть ліміти Community, і цей сервер більше не прийме цю ліцензію. Ви отримаєте код повернення, щоб перенести ліцензію на інший сервер.'))) return;
     try { const r = await apiPost('license/deactivate', {}); await refresh(r.return_code); } catch (e) { alert(e.message); } };
-}
-// the small API Pro scripts use to add pages
-window.FT = {T, api, apiPost, esc, ph, fill, section, icon, state, render: () => render(),
-  registerView(key, label, iconPath, fn, role){ if (!VIEWS[key]) { VIEWS[key] = fn; NAV.push([key, label, iconPath, role]); if (state.view === key) render(); else if (ME) renderShell(); } }};
-const proLoaded = new Set();
-function loadProScripts(){
-  for (const src of ((META.edition || {}).ui_scripts || [])) { if (proLoaded.has(src)) continue; proLoaded.add(src);
-    const el = document.createElement('script'); el.src = src; el.defer = true; document.head.appendChild(el); }
 }
 // edition badge under the logo: Community / Pro, coloured when a license ends soon or has ended; opens the license panel
 function editionBadge(){
@@ -1433,7 +1425,7 @@ function showLogin(msg){
     try {
       ME = await apiPost('login', {username:document.getElementById('lUser').value.trim(), password:document.getElementById('lPass').value});
       box.remove(); loginShown = false; document.querySelector('.app').hidden = false;
-      META = await fetch('api/meta').then(r => r.json()); loadProScripts(); render(); health();
+      META = await fetch('api/meta').then(r => r.json()); render(); health();
     } catch (err) { formErr('lErr', err.message); document.getElementById('lPass').select(); } });
 }
 
@@ -1567,5 +1559,5 @@ async function health(){
   if (!r || r.status === 401) { showLogin(); setInterval(() => ME && health(), 60000); return; }
   ME = await r.json();
   try { META = await fetch('api/meta').then(x => x.json()); } catch (e) {}
-  loadProScripts(); render(); health(); setInterval(() => ME && health(), 60000);
+  render(); health(); setInterval(() => ME && health(), 60000);
 })();

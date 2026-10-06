@@ -11,6 +11,11 @@ in Settings → General, at the bottom of every page, in the collector log and b
   compiled module instead of Python; the `netflow` Python package is no longer used. Stored data is the same as
   before (checked record by record on real FortiGate captures and 4,000 synthetic v5/v9/IPFIX packets). A worker
   stores 3.8–6.4 times more records per second.
+- **One product for everyone.** Every feature is in every edition; a license raises only the records/s limit and
+  how long flow details are kept. The Pro module, the installer's `--pro` option and `/opt/flowtrack/pro` are gone.
+- The installer downloads the compiled core named in `ftcore.lock` from the GitHub release and checks its SHA-256;
+  `--core FILE` installs it on servers without access to github.com. Linux x86_64 and arm64, any glibc from 2.17,
+  Python 3.8 or newer. The `netflow` and `cryptography` Python packages are no longer needed (upgrades remove them).
 - IPFIX that FlowTrack could not read before: variable-length fields, reduced-size counters (e.g. 3-byte octet
   counts), unknown and enterprise fields (enterprise fields were read as the standard field of the same number),
   template withdrawal, reserved set ids. A packet whose template is not known yet no longer loses the records of

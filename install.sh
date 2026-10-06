@@ -10,7 +10,8 @@
 #           --upgrade      update code of an existing install, keep settings
 #           --uninstall    remove FlowTrack (asks whether to keep the data)
 #           --lang en|uk   installer language
-#           --pro FILE|URL       install the FlowTrack Pro module (flowtrack-pro-<version>.tar.gz you received)
+#           --core FILE          the compiled FlowTrack core (ftcore-<version>-linux-<arch>.so from the GitHub release)
+#                                for servers without access to github.com; it must match ftcore.lock
 #           --license CODE|FILE  activate a FlowTrack license (FTL-…) issued for this server's activation request;
 #                                the request code: sudo flowtrack-license request (also in Settings → License)
 #                          e.g. … | sudo bash -s -- --upgrade --license ./flowtrack.lic
@@ -20,7 +21,7 @@
 #                       FT_INSTALL_DOCKER=yes|no
 # HTTPS is on by default with a self-signed certificate; FT_TLS=no keeps plain HTTP.
 # Own certificate: put it in /etc/flowtrack/tls/{cert,key}.pem — the installer keeps it.
-# Source override (testing): FT_SOURCE=<tar.gz URL>  FT_REF=<branch or tag>
+# Source override (testing): FT_SOURCE=<tar.gz URL>  FT_REF=<branch or tag>  FT_CORE_URL=<dir with ftcore-*.so>
 #
 # Everything is wrapped in main() so a partially downloaded script never runs.
 
@@ -30,6 +31,7 @@ set -Eeuo pipefail
 FT_REPO=${FT_REPO:-henzelis/flowtrack}
 FT_REF=${FT_REF:-main}
 FT_SOURCE=${FT_SOURCE:-https://codeload.github.com/$FT_REPO/tar.gz/refs/heads/$FT_REF}
+FT_CORE_URL=${FT_CORE_URL:-}        # default: the GitHub release named in ftcore.lock
 PREFIX=/opt/flowtrack
 ETC=/etc/flowtrack
 STATE=/var/lib/flowtrack
@@ -41,11 +43,11 @@ TLS_DIR=$ETC/tls
 USE_TLS=yes; case "${FT_TLS:-yes}" in no|NO|0|false|off) USE_TLS=no ;; esac
 PROTO=https; [ "$USE_TLS" = yes ] || PROTO=http
 
-YES=0; MODE=""; LANG_SEL=""; PRO_SRC=""; LIC_SRC=""
+YES=0; MODE=""; LANG_SEL=""; CORE_SRC=""; LIC_SRC=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --pro) PRO_SRC=${2:-}; shift ;;
-    --pro=*) PRO_SRC=${1#--pro=} ;;
+    --core) CORE_SRC=${2:-}; shift ;;
+    --core=*) CORE_SRC=${1#--core=} ;;
     --license) LIC_SRC=${2:-}; shift ;;
     --license=*) LIC_SRC=${1#--license=} ;;
     --yes|-y) YES=1 ;;
@@ -58,11 +60,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-# FlowTrack Pro: resolve local paths now (relative to where the command was typed); a key may be given as a file
-case "$PRO_SRC" in
-  ''|http://*|https://*) ;;
-  *) [ -f "$PRO_SRC" ] || { echo "--pro: file not found: $PRO_SRC" >&2; exit 2; }; PRO_SRC=$(cd "$(dirname "$PRO_SRC")" && pwd)/$(basename "$PRO_SRC") ;;
-esac
+# resolve local paths now (relative to where the command was typed); a license may be given as a file
+if [ -n "$CORE_SRC" ]; then
+  [ -f "$CORE_SRC" ] || { echo "--core: file not found: $CORE_SRC" >&2; exit 2; }
+  CORE_SRC=$(cd "$(dirname "$CORE_SRC")" && pwd)/$(basename "$CORE_SRC")
+fi
 LIC_KEY=""
 if [ -n "$LIC_SRC" ]; then
   if [ -f "$LIC_SRC" ]; then LIC_KEY=$(grep -v '^[[:space:]]*#' "$LIC_SRC" | tr -d '[:space:]'); else LIC_KEY=$(printf '%s' "$LIC_SRC" | tr -d '[:space:]'); fi
@@ -89,6 +91,7 @@ CURRENT_STEP=""
 on_error() {
   local code=$?
   printf '\n%s\n' "${R}✗ $(t 'Installation stopped at step' 'Встановлення зупинилось на кроці'): ${CURRENT_STEP:-?}${N}" >&2
+  [ -s "$LOG" ] && printf '%s\n' "  $(tail -n 1 "$LOG" | cut -c1-300)" >&2      # usually the reason
   printf '%s\n' "  $(t 'Details' 'Подробиці'): ${B}tail -n 40 $LOG${N}" >&2
   printf '%s\n' "  $(t 'You can safely run the installer again.' 'Інсталятор можна спокійно запустити ще раз.')" >&2
   exit "$code"
@@ -433,20 +436,42 @@ step "$(t 'Creating service user and directories' 'Створення корис
   mkdir -p '$PREFIX/clickhouse' '$PREFIX/geoip' '$ETC' '$STATE'
   chown flowtrack:flowtrack '$STATE'; chmod 750 '$STATE'"
 
+# The compiled core (license checks, limits, NetFlow/IPFIX decoding) is not in the source tree: ftcore.lock names
+# its version and the SHA-256 of each build; the file comes from --core, from the installed app when it is the same
+# build, or from the GitHub release core-v<version>.
+fetch_core() {
+  local app=$1 ver arch want file got have
+  ver=$(awk '$1 == "version" {print $2}' "$app/ftcore.lock")
+  case "$(uname -m)" in x86_64) arch=x86_64 ;; aarch64|arm64) arch=aarch64 ;; esac
+  want=$(awk -v a="$arch" '$1 == a {print $2}' "$app/ftcore.lock")
+  [ -n "$ver" ] && [ -n "$want" ] || { echo "ftcore.lock has no core for $arch"; return 1; }
+  file="ftcore-$ver-linux-$arch.so"
+  have=$(sha256sum "$PREFIX/app/ftcore.abi3.so" 2>/dev/null | cut -d' ' -f1 || true)
+  if [ -n "$CORE_SRC" ]; then cp "$CORE_SRC" "$app/ftcore.abi3.so"
+  elif [ "$have" = "$want" ]; then cp "$PREFIX/app/ftcore.abi3.so" "$app/ftcore.abi3.so"
+  else curl -fsSL "${FT_CORE_URL:-https://github.com/$FT_REPO/releases/download/core-v$ver}/$file" -o "$app/ftcore.abi3.so" \
+         || { echo "cannot download $file — on a server without internet access use --core with that file"; return 1; }
+  fi
+  got=$(sha256sum "$app/ftcore.abi3.so" | cut -d' ' -f1)
+  [ "$got" = "$want" ] || { echo "the FlowTrack core does not match ftcore.lock ($file expected, sha256 $got)"; return 1; }
+  python3 -c "import sys; sys.path.insert(0, '$app'); import ftcore; assert not ftcore.TESTING; print('FlowTrack core', ftcore.__version__)"
+}
+
 fetch_code() {
   local src="" tmp d
   # use the checkout next to this script only when it runs from a file, never via curl | bash
   if [ -f "${BASH_SOURCE[0]:-}" ]; then src=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); fi
   tmp=$(mktemp -d); mkdir "$tmp/app"
   if [ -n "$src" ] && [ -f "$src/collector.py" ] && [ -f "$src/api.py" ] && [ -z "${FT_FORCE_DOWNLOAD:-}" ]; then
-    tar -C "$src" --exclude=.git --exclude=__pycache__ -cf - . | tar -C "$tmp/app" -xf -
+    tar -C "$src" --exclude=.git --exclude=__pycache__ --exclude='ftcore*.so' -cf - . | tar -C "$tmp/app" -xf -
   else
     mkdir "$tmp/src"; curl -fsSL "$FT_SOURCE" | tar -xz -C "$tmp/src"
     d=$(dirname "$(find "$tmp/src" -maxdepth 2 -name api.py | head -1)")
     [ -f "$d/collector.py" ] && [ -d "$d/web" ] || { echo "FlowTrack sources not found in $FT_SOURCE"; return 1; }
     cp -a "$d/." "$tmp/app/"
   fi
-  rm -rf "$tmp/app/.git"
+  rm -rf "$tmp/app/.git"; rm -f "$tmp/app"/ftcore*.so
+  fetch_core "$tmp/app" || { rm -rf "$tmp"; return 1; }
   rm -rf "$PREFIX/app.new"; mv "$tmp/app" "$PREFIX/app.new"
   rm -rf "$PREFIX/app.old"; [ -d "$PREFIX/app" ] && mv "$PREFIX/app" "$PREFIX/app.old"
   mv "$PREFIX/app.new" "$PREFIX/app"; rm -rf "$PREFIX/app.old" "$tmp"
@@ -459,31 +484,15 @@ make_venv() {
   # rebuild a missing or broken venv (e.g. one that was moved — venvs hard-code their path)
   if ! "$PREFIX/venv/bin/python" -m pip --version >/dev/null 2>&1; then rm -rf "$PREFIX/venv"; python3 -m venv "$PREFIX/venv"; fi
   "$PREFIX/venv/bin/python" -m pip install -q --upgrade pip
-  "$PREFIX/venv/bin/python" -m pip install -q "netflow==0.12.2" "maxminddb>=2.2,<3"
-  "$PREFIX/venv/bin/python" -c 'import netflow, maxminddb'
-  "$PREFIX/venv/bin/python" -m pip install -q "cryptography>=41"     # license signatures (licensing.py)
+  "$PREFIX/venv/bin/python" -m pip install -q "maxminddb>=2.2,<3"
+  "$PREFIX/venv/bin/python" -c 'import maxminddb'
+  # decoding and license checks moved into the compiled core (FlowTrack 1.2)
+  "$PREFIX/venv/bin/python" -m pip uninstall -y -q netflow cryptography >/dev/null 2>&1 || true
 }
 step "$(t 'Python environment' 'Python-оточення')" make_venv
 
-install_pro() {
-  local tmp init d
-  tmp=$(mktemp -d)
-  case "$PRO_SRC" in
-    http://*|https://*) curl -fsSL "$PRO_SRC" -o "$tmp/pro.tgz" ;;
-    *) cp "$PRO_SRC" "$tmp/pro.tgz" ;;
-  esac
-  mkdir "$tmp/x"; tar -xzf "$tmp/pro.tgz" -C "$tmp/x"
-  init=$(find "$tmp/x" -maxdepth 3 -path '*/flowtrack_pro/__init__.py' | head -1)
-  [ -n "$init" ] || { echo "not a FlowTrack Pro bundle: $PRO_SRC"; rm -rf "$tmp"; return 1; }
-  d=$(dirname "$init")
-  rm -rf "$PREFIX/pro.new"; mkdir -p "$PREFIX/pro.new"; cp -a "$d" "$PREFIX/pro.new/flowtrack_pro"
-  [ -f "$(dirname "$d")/LICENSE" ] && cp "$(dirname "$d")/LICENSE" "$PREFIX/pro.new/"
-  chown -R root:root "$PREFIX/pro.new"; chmod -R go-w,a+rX "$PREFIX/pro.new"
-  "$PREFIX/venv/bin/python" -c "import sys; sys.path.insert(0, '$PREFIX/pro.new'); import flowtrack_pro; print('FlowTrack Pro', flowtrack_pro.__version__)"
-  rm -rf "$PREFIX/pro.old"; [ -d "$PREFIX/pro" ] && mv "$PREFIX/pro" "$PREFIX/pro.old"
-  mv "$PREFIX/pro.new" "$PREFIX/pro"; rm -rf "$PREFIX/pro.old" "$tmp"
-}
-[ -z "$PRO_SRC" ] || step "$(t 'FlowTrack Pro module' 'Модуль FlowTrack Pro')" install_pro
+# FlowTrack 1.1 and earlier had a separate Pro module; every edition has every feature now
+rm -rf "$PREFIX/pro"
 
 
 if [ ! -s "$PREFIX/geoip/dbip-city.mmdb" ] || [ "$MODE" = upgrade ]; then
@@ -609,7 +618,7 @@ install_units() {
 #!/bin/sh
 # FlowTrack license on this server: status | request | activate FILE|CODE | deactivate
 [ "\$(id -u)" = 0 ] || exec sudo "\$0" "\$@"
-run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
+run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
 if [ "\$1" = activate ] && [ -f "\$2" ]; then run activate - < "\$2"; else run "\$@"; fi
 WRAP
   chmod 755 /usr/local/bin/flowtrack-license
@@ -661,7 +670,7 @@ step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
 
 # the license last: the install or upgrade above is complete either way; a refused key leaves the previous edition
 install_license() {
-  printf '%s' "$LIC_KEY" | runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" -c '
+  printf '%s' "$LIC_KEY" | runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys; sys.path.insert(0, "'"$PREFIX"'/app")
 import common
 try:
@@ -689,7 +698,7 @@ if [ "$USE_TLS" = yes ]; then
 fi
 if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwords are unchanged.' 'Вхід: ваші користувачі й паролі не змінились.')"
 else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
-EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" -c '
+EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")
 import common, licensing
 e = common.edition(); lic = e["license"] or {}

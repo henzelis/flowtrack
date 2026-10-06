@@ -22,7 +22,6 @@ PK = SK.public_key().public_bytes(serialization.Encoding.Raw, serialization.Publ
 OTHER_SK = Ed25519PrivateKey.generate()
 HERE = {'machine': 'a' * 32, 'board': '4c4c4544-0042-3510-8051-b4c04f4e3732', 'macs': ['2c:f0:5d:96:61:98', 'e0:d4:e8:72:34:f9']}
 REAL_HW = licensing.hardware
-REAL_PRO_DIR = common.PRO_DIR
 if not ftcore.TESTING:
     raise unittest.SkipTest('needs a testing build of ftcore (cargo build --features testing)')
 ftcore._testing(public_key=PK)
@@ -52,10 +51,6 @@ class Base(unittest.TestCase):
     def setUp(self):
         state = tempfile.mkdtemp()
         common.LICENSE_FILE = os.path.join(state, 'license.key')
-        common.PRO_DIR = tempfile.mkdtemp()             # an installed Pro module must not leak into the tests
-        sys.modules.pop('flowtrack_pro', None)
-        if REAL_PRO_DIR in sys.path:
-            sys.path.remove(REAL_PRO_DIR)
         common._edition.update(key=None, value=None)
         licensing.STATE_DIR = state
         self.hw = dict(HERE)
@@ -107,7 +102,6 @@ class Edition(Base):
         self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days'], ed['features']), ('pro', 'active', 20000, 90, ['alerts']))
         self.assertEqual((ed['license']['customer'], ed['license']['days_left'], ed['license']['instance']),
                          ('ТОВ «Тест»', 365, licensing.instance_id(HERE)))
-        self.assertFalse(ed['module'])                      # limits need no Pro module
         self.assertEqual(oct(os.stat(common.LICENSE_FILE).st_mode & 0o777), '0o640')
         self.assertTrue(common.read_license().startswith('FTL-'))
         ed = common.save_license('')                        # removing it: Community again
