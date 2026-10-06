@@ -1,5 +1,6 @@
 """Shared FlowTrack helpers: config, ClickHouse HTTP client, enrichment."""
 import base64
+import contextlib
 import ipaddress
 import json
 import os
@@ -324,13 +325,47 @@ def save_license(text):
     if ''.join(text.split()).upper().startswith('FTK'):
         text = licensing.activate_key(text)              # raises licensing.ServerError with the server's reason
     if text:
-        licensing.check(text)                # raises LicenseError (a ValueError) with the reason
+        text = _check_new_license(text)      # raises LicenseError (a ValueError) with the reason
         _release_replaced(text)
         _write_license(text)
     elif os.path.exists(LICENSE_FILE):
         os.remove(LICENSE_FILE)
     _edition['value'] = None
     return edition()
+
+
+def _check_new_license(text):
+    """A license code or .lic file that must be valid here now -> the license code to keep. An online license from a
+    file comes with the license server's first confirmation; without one (or with an old one) FlowTrack asks the
+    server right away. The installed license's confirmation is put back if the new license is refused."""
+    import licensing
+    text, lease = licensing.split_file(text)
+    lease_file = os.path.join(licensing.STATE_DIR, 'license.lease')
+    try:
+        with open(lease_file, 'rb') as f:
+            old_lease = f.read()
+    except OSError:
+        old_lease = None
+    try:
+        if lease:
+            licensing.save_lease(lease)
+        try:
+            licensing.check(text)
+        except licensing.LicenseError as ex:
+            if getattr(ex, 'code', '') != 'unconfirmed':
+                raise
+            text = licensing.checkin(text) or text     # ServerError (unreachable, revoked, …) says why
+            licensing.check(text)
+    except BaseException:
+        if old_lease is None:
+            with contextlib.suppress(OSError):
+                os.remove(lease_file)
+        else:
+            with open(lease_file + '.tmp', 'wb') as f:
+                f.write(old_lease)
+            os.replace(lease_file + '.tmp', lease_file)
+        raise
+    return text
 
 
 def _release_replaced(new):

@@ -274,6 +274,8 @@ def license_message(code, msg, lic=None):
         when = re.search(r'since (\d{4}-\d{2}-\d{2})', msg)
         return tr(msg, f'сервер ліцензій не підтверджував цю ліцензію з {when.group(1)} — перевірте з’єднання з ним' if when
                   else 'цю онлайн-ліцензію ще не підтвердив сервер ліцензій')
+    if code == 'unknown' and 'license key' not in msg:
+        return tr(msg, 'цю ліцензію не видавав сервер ліцензій')
     if code == 'invalid' and 'license key' in msg:
         return tr(msg, 'це не ліцензійний ключ FlowTrack' if 'not a' in msg else 'ліцензійний ключ введено з помилкою або не повністю')
     if code in _SERVER_UK and msg not in _LICENSE_UK and (code != 'expired' or 'license key' in msg):

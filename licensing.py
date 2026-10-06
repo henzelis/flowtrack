@@ -147,6 +147,26 @@ def last_checkin():
         return None
 
 
+def split_file(text):
+    """Text of a .lic file -> (license code, lease code or ''). A file from the license server also carries the
+    server's first confirmation (FTS-…), so an online license works at once, before FlowTrack reaches the server."""
+    parts, cur = {'FTL': [], 'FTS': []}, 'FTL'
+    for ln in (text or '').splitlines():
+        s = ln.strip()
+        if not s or s.startswith('#'):
+            continue
+        head = ''.join(s.split()).upper()[:3]
+        if head in parts:
+            cur = head
+        parts[cur].append(s)
+    return '\n'.join(parts['FTL']), '\n'.join(parts['FTS'])
+
+
+def save_lease(text):
+    """Keep a lease (FTS-…) for this installation; ValueError if it is not one."""
+    return ftcore.save_lease(text, STATE_DIR)
+
+
 def activate_key(key):
     """License key (FTK-…) -> the online license (FTL-…) for this installation; its lease is stored."""
     r = _post('/v1/activate', {'key': ' '.join(key.split()), 'request': request_code()})

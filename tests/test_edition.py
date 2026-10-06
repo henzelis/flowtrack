@@ -221,13 +221,26 @@ class Online(Base):
 
     def test_needs_a_lease(self):
         code = self.online(rps=20000)
-        with self.assertRaises(licensing.LicenseError) as cm:
+        server = licensing.LICENSE_SERVER
+        licensing.LICENSE_SERVER = 'http://127.0.0.1:9'           # unconfirmed: FlowTrack asks the server, here unreachable
+        self.addCleanup(setattr, licensing, 'LICENSE_SERVER', server)
+        with self.assertRaises(licensing.ServerError) as cm:
             common.save_license(code)
-        self.assertEqual(cm.exception.code, 'unconfirmed')
+        self.assertEqual(cm.exception.code, 'unreachable')
+        self.assertFalse(os.path.exists(os.path.join(licensing.STATE_DIR, 'license.lease')))
         ftcore.save_lease(lease(code), licensing.STATE_DIR)
         ed = common.save_license(code)
         self.assertEqual((ed['status'], ed['rps'], ed['license']['online']), ('active', 20000, True))
         self.assertGreater(ed['lease_until'], time.time() + 29 * 86400)
+
+    def test_license_file_with_its_lease(self):
+        code = self.online()
+        fts = lease(code)
+        text = f"# FlowTrack Pro license\n# Licensed to: Test\n{code}\n# Confirmed by the license server until …\n{fts}\n"
+        self.assertEqual(licensing.split_file(text), (code, fts))
+        ed = common.save_license(text)
+        self.assertEqual((ed['status'], ed['license']['online']), ('active', True))
+        self.assertEqual(common.read_license(), licensing.normalized(code))
 
     def test_lease_expiry_and_clock(self):
         code = self.online()

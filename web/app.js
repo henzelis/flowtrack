@@ -1125,7 +1125,7 @@ async function editionPanel(returned){
     </div>
     <div class="lic-col">
       <div class="lic-step"><span class="lic-n">2</span><div><b>${pro ? T('Enter a renewed license', 'Введіть подовжену ліцензію') : T('Enter the license', 'Введіть ліцензію')}</b>
-        <p class="note">${T('Paste the license key (FTK-…): FlowTrack activates it online. Or the license code (FTL-…) or .lic file from your vendor — that needs no internet.', 'Вставте ліцензійний ключ (FTK-…) — FlowTrack активує його онлайн. Або код ліцензії (FTL-…) чи файл .lic від постачальника — для них інтернет не потрібен.')}</p></div></div>
+        <p class="note">${T('Paste the license key (FTK-…): FlowTrack activates it online. Or load the .lic file (or paste the FTL-… code) from your vendor: it works at once and is then confirmed by the license server daily — only an offline license never needs the internet.', 'Вставте ліцензійний ключ (FTK-…) — FlowTrack активує його онлайн. Або завантажте файл .lic (чи вставте код FTL-…) від постачальника: він діє одразу, а далі його щодня підтверджує сервер ліцензій — інтернет не потрібен лише для офлайн-ліцензії.')}</p></div></div>
       <textarea id="edKey" rows="4" spellcheck="false" autocomplete="off" placeholder="FTK-XXXXX-… / FTL-XXXXX-…" aria-label="${T('License key or code', 'Ліцензійний ключ або код')}"></textarea>
       <div class="acts"><span class="nat" id="edMsg" role="status"></span><input type="file" id="licFile" accept=".lic,.txt,text/plain" hidden>
         <button class="btn" id="licLoad">${T('Load file…', 'Завантажити файл…')}</button><button class="btn primary" id="edSave">${T('Activate', 'Активувати')}</button></div>
