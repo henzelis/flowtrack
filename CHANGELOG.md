@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.2.0 — 2026-10-06
 
 - **License: Elastic License 2.0** instead of MIT (1.1.0 and earlier stay MIT). FlowTrack stays free to use and
   modify; providing it as a hosted service and circumventing the license checks are not allowed.
@@ -21,7 +21,7 @@ in Settings → General, at the bottom of every page, in the collector log and b
   template withdrawal, reserved set ids. A packet whose template is not known yet no longer loses the records of
   its other sets; templates in a packet apply to its data even when they come after it.
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-10-06 (on main, never tagged; superseded by 1.2.0)
 
 - **Licenses bound to the installation, activated offline.** Every installation has an Instance ID (from the machine
   ID) and shows an activation request (`FTR-…`) in Settings → License and with the new `flowtrack-license` command.
