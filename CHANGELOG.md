@@ -16,6 +16,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
   `/etc/flowtrack/env` points FlowTrack to another address (e.g. inside the network of the server itself), and
   the installer keeps that setting.
 - Compiled core 1.3.0: trusts the license server's key for online licenses and their confirmations only.
+- Overview → Network traffic: one **Live / Period** switch for Map, Graph and 3D. Live shows the last 2 minutes
+  (the graph used to show only that, so a host that was quiet just now showed nothing even for "last 24 hours");
+  Period shows the whole selected range. An empty map or globe now says that nothing matches the filter instead of
+  showing connections from the whole period while the graph was empty.
+- Settings → Devices: the Sampling column shows the current ratio — after changing 1:100 back to 1:1 it kept
+  showing 1:100 for up to 15 minutes.
 
 ## 1.2.0 — 2026-10-06
 

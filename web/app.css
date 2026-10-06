@@ -150,6 +150,8 @@ main{min-width:0;padding:18px 22px 36px}
 .hero{position:relative}
 .chart{width:100%;height:260px}
 .chart.hero-h{height:420px}
+.heronote{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(560px,calc(100% - 32px));padding:10px 16px;border-radius:12px;background:rgba(8,16,40,.86);border:1px solid var(--edge);color:var(--ink2);font-size:13px;text-align:center;pointer-events:none;z-index:5}
+.heronote[hidden]{display:none}
 .chart.map{height:520px}
 .chart.donut{height:150px}
 

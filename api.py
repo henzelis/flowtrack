@@ -424,18 +424,24 @@ def live_end(q):
     return int(last[0]['t']) if last and int(last[0]['t']) else int(time.time())
 
 
+def live_window(q, where, p, default='1'):
+    """Narrow `where` to the live window (the last `win` seconds of collected data) unless `live=0` or a custom period
+    is chosen (a past period has no live window). -> (where, live)."""
+    if q1(q, 'live', default) != '1' or p['custom']:
+        return where, False
+    p['wend'] = live_end(q)      # the window ends at the newest collected record (of the chosen device), so filters never shift it
+    p['win'] = max(60, min(q1(q, 'win', '120', int), 900))
+    return where + ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})', True
+
+
 def api_river(q):
     """Top-N inside x top-N outside endpoints with link values, all from one window: the live window (the last
     `win` seconds of collected data) or the whole range."""
     where, p, rng, step = scope(q)
     metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
-    live = q1(q, 'live', '1') == '1' and not p['custom']    # a past period has no live window
-    win = max(60, min(q1(q, 'win', '120', int), 900))
-    if live:    # the window ends at the newest collected record (of the chosen device), so filters never shift it
-        p['wend'] = live_end(q)
-        p['win'] = win
-        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
+    where, live = live_window(q, where, p)
+    win = p.get('win', 0)
     tops = ch(f"""SELECT
             (SELECT groupArray(k) FROM (SELECT int_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS l,
             (SELECT groupArray(k) FROM (SELECT ext_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS r,
@@ -546,11 +552,12 @@ def api_live(q):
 
 def api_geo(q):
     where, p, rng, step = scope(q)
+    where, live = live_window(q, where, p, default='0')
     rows = ch(f"""SELECT exporter, country, city, any(lat) AS la, any(lon) AS lo, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl
         FROM flows WHERE {where} AND lat != 0 GROUP BY exporter, country, city ORDER BY up + dn DESC LIMIT 300""", p, fmt='JSON')
     for r in rows:
         r['up'], r['dn'], r['fl'] = int(r['up']), int(r['dn']), int(r['fl'])
-    return {'rows': rows}
+    return {'rows': rows, 'live': live, 'window': p.get('win', 0), 'window_end': p.get('wend', 0)}
 
 
 def iface(c, idx, nbytes, ext, seen=()):
@@ -595,7 +602,7 @@ def collector_health(minutes=15):
 def api_devices(q):
     exp = exporters_cfg()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
-            sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, max(sampling) AS sampling_n,
+            sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, argMax(sampling, ts) AS sampling_n,
             sum(dup_dropped) AS dup_dropped, sum(dup_packets) AS dup_packets,
             toUnixTimestamp(max(ts)) AS last, dateDiff('second', min(ts), max(ts)) + 60 AS span
         FROM exporter_stats WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')
@@ -632,6 +639,9 @@ def api_devices(q):
     # several interfaces): identical flow, interfaces, start time and size
     dups = {r['exporter']: r for r in ch("""SELECT exporter, count() AS n, uniqExact(cityHash64(int_ip, ext_ip, int_port, ext_port, proto, in_if, out_if, ts_start, bytes)) AS u,
             countIf(obs != 255) AS with_dir FROM flows WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')}
+    # the latest minute's sampling, unless the devices were edited since: the collector applies a new ratio within
+    # about a minute, so until its stats cover that time show the configured one (changed in the UI -> shown at once)
+    cfg_changed = max(exporters_mtime())
     out = []
     seen = {s['exporter'] for s in stats}
     for ip in exp:
@@ -649,7 +659,7 @@ def api_devices(q):
                     'dup_dropped': int(s.get('dup_dropped') or 0), 'dup_packets': int(s.get('dup_packets') or 0),
                     'dup_pct': round(100 * (int(dups[s['exporter']]['n']) - int(dups[s['exporter']]['u'])) / max(1, int(dups[s['exporter']]['n'])), 2) if s['exporter'] in dups else 0,
                     'direction_field': bool(s['exporter'] in dups and int(dups[s['exporter']]['with_dir'])),
-                    'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 else c.get('sampling', '1:1'),
+                    'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 and int(s['last']) > cfg_changed + 120 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}))})

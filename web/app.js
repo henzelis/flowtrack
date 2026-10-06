@@ -26,7 +26,7 @@ function setLang(l){ try { localStorage.setItem('ft-lang', l); } catch (e) {} do
 })();
 
 // ===================== state, api =====================
-const state = {view:'overview', range:'24h', filters:[], heroMode:'map', metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null, ifDev:null, ifEdit:null, traffic:'internet'};
+const state = {view:'overview', range:'24h', filters:[], heroMode:'map', heroLive:true, metric:'flows', scale:'sqrt', flowLive:true, sel:null, sort:{col:'tot', dir:-1}, openFlow:null, ifDev:null, ifEdit:null, traffic:'internet'};
 let META = {devices:[]}, ME = null;
 const isAdmin = () => ME && ME.role === 'admin';
 const isInternal = () => state.traffic === 'internal';
@@ -341,31 +341,37 @@ function createRiver(host, opts){
 // ===================== maps =====================
 const siteGeo = ip => { const d = META.devices.find(x => x.ip === ip); return d && d.lat != null ? [d.lon, d.lat] : null; };
 const siteCity = ip => { const d = META.devices.find(x => x.ip === ip); return d ? (d.city || d.name) : ip; };
-function flatMap(el, geo, onConn){
+function flatMap(el, geo, onConn, arcs = !isCustom()){
   if (!echarts.getMap('world')) { el.innerHTML = '<div class="empty">' + T('Failed to load world map outlines', 'Не вдалося завантажити контури карти світу') + '</div>'; return; }
   const c = mkChart(el);
-  const rows = geo.rows, rmax = rows.length ? tot(rows[0]) : 1;
-  const byCountry = new Map(); for (const r of rows) byCountry.set(r.country, (byCountry.get(r.country) || 0) + tot(r));
-  const cmax = Math.max(1, ...byCountry.values());
   let nameEn; try { nameEn = new Intl.DisplayNames(['en'], {type:'region'}); } catch (e) {}
   const EN_FIX = {'United States':'United States', 'Czechia':'Czech Rep.', 'Bosnia & Herzegovina':'Bosnia and Herz.', 'South Korea':'Korea', 'Dominican Republic':'Dominican Rep.'};
-  const regions = [...byCountry].map(([cc, v]) => { let n = nameEn ? nameEn.of(cc) : cc; n = EN_FIX[n] || n; return {name:n, itemStyle:{areaColor:`rgba(47,123,255,${(0.18 + 0.42 * v / cmax).toFixed(2)})`}}; });
+  let rmax = 1;
+  // everything that depends on the data: applied again when a live map refreshes
+  const dataOpt = geo => {
+    const rows = geo.rows; rmax = rows.length ? tot(rows[0]) : 1;
+    const byCountry = new Map(); for (const r of rows) byCountry.set(r.country, (byCountry.get(r.country) || 0) + tot(r));
+    const cmax = Math.max(1, ...byCountry.values());
+    const regions = [...byCountry].map(([cc, v]) => { let n = nameEn ? nameEn.of(cc) : cc; n = EN_FIX[n] || n; return {name:n, itemStyle:{areaColor:`rgba(47,123,255,${(0.18 + 0.42 * v / cmax).toFixed(2)})`}}; });
+    const cities = new Map(); for (const r of rows) { const k = r.city + '|' + r.country; const g = cities.get(k) || {name:r.city || ccName(r.country), cc:r.country, lon:r.lo, lat:r.la, v:0}; g.v += tot(r); cities.set(k, g); }
+    return {geo:{regions}, series:[
+      {id:'agg', data:rows.map(r => { const s = siteGeo(r.exporter); return s && {coords:[s, [r.lo, r.la]], lineStyle:{width:.6 + 3.4 * tot(r) / rmax, opacity:.22, color:r.up > r.dn ? C.up : C.down}}; }).filter(Boolean)},
+      {id:'remotes', data:[...cities.values()].map(g => { const onSite = META.devices.some(d => d.lat != null && Math.abs(d.lat - g.lat) < 0.6 && Math.abs(d.lon - g.lon) < 0.9);
+        return {name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v, label:onSite ? {show:false} : undefined}; })}]};
+  };
   const sites = META.devices.filter(d => d.lat != null).map(d => ({name:d.city || d.name, full:`${d.city || ''}${d.country ? ', ' + ccName(d.country) : ''} · ${d.name}`, value:[d.lon, d.lat, 1]}));
   const lbl = (pos, size) => ({show:true, position:pos, distance:7, color:'#F2F6FF', fontFamily:'Manrope', fontWeight:700, fontSize:size, textBorderColor:'rgba(4,10,28,.95)', textBorderWidth:3.5, formatter:'{b}'});
-  const cities = new Map(); for (const r of rows) { const k = r.city + '|' + r.country; const g = cities.get(k) || {name:r.city || ccName(r.country), cc:r.country, lon:r.lo, lat:r.la, v:0}; g.v += tot(r); cities.set(k, g); }
   c.setOption({animation:false, tooltip:{...tipBase(), trigger:'item', formatter:p => p.seriesType === 'lines' ? '' : p.componentType === 'geo' ? esc(p.name) : `${esc(p.data && p.data.full || p.name)}${p.data && p.data.v ? '<br><b>' + fmtB(p.data.v) + '</b>' : ''}`},
     geo:{map:'world', roam:true, zoom:1.25, center:[15, 35], scaleLimit:{min:1, max:10}, label:{show:false},
-      itemStyle:{areaColor:'rgba(30,56,120,.38)', borderColor:'rgba(110,160,255,.38)', borderWidth:.5}, emphasis:{label:{show:false}, itemStyle:{areaColor:'rgba(47,123,255,.55)'}}, regions},
+      itemStyle:{areaColor:'rgba(30,56,120,.38)', borderColor:'rgba(110,160,255,.38)', borderWidth:.5}, emphasis:{label:{show:false}, itemStyle:{areaColor:'rgba(47,123,255,.55)'}}},
     series:[
-      {id:'agg', type:'lines', coordinateSystem:'geo', silent:true, zlevel:1, lineStyle:{curveness:.28},
-        data:rows.map(r => { const s = siteGeo(r.exporter); return s && {coords:[s, [r.lo, r.la]], lineStyle:{width:.6 + 3.4 * tot(r) / rmax, opacity:.22, color:r.up > r.dn ? C.up : C.down}}; }).filter(Boolean)},
+      {id:'agg', type:'lines', coordinateSystem:'geo', silent:true, zlevel:1, lineStyle:{curveness:.28}, data:[]},
       {id:'live', type:'lines', coordinateSystem:'geo', zlevel:2, silent:true, effect:{show:!reduceMotion, period:2.4, trailLength:0, symbol:'circle', symbolSize:5}, lineStyle:{width:1.4, opacity:.75, curveness:.28}, data:[]},
       {id:'remotes', type:'scatter', coordinateSystem:'geo', zlevel:3, symbolSize:d => 5 + 12 * Math.sqrt(d[2] / rmax), itemStyle:{color:C.ext, shadowBlur:12, shadowColor:C.ext},
-        label:lbl('right', 12), labelLayout:{hideOverlap:true}, emphasis:{label:{show:true}},
-        data:[...cities.values()].map(g => { const onSite = META.devices.some(d => d.lat != null && Math.abs(d.lat - g.lat) < 0.6 && Math.abs(d.lon - g.lon) < 0.9);
-          return {name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v, label:onSite ? {show:false} : undefined}; })},
+        label:lbl('right', 12), labelLayout:{hideOverlap:true}, emphasis:{label:{show:true}}, data:[]},
       {id:'sites', type:'scatter', coordinateSystem:'geo', zlevel:4, symbolSize:12, itemStyle:{color:C.int, borderColor:'rgba(255,255,255,.85)', borderWidth:2, shadowBlur:10, shadowColor:C.int}, label:lbl('left', 13), data:sites},
     ]});
+  c.setOption(dataOpt(geo));
   // pin the top of the map (Greenland) to the top edge of the panel; the default layout centres it vertically
   let roamed = false; c.on('georoam', () => { roamed = true; });
   const pinTop = () => { if (roamed || c.isDisposed() || !el.clientHeight) return;
@@ -387,8 +393,8 @@ function flatMap(el, geo, onConn){
     lastLen = live.length;
   };
   let lastLen = -1;
-  if (isCustom()) return;    // a past period: no live arcs
-  poll(); every(4000, poll); every(reduceMotion ? 3000 : 1000, tick);
+  if (arcs && !isCustom()) { poll(); every(4000, poll); every(reduceMotion ? 3000 : 1000, tick); }    // a past period: no live arcs
+  return geo => { if (!c.isDisposed()) c.setOption(dataOpt(geo)); };
 }
 function globe(el, geo){
   if (!echarts.getMap('world') || !window['echarts-gl']) { el.innerHTML = '<div class="empty">' + T('3D mode is not available in this browser', '3D-режим недоступний у цьому браузері') + '</div>'; return; }
@@ -396,17 +402,17 @@ function globe(el, geo){
     const tex = echarts.init(document.createElement('canvas'), null, {width:2048, height:1024});
     tex.setOption({backgroundColor:'#071431', animation:false, geo:{map:'world', silent:true, left:0, top:0, right:0, bottom:0, boundingCoords:[[-180, 90], [180, -90]], itemStyle:{areaColor:'#123072', borderColor:'#4C93FF', borderWidth:1.2}}});
     const c = mkChart(el); onCleanup(() => tex.dispose());
-    const rows = geo.rows.slice(0, 80);
-    const cities = new Map(); for (const r of geo.rows.slice(0, 10)) cities.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]});
+    const arcs = geo => geo.rows.slice(0, 80).map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean);
+    const places = geo => { const m = new Map(); for (const r of geo.rows.slice(0, 10)) m.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]}); return [...m.values()]; };
     c.setOption({globe:{baseTexture:tex, shading:'lambert', environment:'none', globeRadius:100, light:{ambient:{intensity:.55}, main:{intensity:1.1, alpha:30, beta:40}},
         atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:20, distance:180, minDistance:60, maxDistance:260, targetCoord:[25, 45]}},
       series:[
-        {type:'lines3D', coordinateSystem:'globe', blendMode:'lighter', effect:{show:!reduceMotion, trailWidth:2.5, trailLength:.22, trailOpacity:1, constantSpeed:28}, lineStyle:{width:1.2, opacity:.35},
-          data:rows.map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean)},
+        {id:'arcs', type:'lines3D', coordinateSystem:'globe', blendMode:'lighter', effect:{show:!reduceMotion, trailWidth:2.5, trailLength:.22, trailOpacity:1, constantSpeed:28}, lineStyle:{width:1.2, opacity:.35}, data:arcs(geo)},
         {type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:10, itemStyle:{color:C.int}, label:{show:true, formatter:'{b}', textStyle:{color:'#F2F6FF', fontSize:13, fontWeight:'bold', fontFamily:'Manrope', backgroundColor:'rgba(4,10,28,.7)', padding:[3, 6], borderRadius:4}},
           data:META.devices.filter(d => d.lat != null).map(d => ({name:d.city || d.name, value:[d.lon, d.lat, 0]}))},
-        {type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:7, itemStyle:{color:C.ext}, label:{show:true, formatter:'{b}', textStyle:{color:'#DDFBEF', fontSize:12, fontFamily:'Manrope', backgroundColor:'rgba(4,10,28,.6)', padding:[2, 5], borderRadius:4}}, data:[...cities.values()]},
+        {id:'places', type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:7, itemStyle:{color:C.ext}, label:{show:true, formatter:'{b}', textStyle:{color:'#DDFBEF', fontSize:12, fontFamily:'Manrope', backgroundColor:'rgba(4,10,28,.6)', padding:[2, 5], borderRadius:4}}, data:places(geo)},
       ]});
+    return geo => { if (!c.isDisposed()) c.setOption({series:[{id:'arcs', data:arcs(geo)}, {id:'places', data:places(geo)}]}); };
   } catch (e) { el.innerHTML = '<div class="empty">' + T('3D mode is not available: ', '3D-режим недоступний: ') + esc(e.message) + '</div>'; }
 }
 
@@ -426,6 +432,7 @@ const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2
 const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const flowLive = () => state.flowLive && !isCustom();
+const heroLive = () => state.heroLive && !isCustom();
 // a past period has no live window: the Live button stays visible but off
 const lockLive = id => { if (!isCustom()) return; const b = document.querySelector(`#${id} button[data-v="live"]`); if (b) { b.disabled = true; b.title = T('Live shows the last minutes — choose a preset period to use it', 'Наживо показує останні хвилини — виберіть готовий період, щоб увімкнути'); } };
 const wireSeg = (id, fn) => document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => fn(b.dataset.v));
@@ -471,20 +478,35 @@ function mountHero(){
   if (heroScope) heroScope.dispose();
   heroScope = childScope();
   const g = state.heroMode === 'graph' || isInternal();     // no geography for inside <-> inside traffic
-  fill('heroSec', `${ph('flow', T('Network traffic', 'Мережевий трафік'), g ? `<span id="heroLbl" class="tnum">${T('live · window 2 min · updating…', 'наживо · вікно 2 хв · оновлюється…')}</span>` : (isCustom() ? T('connections for the selected period', 'з’єднання за вибраний період') : T('connections for the selected period · new lines appear live', 'з’єднання за вибраний період · нові лінії з’являються наживо')),
-      (g ? seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stand out next to large ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) : '') + (isInternal() ? '' : seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode))
-      + (isInternal() ? `<span class="legend"><span><i class="bar" style="background:${C.up}"></i>${T('source → destination', 'джерело → отримувач')}</span></span>`
-        : `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('inside', 'внутр.')}</span><span><i style="background:${C.ext}"></i>${T('outside', 'зовн.')}</span></span>`))}
-    <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroOvl"></div>`);
+  const live = heroLive();
+  // one Live / Period switch for Map, Graph and 3D: live = the last 2 minutes of data, period = the whole range
+  const sub = live ? (g ? T('live · 2 min · updating…', 'наживо · 2 хв · оновлюється…') : T('live · the last 2 min', 'наживо · останні 2 хв'))
+    : (g ? rangeLabel() : T('the selected period', 'за вибраний період'));
+  fill('heroSec', `${ph('flow', T('Network traffic', 'Мережевий трафік'), `<span id="heroLbl" class="tnum">${sub}</span>`,
+      (isInternal() ? `<span class="legend"><span><i class="bar" style="background:${C.up}"></i>${T('source → destination', 'джерело → отримувач')}</span></span>`
+        : `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span>${g ? '' : `<span><i style="background:${C.int}"></i>${T('inside', 'внутр.')}</span><span><i style="background:${C.ext}"></i>${T('outside', 'зовн.')}</span>`}</span>`)
+      + (g ? seg('scaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small flows stand out next to large ones', 'Ширина ∝ √обсягу — дрібні потоки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний'), T('Width proportional to volume', 'Ширина пропорційна обсягу')]], state.scale) : '')
+      + seg('heroLiveSeg', [['live', T('Live', 'Наживо'), T('The last 2 minutes of data, updated as it arrives', 'Останні 2 хвилини даних, оновлюється з надходженням')], ['period', T('Period', 'За період'), T('The whole selected period', 'Увесь вибраний період')]], live ? 'live' : 'period')
+      + (isInternal() ? '' : seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode)))}
+    <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroNote" class="heronote" hidden></div><div id="heroOvl"></div>`);
+  lockLive('heroLiveSeg');
   wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
+  wireSeg('heroLiveSeg', m => { const l = m === 'live'; if (l === !!state.heroLive) return; state.heroLive = l; mountHero(); });
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
   const hb = document.getElementById('heroBody'), myScope = heroScope;
   heroScope.run(() => {
-    if (g) createRiver(hb, {compact:true, refreshMs:isCustom() ? 0 : 10000, fetchData:() => api('river', {top:8, live:isCustom() ? 0 : 1, win:120, metric:state.metric}),
-      onData:() => fill('heroLbl', isCustom() ? rangeLabel() : `${T(`live · window 2 min · updated ${hms(Math.floor(Date.now() / 1000))}`, `наживо · вікно 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}`)}${scaleNote()}`)});
+    if (g) createRiver(hb, {compact:true, refreshMs:live ? 10000 : 0, fetchData:() => api('river', {top:8, live:live ? 1 : 0, win:120, metric:state.metric}),
+      onData:() => fill('heroLbl', live ? `${T(`live · 2 min · updated ${hms(Math.floor(Date.now() / 1000))}`, `наживо · 2 хв · оновлено ${hms(Math.floor(Date.now() / 1000))}`)}${scaleNote()}` : rangeLabel() + scaleNote())});
   });
   if (!g) {
-    api('geo').then(geo => { if (!hb.isConnected || heroScope !== myScope) return; myScope.run(() => state.heroMode === 'map' ? flatMap(hb, geo) : globe(hb, geo)); }).catch(e => fill('heroBody', errBox(e)));
+    // an empty map or globe says so, like the graph: nothing under this filter in the window
+    const note = geo => { const n = document.getElementById('heroNote'); if (!n || heroScope !== myScope) return; n.hidden = !!geo.rows.length;
+      n.textContent = geo.live ? T(`No traffic with a location under this filter in the last ${Math.round(geo.window / 60)} min — “Period” shows the whole range`, `Немає трафіку з геолокацією під цей фільтр за останні ${Math.round(geo.window / 60)} хв — «За період» покаже весь діапазон`)
+        : T('No traffic with a location under this filter for the selected period', 'Немає трафіку з геолокацією під цей фільтр за вибраний період'); };
+    const load = () => api('geo', {live:live ? 1 : 0, win:120});
+    load().then(geo => { if (!hb.isConnected || heroScope !== myScope) return; note(geo);
+      myScope.run(() => { const update = state.heroMode === 'map' ? flatMap(hb, geo, null, live) : globe(hb, geo);
+        if (live && update) every(15000, () => load().then(d => { if (heroScope === myScope) { note(d); update(d); } }).catch(() => {})); }); }).catch(e => fill('heroBody', errBox(e)));
     section('heroOvl', async () => {
       const [h, d, s] = await Promise.all([api('top', {dim:'int_ip', limit:1}), api('top', {dim:'ext_ip', limit:1}), api('top', {dim:'service', limit:1})]);
       if (heroScope !== myScope) return null;
@@ -493,7 +515,7 @@ function mountHero(){
         <div><span class="ico">${icon(ICO.users, 15)}</span><span>${T('Top source', 'Топ джерело')}</span><b>${esc(a ? a.name || a.k : '—')}</b><small>${a ? fmtB(tot(a)) : ''}</small></div>
         <div><span class="ico">${icon(ICO.globe, 15)}</span><span>${T('Top destination', 'Топ призначення')}</span><b>${esc(b ? b.k : '—')}</b><small>${b ? [b.city, fmtB(tot(b))].filter(Boolean).join(' · ') : ''}</small></div>
         <div><span class="ico">${icon(ICO.grid, 15)}</span><span>${T('Top service', 'Топ сервіс')}</span><b>${esc(c ? c.k : '—')}</b><small>${c ? pct(tot(c), s.total) : ''}</small></div></div>
-        ${isCustom() ? '' : `<div class="livebadge"><b>${T('Live', 'Наживо')}</b>${T('new connections', 'нові з’єднання')}</div>`}</div>`;
+        ${!live ? '' : `<div class="livebadge"><b>${T('Live', 'Наживо')}</b>${T('new connections', 'нові з’єднання')}</div>`}</div>`;
     });
   }
 }
