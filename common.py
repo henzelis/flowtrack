@@ -293,11 +293,13 @@ def edition():
     Licenses are time-limited: after the end date the Community limits apply again (stored data is kept). Cached
     until the license file changes, re-checked every minute."""
     import time as _t
-    try:
-        mt = os.stat(LICENSE_FILE).st_mtime
-    except OSError:
-        mt = None
-    key = (mt, int(_t.time() // 60))
+    mt = []
+    for f in (LICENSE_FILE, os.path.join(os.path.dirname(LICENSE_FILE), 'license.lease')):
+        try:
+            mt.append(os.stat(f).st_mtime)
+        except OSError:
+            mt.append(None)
+    key = (tuple(mt), int(_t.time() // 60))
     if _edition['key'] == key and _edition['value'] is not None:
         return _edition['value']
     out = ftcore.edition(os.path.dirname(LICENSE_FILE))
@@ -305,34 +307,76 @@ def edition():
     return out
 
 
+def _write_license(text):
+    import licensing
+    tmp = LICENSE_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(licensing.normalized(text) + '\n')
+    os.chmod(tmp, 0o640)
+    os.replace(tmp, LICENSE_FILE)
+
+
 def save_license(text):
-    """Activate a license code (it must be valid for this installation now); '' removes it. -> edition()."""
+    """Activate a license code (it must be valid for this installation now), or a license key (FTK-…) through the
+    license server; '' removes the license. -> edition()."""
     import licensing
     text = (text or '').strip()
+    if ''.join(text.split()).upper().startswith('FTK'):
+        text = licensing.activate_key(text)              # raises licensing.ServerError with the server's reason
     if text:
         licensing.check(text)                # raises LicenseError (a ValueError) with the reason
-        tmp = LICENSE_FILE + '.tmp'
-        with open(tmp, 'w') as f:
-            f.write(licensing.normalized(text) + '\n')
-        os.chmod(tmp, 0o640)
-        os.replace(tmp, LICENSE_FILE)
+        _write_license(text)
     elif os.path.exists(LICENSE_FILE):
         os.remove(LICENSE_FILE)
     _edition['value'] = None
     return edition()
 
 
-def deactivate_license():
-    """Deactivate the installed license to move it to another server -> the return code for the vendor.
-    This installation refuses that license from then on."""
+def license_checkin():
+    """Renew the lease of an online license at the license server (daily, by the collector; or on request).
+    A renewed license replaces the installed one; a revoked or moved one is dropped. -> edition()."""
+    import licensing
+    text = read_license()
+    ed = edition()
+    if not text or not (ed['license'] or {}).get('online'):
+        return ed
+    try:
+        renewed = licensing.checkin(text)
+        if renewed:
+            licensing.check(renewed)
+            _write_license(renewed)
+    except licensing.ServerError as ex:
+        if ex.code in ('revoked', 'returned', 'other_instance'):
+            licensing.deactivate(text)       # this installation refuses it from now on
+            os.remove(LICENSE_FILE)
+            _edition['value'] = None
+            log_line = f'license dropped: {ex}'
+            print(f'[flowtrack] {log_line}', flush=True)
+        else:
+            raise
+    _edition['value'] = None
+    return edition()
+
+
+def deactivate_license(with_code=False):
+    """Deactivate the installed license to move it to another server. An online license is given back to the
+    license server (the key is free at once); otherwise -> the return code for the vendor. This installation
+    refuses that license from then on. with_code: -> {'return_code', 'released'}."""
     import licensing
     text = read_license()
     if not text:
         raise ValueError('no license is installed')
+    released = False
+    if (edition()['license'] or {}).get('online'):
+        try:
+            licensing.release_online(text)
+            released = True
+        except licensing.ServerError:
+            pass                              # the vendor releases the key by the return code
     code = licensing.deactivate(text)
     os.remove(LICENSE_FILE)
     _edition['value'] = None
-    return code
+    return {'return_code': code, 'released': released} if with_code else code
 
 
 _TTL_RE = None

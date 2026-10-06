@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import licensing  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, save_license, deactivate_license, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, save_license, deactivate_license, license_checkin, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
@@ -235,6 +235,8 @@ def edition_info(admin=False):
     if admin:
         out['license'], out['message'] = ed['license'], license_message(ed['status'], ed['message'], ed['license'])
         out['instance'], out['request'] = licensing.instance_id(), licensing.request_code()
+        out['online'] = bool((ed['license'] or {}).get('online'))
+        out['lease_until'], out['last_checkin'] = ed.get('lease_until'), licensing.last_checkin()
     return out
 
 
@@ -250,9 +252,32 @@ _LICENSE_UK = {
 }
 
 
+_SERVER_UK = {
+    'unknown': 'цей ліцензійний ключ невідомий серверу ліцензій',
+    'revoked': 'цей ліцензійний ключ відкликано',
+    'expired': 'термін дії цього ліцензійного ключа минув',
+    'returned': 'цю ліцензію деактивовано або звільнено, тут вона більше не діє',
+    'unreachable': 'сервер ліцензій недоступний — перевірте з’єднання з інтернетом (або введіть ліцензію FTL-… від постачальника)',
+    'busy': 'забагато запитів до сервера ліцензій — спробуйте за хвилину',
+    'error': 'помилка сервера ліцензій — спробуйте пізніше',
+}
+
+
 def license_message(code, msg, lic=None):
     """A licensing message in the UI language."""
     lic = lic or {}
+    if code == 'in_use':
+        inst = re.search(r'installation (\S+)', msg)
+        return tr(msg, f"цей ключ уже активний на інсталяції {inst.group(1) if inst else '?'} — спершу деактивуйте його там "
+                       '(Налаштування → Ліцензія) або попросіть постачальника звільнити його')
+    if code == 'unconfirmed':
+        when = re.search(r'since (\d{4}-\d{2}-\d{2})', msg)
+        return tr(msg, f'сервер ліцензій не підтверджував цю ліцензію з {when.group(1)} — перевірте з’єднання з ним' if when
+                  else 'цю онлайн-ліцензію ще не підтвердив сервер ліцензій')
+    if code == 'invalid' and 'license key' in msg:
+        return tr(msg, 'це не ліцензійний ключ FlowTrack' if 'not a' in msg else 'ліцензійний ключ введено з помилкою або не повністю')
+    if code in _SERVER_UK and msg not in _LICENSE_UK and (code != 'expired' or 'license key' in msg):
+        return tr(msg, _SERVER_UK[code])        # from the license server
     if code == 'expired' and lic.get('expires'):
         return tr(msg, 'ліцензія закінчилась ' + time.strftime('%Y-%m-%d', time.gmtime(lic['expires'])))
     if code == 'other_instance':
@@ -270,10 +295,18 @@ def post_license(body):
 
 def post_license_deactivate():
     try:
-        code = deactivate_license()
+        r = deactivate_license(with_code=True)
     except ValueError as ex:
         raise BadRequest(license_message('invalid', str(ex))) from None
-    return dict(edition_info(admin=True), return_code=code)
+    return dict(edition_info(admin=True), return_code=r['return_code'], released=r['released'])
+
+
+def post_license_checkin():
+    try:
+        license_checkin()
+    except ValueError as ex:
+        raise BadRequest(license_message(getattr(ex, 'code', 'error'), str(ex))) from None
+    return edition_info(admin=True)
 
 
 def api_summary(q):
@@ -954,6 +987,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/devices/interfaces': lambda: post_device_interfaces(body, user),
                 '/api/license': lambda: post_license(body),
                 '/api/license/deactivate': post_license_deactivate,
+                '/api/license/checkin': post_license_checkin,
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})

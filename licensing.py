@@ -10,19 +10,36 @@ Codes are Crockford base32 in groups of five, with a prefix that names them:
   FTR-…  activation request    version, instance (10 B), board, NIC 1, NIC 2 (6 B hashes), checksum
   FTL-…  license               body + Ed25519 signature + checksum; the body is the edition, term and binding
   FTX-…  return code           proof that a license was deactivated here, to move it to another server
+  FTK-…  license key           a purchase, activated online: the license server issues the license for this server
+  FTS-…  lease                 the license server's signed confirmation that an online license holds until a date
+
+Online licenses (from a license key) need the license server: FlowTrack checks in every day and receives a new
+lease; without one for longer than the lease (30 days) the Community limits apply. Offline licenses (FTL-… from the
+vendor) need no network.
 
 The work is done by the compiled FlowTrack core (`ftcore`), which also holds the vendor's public key and the
 Community limits; this module is its Python face.
 
-Command line (installed as `flowtrack-license`): licensing.py status | request | activate FILE|CODE|- | deactivate
+Command line (installed as `flowtrack-license`): licensing.py status | request | activate FILE|CODE|KEY|- | checkin | deactivate
 """
+import hashlib
+import http.client
+import json
 import os
+import ssl
 import sys
 import time
+import urllib.parse
 
 import ftcore
 
 STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
+# The license server and the SHA-256 of its TLS certificate (pinned: the server uses its own certificate, so no
+# public CA is involved and nobody in between can read a license key). Responses are signed by the server's key,
+# which the compiled core checks.
+LICENSE_SERVER = os.environ.get('FT_LICENSE_SERVER', 'https://license.flowtrack.invalid:8443')
+LICENSE_SERVER_PIN = os.environ.get('FT_LICENSE_SERVER_PIN', '')
+CHECKIN_FILE = 'license.checkin'       # the last check-in: {'ts', 'ok', 'error'}
 FEATURES = list(ftcore.FEATURES)       # bit n of a license's feature mask (reserved; every feature is in every edition)
 ALPHABET = ftcore.ALPHABET
 LicenseError = ftcore.LicenseError     # a ValueError; .code: invalid | expired | other_instance | returned | clock
@@ -71,6 +88,91 @@ def edition():
     return ftcore.edition(STATE_DIR)
 
 
+# ------------------------------------------------------------------ the license server
+class ServerError(ValueError):
+    """The license server refused (code: invalid | unknown | in_use | revoked | expired | returned | other_instance
+    | busy | error) or could not be reached (code: unreachable)."""
+    def __init__(self, msg, code='error'):
+        super().__init__(msg)
+        self.code = code
+
+
+def _post(path, body, timeout=20):
+    from common import VERSION
+    u = urllib.parse.urlsplit(LICENSE_SERVER)
+    data = json.dumps(dict(body, version=VERSION)).encode()
+    conn = None
+    try:
+        if u.scheme == 'https':
+            ctx = ssl.create_default_context()
+            if LICENSE_SERVER_PIN:              # the server's own certificate, checked by its fingerprint below
+                ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+            conn = http.client.HTTPSConnection(u.hostname, u.port or 443, timeout=timeout, context=ctx)
+            conn.connect()
+            if LICENSE_SERVER_PIN:
+                got = hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest()
+                if got != LICENSE_SERVER_PIN.replace(':', '').lower():
+                    raise ServerError('the license server presented an unexpected certificate', 'unreachable')
+        else:
+            conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+        conn.request('POST', path, data, {'Content-Type': 'application/json'})
+        r = conn.getresponse()
+        out = json.loads(r.read() or b'{}')
+    except ServerError:
+        raise
+    except (OSError, ValueError, http.client.HTTPException) as ex:
+        raise ServerError(f'the license server cannot be reached ({LICENSE_SERVER}): {ex}', 'unreachable') from None
+    finally:
+        if conn:
+            conn.close()
+    if r.status != 200:
+        raise ServerError(out.get('error') or f'license server error {r.status}', out.get('code', 'error'))
+    return out
+
+
+def _record(ok, error=''):
+    try:
+        with open(os.path.join(STATE_DIR, CHECKIN_FILE + '.tmp'), 'w') as f:
+            json.dump({'ts': int(time.time()), 'ok': ok, 'error': error[:300]}, f)
+        os.replace(os.path.join(STATE_DIR, CHECKIN_FILE + '.tmp'), os.path.join(STATE_DIR, CHECKIN_FILE))
+    except OSError:
+        pass
+
+
+def last_checkin():
+    try:
+        with open(os.path.join(STATE_DIR, CHECKIN_FILE)) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def activate_key(key):
+    """License key (FTK-…) -> the online license (FTL-…) for this installation; its lease is stored."""
+    r = _post('/v1/activate', {'key': ' '.join(key.split()), 'request': request_code()})
+    ftcore.save_lease(r['lease'], STATE_DIR)
+    _record(True)
+    return r['license']
+
+
+def checkin(text):
+    """Renew the lease of the online license `text` -> a renewed license code when the vendor extended it, else
+    None. ServerError(code 'revoked' | 'returned') means the license must be dropped here."""
+    try:
+        r = _post('/v1/checkin', {'license': text, 'request': request_code()})
+        ftcore.save_lease(r['lease'], STATE_DIR)
+    except ServerError as ex:
+        _record(False, str(ex))
+        raise
+    _record(True)
+    return r.get('license')
+
+
+def release_online(text):
+    """Tell the license server that this installation gave the license up (the key is free for another server)."""
+    _post('/v1/deactivate', {'license': text, 'request': request_code()})
+
+
 # ------------------------------------------------------------------ command line (root)
 def _cli(argv):
     import common
@@ -90,8 +192,15 @@ def _cli(argv):
         text = sys.stdin.read() if src == '-' else open(src).read() if os.path.exists(src) else src
         ed = common.save_license(text)
         print('Activated:', ed['license']['customer'], '· until', time.strftime('%Y-%m-%d', time.gmtime(ed['license']['expires'])))
+    elif cmd == 'checkin':
+        ed = common.license_checkin()
+        print('Edition:', ed['name'], ed['status'], '· confirmed until', time.strftime('%Y-%m-%d', time.gmtime(ed['lease_until'])) if ed.get('lease_until') else '')
     elif cmd == 'deactivate':
-        print('Return code (send it to your FlowTrack vendor):', common.deactivate_license())
+        r = common.deactivate_license(with_code=True)
+        if r['released']:
+            print('Deactivated: the license key can now be activated on another server.')
+        else:
+            print('Return code (send it to your FlowTrack vendor):', r['return_code'])
     else:
         sys.exit(__doc__)
 

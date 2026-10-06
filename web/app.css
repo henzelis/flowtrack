@@ -387,6 +387,7 @@ tr.unseen td{opacity:.75}
 .ed-lim span{font-size:12px;color:var(--ink3)}
 .ed-lim b{font:700 15px var(--f-mono)}
 .ed-lim b.warnc{color:var(--warn)}
+.lic-online{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:12px}
 .lic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px}
 .lic-col{display:grid;gap:10px;align-content:start;min-width:0}
 .lic-step{display:flex;gap:12px;align-items:flex-start}

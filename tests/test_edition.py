@@ -20,31 +20,49 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey 
 SK = Ed25519PrivateKey.generate()                   # the tests' own vendor key
 PK = SK.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 OTHER_SK = Ed25519PrivateKey.generate()
+ONLINE_SK = Ed25519PrivateKey.generate()            # the license server's key
+ONLINE_PK = ONLINE_SK.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 HERE = {'machine': 'a' * 32, 'board': '4c4c4544-0042-3510-8051-b4c04f4e3732', 'macs': ['2c:f0:5d:96:61:98', 'e0:d4:e8:72:34:f9']}
 REAL_HW = licensing.hardware
 if not ftcore.TESTING:
     raise unittest.SkipTest('needs a testing build of ftcore (cargo build --features testing)')
-ftcore._testing(public_key=PK)
+ftcore._testing(public_key=PK, online_key=ONLINE_PK)
 
 
 def pack(lic):
-    """What the License Manager signs (FlowTrack license v2 body)."""
+    """What the License Manager signs (FlowTrack license v2 body; v3 = online, + lease days)."""
     mask = sum(1 << licensing.FEATURES.index(f) for f in lic.get('features') or [])
     b, cust = lic['binding'], lic['customer'].encode()
     if len(cust) > ftcore.CUSTOMER_MAX:
         raise ValueError(f'the customer name is longer than {ftcore.CUSTOMER_MAX} bytes')
-    return struct.pack('>BB6sIIIHI10s6s6s6s', 2, 1, lic['id'], lic['issued'], lic['expires'], lic.get('rps') or 0,
-                       lic['retention_days'], mask, b[:10], b[10:16], b[16:22], b[22:28]) + bytes([len(cust)]) + cust
+    v3 = lic.get('lease_days') is not None
+    body = struct.pack('>BB6sIIIHI10s6s6s6s', 3 if v3 else 2, 1, lic['id'], lic['issued'], lic['expires'], lic.get('rps') or 0,
+                       lic['retention_days'], mask, b[:10], b[10:16], b[16:22], b[22:28])
+    if v3:
+        body += struct.pack('>H', lic['lease_days'])
+    return body + bytes([len(cust)]) + cust
 
 
 def issue(hw=HERE, days=365, sk=SK, **kw):
     now = int(time.time())
-    lic = dict(id=os.urandom(6), edition='pro', issued=now, expires=now + days * 86400, rps=None, retention_days=90,
+    lic = dict(id=os.urandom(6), edition='pro', issued=now, expires=now + days * 86400 + 3600,   # an hour of margin: days_left must not depend on test speed
+               rps=None, retention_days=90,
                features=['alerts'], binding=licensing.parse_request(licensing.request_code(hw))['binding'],
                customer='ТОВ «Тест»')
     lic.update(kw)
     body = pack(lic)
-    return licensing.encode('FTL', body + sk.sign(b'FlowTrack license v2\0' + body))
+    prefix = b'FlowTrack license v3\0' if lic.get('lease_days') is not None else b'FlowTrack license v2\0'
+    return licensing.encode('FTL', body + sk.sign(prefix + body))
+
+
+def lease(code, hw=HERE, until=None, issued=None, sk=ONLINE_SK):
+    """A lease from the license server for license `code` on `hw`."""
+    lic = licensing.verify(code)
+    now = int(time.time())
+    body = struct.pack('>B6s10sII', 1, bytes.fromhex(lic['id']), lic['binding'][:10] if hw is HERE else
+                       licensing.parse_request(licensing.request_code(hw))['binding'][:10],
+                       issued or now, until or now + 30 * 86400)
+    return licensing.encode('FTS', body + sk.sign(b'FlowTrack lease v1\0' + body))
 
 
 class Base(unittest.TestCase):
@@ -54,10 +72,10 @@ class Base(unittest.TestCase):
         common._edition.update(key=None, value=None)
         licensing.STATE_DIR = state
         self.hw = dict(HERE)
-        ftcore._testing(public_key=PK, hardware=lambda: self.hw)
+        ftcore._testing(public_key=PK, online_key=ONLINE_PK, hardware=lambda: self.hw)
 
     def tearDown(self):
-        ftcore._testing(public_key=PK)
+        ftcore._testing(public_key=PK, online_key=ONLINE_PK)
 
 
 class Codes(unittest.TestCase):
@@ -195,6 +213,63 @@ class Edition(Base):
     def test_customer_name_limit(self):
         with self.assertRaisesRegex(ValueError, 'longer than'):
             issue(customer='Я' * 40)
+
+
+class Online(Base):
+    def online(self, **kw):
+        return issue(sk=ONLINE_SK, lease_days=30, **kw)
+
+    def test_needs_a_lease(self):
+        code = self.online(rps=20000)
+        with self.assertRaises(licensing.LicenseError) as cm:
+            common.save_license(code)
+        self.assertEqual(cm.exception.code, 'unconfirmed')
+        ftcore.save_lease(lease(code), licensing.STATE_DIR)
+        ed = common.save_license(code)
+        self.assertEqual((ed['status'], ed['rps'], ed['license']['online']), ('active', 20000, True))
+        self.assertGreater(ed['lease_until'], time.time() + 29 * 86400)
+
+    def test_lease_expiry_and_clock(self):
+        code = self.online()
+        ftcore.save_lease(lease(code, until=int(time.time()) + 5 * 86400), licensing.STATE_DIR)
+        licensing.check(code, now=time.time() + 4 * 86400)
+        with self.assertRaises(licensing.LicenseError) as cm:
+            licensing.check(code, now=time.time() + 6 * 86400)
+        self.assertEqual(cm.exception.code, 'unconfirmed')
+        self.assertIn('has not confirmed', str(cm.exception))
+
+    def test_lease_of_another_installation_or_license(self):
+        code = self.online()
+        other = {'machine': 'b' * 32, 'board': '', 'macs': []}
+        with self.assertRaisesRegex(ValueError, 'not for this one'):
+            ftcore.save_lease(lease(code, hw=other), licensing.STATE_DIR)
+        ftcore.save_lease(lease(self.online()), licensing.STATE_DIR)          # a lease of another license
+        with self.assertRaises(licensing.LicenseError) as cm:
+            licensing.check(code)
+        self.assertEqual(cm.exception.code, 'unconfirmed')
+
+    def test_forged_lease(self):
+        code = self.online()
+        with self.assertRaisesRegex(ValueError, 'not issued'):
+            ftcore.save_lease(lease(code, sk=OTHER_SK), licensing.STATE_DIR)
+
+    def test_online_key_signs_only_online_licenses(self):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowTrack'):
+            common.save_license(issue(sk=ONLINE_SK))                     # an offline (v2) license: master key only
+        code = issue(lease_days=30)                                        # the master key may sign online ones
+        ftcore.save_lease(lease(code, sk=SK), licensing.STATE_DIR)         # and their leases
+        self.assertEqual(common.save_license(code)['status'], 'active')
+
+    def test_offline_licenses_need_no_lease(self):
+        ed = common.save_license(issue())
+        self.assertEqual((ed['status'], ed['license']['online'], ed['lease_until']), ('active', False, None))
+
+    def test_deactivation_drops_the_lease(self):
+        code = self.online()
+        ftcore.save_lease(lease(code), licensing.STATE_DIR)
+        common.save_license(code)
+        common.deactivate_license()
+        self.assertIsNone(ftcore.lease(licensing.STATE_DIR))
 
 
 class Limit(Base):

@@ -12,8 +12,8 @@
 #           --lang en|uk   installer language
 #           --core FILE          the compiled FlowTrack core (ftcore-<version>-linux-<arch>.so from the GitHub release)
 #                                for servers without access to github.com; it must match ftcore.lock
-#           --license CODE|FILE  activate a FlowTrack license (FTL-…) issued for this server's activation request;
-#                                the request code: sudo flowtrack-license request (also in Settings → License)
+#           --license KEY|CODE|FILE  activate a license key (FTK-…, online) or a license (FTL-…) issued for this
+#                                server's activation request: sudo flowtrack-license request (also in Settings → License)
 #                          e.g. … | sudo bash -s -- --upgrade --license ./flowtrack.lic
 # Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_NETFLOW_IFACE FT_WEB_IFACE (interface name, IP or
 #                       'all'; default: the interface of the default route) FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
@@ -68,7 +68,7 @@ fi
 LIC_KEY=""
 if [ -n "$LIC_SRC" ]; then
   if [ -f "$LIC_SRC" ]; then LIC_KEY=$(grep -v '^[[:space:]]*#' "$LIC_SRC" | tr -d '[:space:]'); else LIC_KEY=$(printf '%s' "$LIC_SRC" | tr -d '[:space:]'); fi
-  case "$LIC_KEY" in [Ff][Tt][Ll]-*) ;; *) echo "--license: not a FlowTrack license code (expected FTL-…): $LIC_SRC" >&2; exit 2 ;; esac
+  case "$LIC_KEY" in [Ff][Tt][LlKk]-*) ;; *) echo "--license: not a FlowTrack license key or code (expected FTK-… or FTL-…): $LIC_SRC" >&2; exit 2 ;; esac
 fi
 
 # ------------------------------------------------------------------ output helpers

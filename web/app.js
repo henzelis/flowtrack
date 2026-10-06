@@ -1069,7 +1069,14 @@ async function editionPanel(returned){
   const status = {community:T('free edition', 'безкоштовна редакція'), active:T('license active', 'ліцензія активна'),
     invalid:T('the license is not valid', 'ліцензія недійсна'), other_instance:T('license of another server', 'ліцензія іншого сервера'),
     returned:T('license deactivated', 'ліцензію деактивовано'), clock:T('the clock is wrong', 'неправильний годинник'),
-    expired:T('license expired — Community limits apply', 'ліцензія закінчилась — діють ліміти Community')}[ed.status] || ed.status;
+    expired:T('license expired — Community limits apply', 'ліцензія закінчилась — діють ліміти Community'),
+    unconfirmed:T('not confirmed by the license server — Community limits apply', 'не підтверджено сервером ліцензій — діють ліміти Community')}[ed.status] || ed.status;
+  const fmtDay = t => new Date(t * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric'});
+  const chk = ed.last_checkin, online = ed.online ? `<div class="lic-online"><span class="nat">${
+    ed.lease_until ? T(`Online license · confirmed by the license server until ${fmtDay(ed.lease_until)}`, `Онлайн-ліцензія · підтверджена сервером ліцензій до ${fmtDay(ed.lease_until)}`)
+                   : T('Online license · not confirmed by the license server', 'Онлайн-ліцензія · не підтверджена сервером ліцензій')}${
+    chk ? ' · ' + (chk.ok ? T('last check ', 'остання перевірка ') + new Date(chk.ts * 1000).toLocaleString(LOC) : T('last check failed: ', 'остання перевірка не вдалась: ') + esc(chk.error)) : ''}</span>${
+    isAdmin() ? `<button class="btn" id="licCheck">${T('Check now', 'Перевірити зараз')}</button>` : ''}</div>` : '';
   const soon = pro && lic.days_left != null && lic.days_left < 30;
   const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // licenses end at 23:59 UTC of their last day
   box.innerHTML = `<div class="edition">
@@ -1079,32 +1086,37 @@ async function editionPanel(returned){
       <div><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}</b></div>
       <div><span>${T('Not stored over the limit, 24 h', 'Не збережено понад ліміт, 24 год')}</span><b class="${ed.license_drops_24h ? 'warnc' : ''}">${fmtInt(ed.license_drops_24h)}</b></div>
       ${lic.customer ? `<div><span>${T('Licensed to', 'Ліцензіат')}</span><b>${esc(lic.customer)}</b></div><div><span>${pro ? T('Valid until', 'Діє до') : ed.status === 'expired' ? T('Expired on', 'Закінчилась') : T('Term', 'Термін')}</span><b class="${soon || !pro ? 'warnc' : ''}">${until}</b></div>` : ''}
-    </div>
+    </div>${online}
   </div>`;
   box.classList.remove('loading');
+  const lc = document.getElementById('licCheck'); if (lc) lc.onclick = async () => { lc.disabled = true; lc.textContent = T('Checking…', 'Перевіряю…');
+    try { await apiPost('license/checkin', {}); } catch (e) { alert(e.message); } META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(); };
   const act = document.getElementById('actBox'); if (!act || !isAdmin()) return;
   // activation: this server's identity and request on the left, the license from the vendor on the right
   act.innerHTML = `<div class="lic-grid">
     <div class="lic-col">
       <div class="lic-step"><span class="lic-n">1</span><div><b>${T('Send the activation request', 'Надішліть запит на активацію')}</b>
-        <p class="note">${T('Send it to your FlowTrack vendor — by e-mail, or read it out by phone from a closed network. The license will work on this server only.', 'Надішліть його постачальнику FlowTrack — поштою або продиктуйте телефоном із закритої мережі. Ліцензія діятиме лише на цьому сервері.')}</p></div></div>
+        <p class="note">${T('Not needed with a license key. Without internet access, send it to your FlowTrack vendor — by e-mail, or read it out by phone from a closed network. The license will work on this server only.', 'З ліцензійним ключем не потрібен. Без доступу до інтернету надішліть його постачальнику FlowTrack — поштою або продиктуйте телефоном із закритої мережі. Ліцензія діятиме лише на цьому сервері.')}</p></div></div>
       <div class="lic-field"><span>${T('Instance ID', 'ID інсталяції')}</span><code class="mono" id="licInst">${esc(ed.instance || '')}</code></div>
       <div class="lic-field"><span>${T('Activation request', 'Запит на активацію')}</span><code class="mono lic-code" id="licReq">${esc(ed.request || '')}</code></div>
       <div class="acts"><button class="btn" id="reqCopy">${T('Copy', 'Копіювати')}</button><button class="btn" id="reqSave">${T('Download', 'Завантажити')}</button></div>
     </div>
     <div class="lic-col">
       <div class="lic-step"><span class="lic-n">2</span><div><b>${pro ? T('Enter a renewed license', 'Введіть подовжену ліцензію') : T('Enter the license', 'Введіть ліцензію')}</b>
-        <p class="note">${T('Paste the license code (FTL-…) or load the .lic file you received. No internet connection is needed.', 'Вставте код ліцензії (FTL-…) або завантажте отриманий файл .lic. Інтернет не потрібен.')}</p></div></div>
-      <textarea id="edKey" rows="4" spellcheck="false" autocomplete="off" placeholder="FTL-XXXXX-XXXXX-…" aria-label="${T('License code', 'Код ліцензії')}"></textarea>
+        <p class="note">${T('Paste the license key (FTK-…): FlowTrack activates it online. Or the license code (FTL-…) or .lic file from your vendor — that needs no internet.', 'Вставте ліцензійний ключ (FTK-…) — FlowTrack активує його онлайн. Або код ліцензії (FTL-…) чи файл .lic від постачальника — для них інтернет не потрібен.')}</p></div></div>
+      <textarea id="edKey" rows="4" spellcheck="false" autocomplete="off" placeholder="FTK-XXXXX-… / FTL-XXXXX-…" aria-label="${T('License key or code', 'Ліцензійний ключ або код')}"></textarea>
       <div class="acts"><span class="nat" id="edMsg" role="status"></span><input type="file" id="licFile" accept=".lic,.txt,text/plain" hidden>
         <button class="btn" id="licLoad">${T('Load file…', 'Завантажити файл…')}</button><button class="btn primary" id="edSave">${T('Activate', 'Активувати')}</button></div>
     </div>
   </div>
-  ${returned ? `<div class="lic-return" role="alert"><b>${T('The license was deactivated on this server', 'Ліцензію на цьому сервері деактивовано')}</b>
+  ${returned === 'released' ? `<div class="lic-return" role="alert"><b>${T('The license was deactivated on this server', 'Ліцензію на цьому сервері деактивовано')}</b>
+    <p class="note">${T('The license key is free again: enter it on the other server.', 'Ліцензійний ключ знову вільний: введіть його на іншому сервері.')}</p></div>` : ''}
+  ${returned && returned !== 'released' ? `<div class="lic-return" role="alert"><b>${T('The license was deactivated on this server', 'Ліцензію на цьому сервері деактивовано')}</b>
     <p class="note">${T('Send this return code to your vendor to get the license for another server. This server will not accept that license again.', 'Надішліть цей код повернення постачальнику, щоб отримати ліцензію для іншого сервера. Цей сервер більше не прийме цю ліцензію.')}</p>
     <div class="lic-field"><code class="mono lic-code" id="retCode">${esc(returned)}</code></div><div class="acts"><button class="btn" id="retCopy">${T('Copy', 'Копіювати')}</button></div></div>` : ''}
   ${ed.status !== 'community' ? `<div class="lic-move"><div><b>${T('Move the license to another server', 'Перенести ліцензію на інший сервер')}</b>
-    <p class="note">${T('Deactivation removes the license from this server and gives a return code for the vendor. Community limits apply here again; stored data is kept.', 'Деактивація знімає ліцензію з цього сервера і дає код повернення для постачальника. Тут знову діятимуть ліміти Community; збережені дані лишаться.')}</p></div>
+    <p class="note">${ed.online ? T('Deactivation removes the license from this server and frees the license key for another one. Community limits apply here again; stored data is kept.', 'Деактивація знімає ліцензію з цього сервера і звільняє ліцензійний ключ для іншого. Тут знову діятимуть ліміти Community; збережені дані лишаться.')
+      : T('Deactivation removes the license from this server and gives a return code for the vendor. Community limits apply here again; stored data is kept.', 'Деактивація знімає ліцензію з цього сервера і дає код повернення для постачальника. Тут знову діятимуть ліміти Community; збережені дані лишаться.')}</p></div>
     <button class="btn danger" id="licOff">${ed.status === 'active' ? T('Deactivate…', 'Деактивувати…') : T('Remove…', 'Видалити…')}</button></div>` : ''}`;
   const say = (t, c) => { const m = document.getElementById('edMsg'); m.textContent = t; m.style.color = c || ''; };
   const refresh = async ret => { META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(ret); };
@@ -1115,8 +1127,8 @@ async function editionPanel(returned){
   document.getElementById('licLoad').onclick = () => file.click();
   file.onchange = async () => { const f = file.files[0]; if (!f) return; document.getElementById('edKey').value = (await f.text()).trim(); file.value = ''; say(f.name); };
   document.getElementById('edSave').onclick = async () => { const k = document.getElementById('edKey').value.trim();
-    if (!k) return say(T('Paste the license code first', 'Спершу вставте код ліцензії'), 'var(--crit)');
-    say(T('Checking…', 'Перевіряю…'));
+    if (!k) return say(T('Paste the license key or code first', 'Спершу вставте ліцензійний ключ або код'), 'var(--crit)');
+    say(/^\s*ftk/i.test(k) ? T('Activating at the license server…', 'Активую на сервері ліцензій…') : T('Checking…', 'Перевіряю…'));
     try { await apiPost('license', {key:k}); await refresh(); } catch (e) { say(e.message, 'var(--crit)'); } };
   const rc = document.getElementById('retCopy'); if (rc) rc.onclick = e => copyText(returned, e.currentTarget);
   const off = document.getElementById('licOff'); if (off) off.onclick = async () => {
@@ -1125,7 +1137,7 @@ async function editionPanel(returned){
       try { await apiPost('license', {key:''}); await refresh(); } catch (e) { alert(e.message); } return; }
     if (!confirm(T('Deactivate the license on this server? Community limits apply here again, and this server will not accept this license again. You get a return code to move the license to another server.',
       'Деактивувати ліцензію на цьому сервері? Тут знову діятимуть ліміти Community, і цей сервер більше не прийме цю ліцензію. Ви отримаєте код повернення, щоб перенести ліцензію на інший сервер.'))) return;
-    try { const r = await apiPost('license/deactivate', {}); await refresh(r.return_code); } catch (e) { alert(e.message); } };
+    try { const r = await apiPost('license/deactivate', {}); await refresh(r.released ? 'released' : r.return_code); } catch (e) { alert(e.message); } };
 }
 // edition badge under the logo: Community / Pro, coloured when a license ends soon or has ended; opens the license panel
 function editionBadge(){

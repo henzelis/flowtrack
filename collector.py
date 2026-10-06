@@ -17,6 +17,7 @@ import signal
 import socket
 import struct
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -24,7 +25,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ftcore  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
-                    exporters_mtime, flows_retention_days, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
+                    exporters_mtime, flows_retention_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -535,6 +536,23 @@ class Receiver:
             except (CHError, OSError) as ex:
                 log(f'WARN could not check the retention of flows: {ex}')
 
+    @staticmethod
+    def license_checkins():
+        """Online licenses: renew the lease at the license server once a day (hourly after a failure). Runs in its own
+        thread so a slow or unreachable server never delays receiving."""
+        import licensing
+        while True:
+            try:
+                ed = edition()
+                if (ed['license'] or {}).get('online'):
+                    last = licensing.last_checkin() or {}
+                    if time.time() - last.get('ts', 0) >= (86400 if last.get('ok') else 3600):
+                        ed = license_checkin()
+                        log(f"license check-in: {ed['status']}" + (f", confirmed until {utc(ed['lease_until'])}" if ed.get('lease_until') else ''))
+            except Exception as ex:          # unreachable server etc.: the lease covers it; try again in an hour
+                log(f'WARN license check-in failed: {str(ex)[:200]}')
+            time.sleep(3600)
+
     def reload_config(self):
         mt = exporters_mtime()
         if mt != self.cfg_mtime:
@@ -554,6 +572,7 @@ class Receiver:
         ed = edition()
         log(f"FlowTrack {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
         self.apply_retention()
+        threading.Thread(target=self.license_checkins, name='license-checkin', daemon=True).start()
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:
