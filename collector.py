@@ -26,7 +26,8 @@ from netflow.ipfix import IPFIXTemplateNotRecognized, TemplateField, TemplateFie
 from netflow.v9 import V9OptionsTemplateRecord, V9TemplateField, V9TemplateNotRecognized, V9TemplateRecord
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import (STATE_DIR, VERSION, CHError, Geo, RateLimit, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
+import ftcore  # noqa: E402
+from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_retention_days, ipstr, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
@@ -320,7 +321,7 @@ class Collector:
         # rate_limit=False is for benchmarks that measure the decoder itself
         self.rate_limited = rate_limit
         self.rps = edition()['rps'] if rate_limit else None
-        self.limit = RateLimit(self.rps / self.workers if self.rps else None)
+        self.limit = ftcore.RateLimit(self.workers) if rate_limit else None
         self.license_dropped = 0
         self.geo = Geo()
         self.cfg = load_exporters()
@@ -394,7 +395,7 @@ class Collector:
         elif obs == 1 and in_if in e.ingress_ifs:
             e.dup_dropped += 1
             return
-        if not self.limit.take():           # over the edition's records/s limit: received and counted, not stored
+        if self.limit and not self.limit.take():           # over the edition's records/s limit: received and counted, not stored
             e.records += 1
             self.license_dropped += 1
             return
@@ -565,10 +566,8 @@ class Collector:
             if self.worker == 0:            # every worker sees every template; one of them saves them
                 self.save_templates()
             self.reload_config()
-            rps = edition()['rps'] if self.rate_limited else None   # a license change applies without a restart
-            if rps != self.rps:
-                self.rps = rps
-                self.limit.set_rate(rps / self.workers if rps else None)
+            if self.rate_limited:            # a license change applies without a restart (the core's limiter follows)
+                self.rps = edition()['rps']
 
 
 def worker_main(n, q, results, ppid, workers=1):

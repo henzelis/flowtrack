@@ -3,6 +3,11 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **License: Elastic License 2.0** instead of MIT (1.1.0 and earlier stay MIT). FlowTrack stays free to use and
+  modify; providing it as a hosted service and circumventing the license checks are not allowed.
+
 ## 1.1.0 — unreleased
 
 - **Licenses bound to the installation, activated offline.** Every installation has an Instance ID (from the machine

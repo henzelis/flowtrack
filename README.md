@@ -309,7 +309,7 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 
 ## Editions
 
-| | **FlowTrack Community** (this repository, MIT) | **FlowTrack Pro** (license for one server) |
+| | **FlowTrack Community** (free) | **FlowTrack Pro** (license for one server) |
 |---|---|---|
 | Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit, or per license |
 | Flow details kept | **14 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
@@ -385,4 +385,7 @@ up to 5,000 records/s (see [Editions](#editions)).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). IP geolocation by [DB-IP](https://db-ip.com), licensed under CC BY 4.0.
+[Elastic License 2.0](LICENSE): free to use, run and modify, including in companies; not allowed: offering
+FlowTrack as a hosted service or circumventing the license checks. The FlowTrack core (`ftcore`) ships compiled under
+the FlowTrack End User License Agreement. Versions up to 1.1.0 were published under MIT and stay so.
+IP geolocation by [DB-IP](https://db-ip.com), licensed under CC BY 4.0.

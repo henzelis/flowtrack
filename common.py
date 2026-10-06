@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from functools import lru_cache
 
+import ftcore
+
 CONFIG_DIR = os.environ.get('FT_CONFIG_DIR', '/etc/flowtrack')
 GEOIP_DIR = os.environ.get('FT_GEOIP_DIR', '/opt/flowtrack/geoip')
 CH_URL = os.environ.get('FT_CH_URL', 'http://127.0.0.1:8123')
@@ -271,7 +273,8 @@ def apply_schema(path):
 # FlowTrack Community is this repository. A license (licensing.py) bound to this installation raises the limits
 # below; FlowTrack Pro features come from a module (`flowtrack_pro` in FT_PRO_DIR) that adds API routes and UI
 # scripts while the license is active. The core knows nothing about what Pro does: it only asks `edition()`.
-COMMUNITY = {'name': 'community', 'rps': 5000, 'retention_days': 14, 'features': []}
+# for display only: the limits themselves are enforced by the compiled core
+COMMUNITY = {'name': 'community', 'rps': ftcore.COMMUNITY_RPS, 'retention_days': ftcore.COMMUNITY_RETENTION_DAYS}
 LICENSE_FILE = os.path.join(STATE_DIR, 'license.key')
 PRO_DIR = os.environ.get('FT_PRO_DIR', '/opt/flowtrack/pro')
 _edition = {'key': None, 'value': None}
@@ -299,10 +302,10 @@ def read_license():
 def edition():
     """Limits and extensions in effect: {'name', 'rps' (None = unlimited), 'retention_days', 'features',
     'license': {...} or None, 'status': 'community' | 'active' | 'expired' | 'invalid' | 'other_instance' |
-    'returned' | 'clock', 'message', 'module'}. Licenses are time-limited: after the end date the Community limits
-    apply again (stored data is kept). Cached until the license file changes, re-checked every minute."""
+    'returned' | 'clock', 'message', 'module'}. The compiled core decides (and its RateLimit follows the result).
+    Licenses are time-limited: after the end date the Community limits apply again (stored data is kept). Cached
+    until the license file changes, re-checked every minute."""
     import time as _t
-    import licensing
     try:
         mt = os.stat(LICENSE_FILE).st_mtime
     except OSError:
@@ -310,15 +313,7 @@ def edition():
     key = (mt, int(_t.time() // 60))
     if _edition['key'] == key and _edition['value'] is not None:
         return _edition['value']
-    text = read_license()
-    out = dict(COMMUNITY, license=None, status='community', message='', module=bool(pro_module()))
-    if text:
-        try:
-            ed = licensing.check(text)
-            out.update(name=ed['name'], rps=ed['rps'], features=list(ed['features']), license=ed['license'], status='active',
-                       retention_days=max(COMMUNITY['retention_days'], int(ed['retention_days'] or 0)))
-        except Exception as ex:          # any problem with the license leaves the Community limits in place
-            out.update(status=getattr(ex, 'code', 'invalid'), message=str(ex)[:200], license=getattr(ex, 'license', None))
+    out = dict(ftcore.edition(os.path.dirname(LICENSE_FILE)), module=bool(pro_module()))
     _edition.update(key=key, value=out)
     return out
 
@@ -371,29 +366,6 @@ def flows_retention_days(target=None):
         ch(f'ALTER TABLE flows MODIFY TTL ts + INTERVAL {int(target)} DAY')
         cur = int(target)
     return cur
-
-
-class RateLimit:
-    """Token bucket for the records/s limit, averaged over `window` seconds so short bursts pass.
-    rate None = unlimited. take() -> True if the record may be stored."""
-    def __init__(self, rate, window=60, clock=None):
-        self.clock = clock or __import__('time').monotonic
-        self.set_rate(rate, window)
-
-    def set_rate(self, rate, window=60):
-        self.rate, self.cap = rate, (rate * window if rate else 0)
-        self.tokens, self.t = self.cap, self.clock()
-
-    def take(self):
-        if not self.rate:
-            return True
-        now = self.clock()
-        self.tokens = min(self.cap, self.tokens + (now - self.t) * self.rate)
-        self.t = now
-        if self.tokens >= 1:
-            self.tokens -= 1
-            return True
-        return False
 
 
 # ---------------------------------------------------------------- enrichment

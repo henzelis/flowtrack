@@ -2,6 +2,7 @@
 lifts them, on this server only; bad, foreign, expired, returned licenses keep Community; the records/s limit is a
 token bucket averaged over a window. Run: python -m unittest discover -s tests"""
 import os
+import struct
 import sys
 import tempfile
 import time
@@ -11,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 os.environ.setdefault('FT_STATE_DIR', tempfile.mkdtemp())
 os.environ.setdefault('FT_CONFIG_DIR', tempfile.mkdtemp())
 import common  # noqa: E402
+import ftcore  # noqa: E402
 import licensing  # noqa: E402
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
@@ -21,6 +23,19 @@ OTHER_SK = Ed25519PrivateKey.generate()
 HERE = {'machine': 'a' * 32, 'board': '4c4c4544-0042-3510-8051-b4c04f4e3732', 'macs': ['2c:f0:5d:96:61:98', 'e0:d4:e8:72:34:f9']}
 REAL_HW = licensing.hardware
 REAL_PRO_DIR = common.PRO_DIR
+if not ftcore.TESTING:
+    raise unittest.SkipTest('needs a testing build of ftcore (cargo build --features testing)')
+ftcore._testing(public_key=PK)
+
+
+def pack(lic):
+    """What the License Manager signs (FlowTrack license v2 body)."""
+    mask = sum(1 << licensing.FEATURES.index(f) for f in lic.get('features') or [])
+    b, cust = lic['binding'], lic['customer'].encode()
+    if len(cust) > ftcore.CUSTOMER_MAX:
+        raise ValueError(f'the customer name is longer than {ftcore.CUSTOMER_MAX} bytes')
+    return struct.pack('>BB6sIIIHI10s6s6s6s', 2, 1, lic['id'], lic['issued'], lic['expires'], lic.get('rps') or 0,
+                       lic['retention_days'], mask, b[:10], b[10:16], b[16:22], b[22:28]) + bytes([len(cust)]) + cust
 
 
 def issue(hw=HERE, days=365, sk=SK, **kw):
@@ -29,8 +44,8 @@ def issue(hw=HERE, days=365, sk=SK, **kw):
                features=['alerts'], binding=licensing.parse_request(licensing.request_code(hw))['binding'],
                customer='ТОВ «Тест»')
     lic.update(kw)
-    body = licensing.pack(lic)
-    return licensing.license_code(body, sk.sign(licensing.signed_message(body)))
+    body = pack(lic)
+    return licensing.encode('FTL', body + sk.sign(b'FlowTrack license v2\0' + body))
 
 
 class Base(unittest.TestCase):
@@ -43,12 +58,11 @@ class Base(unittest.TestCase):
             sys.path.remove(REAL_PRO_DIR)
         common._edition.update(key=None, value=None)
         licensing.STATE_DIR = state
-        licensing.PUBLIC_KEY = PK
         self.hw = dict(HERE)
-        licensing.hardware = lambda: self.hw
+        ftcore._testing(public_key=PK, hardware=lambda: self.hw)
 
     def tearDown(self):
-        licensing.hardware = REAL_HW
+        ftcore._testing(public_key=PK)
 
 
 class Codes(unittest.TestCase):
@@ -189,10 +203,10 @@ class Edition(Base):
             issue(customer='Я' * 40)
 
 
-class Limit(unittest.TestCase):
+class Limit(Base):
     def test_bucket(self):
         t = [0.0]
-        r = common.RateLimit(10, window=5, clock=lambda: t[0])
+        r = ftcore.RateLimit(rate=10, window=5, clock=lambda: t[0])
         self.assertEqual(sum(r.take() for _ in range(80)), 50)     # a burst gets the whole window (10/s x 5 s)
         t[0] += 2
         self.assertEqual(sum(r.take() for _ in range(80)), 20)     # then 10 per second
@@ -200,8 +214,22 @@ class Limit(unittest.TestCase):
         self.assertEqual(sum(r.take() for _ in range(80)), 50)     # the bucket never holds more than the window
 
     def test_unlimited(self):
-        r = common.RateLimit(None)
+        r = ftcore.RateLimit(rate=0)
         self.assertTrue(all(r.take() for _ in range(100000)))
+
+    def test_follows_the_edition(self):
+        common.edition()
+        r = ftcore.RateLimit(4)
+        self.assertEqual(r.rate, 1250)                              # Community 5,000/s shared by 4 workers
+        common.save_license(issue(rps=20000))
+        r.take()
+        self.assertEqual(r.rate, 5000)
+        common.save_license(issue(rps=None))
+        r.take()
+        self.assertIsNone(r.rate)
+        common.save_license('')
+        r.take()
+        self.assertEqual(r.rate, 1250)
 
 
 if __name__ == '__main__':
