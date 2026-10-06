@@ -37,7 +37,7 @@ STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
 # The license server and the SHA-256 of its TLS certificate (pinned: the server uses its own certificate, so no
 # public CA is involved and nobody in between can read a license key). Responses are signed by the server's key,
 # which the compiled core checks.
-LICENSE_SERVER = os.environ.get('FT_LICENSE_SERVER', 'https://license.flowtrack.invalid:8443')
+LICENSE_SERVER = os.environ.get('FT_LICENSE_SERVER', 'https://lic.telesphera.net:8443')
 LICENSE_SERVER_PIN = os.environ.get('FT_LICENSE_SERVER_PIN', '6e3498f6c56906fc2f727246cba9a18b4ee32b37e8bcce1729ac7ae92e123eef')
 CHECKIN_FILE = 'license.checkin'       # the last check-in: {'ts', 'ok', 'error'}
 FEATURES = list(ftcore.FEATURES)       # bit n of a license's feature mask (reserved; every feature is in every edition)
