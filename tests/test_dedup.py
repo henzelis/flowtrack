@@ -48,7 +48,7 @@ class Dedup(unittest.TestCase):
         # LAN (if 2) -> WAN (if 1): seen on ingress of 2 and on egress of 1
         self.c.handle_packet(v9(TPL, fs(300, rec('10.0.0.5', '198.51.100.7', 1000, 2, 1, 0) + rec('10.0.0.5', '198.51.100.7', 1000, 2, 1, 1))), EXP)
         self.assertEqual(self.stored(), [('10.0.0.5', '198.51.100.7', 1000, 2, 1, 0)])
-        self.assertEqual(self.c.exporters['192.0.2.1'].dup_dropped, 1)
+        self.assertEqual(self.c.take_stats()['exp']['192.0.2.1']['dup_dropped'], 1)
 
     def test_both_directions_of_a_session_are_kept(self):
         # the reply WAN (1) -> LAN (2) is another flow, seen on ingress of 1 and egress of 2
@@ -60,7 +60,7 @@ class Dedup(unittest.TestCase):
         # if 7 is monitored on egress only: traffic entering through it has no ingress copy
         self.c.handle_packet(v9(TPL, fs(300, rec('10.0.0.5', '198.51.100.7', 1000, 2, 1, 0) + rec('10.9.0.9', '198.51.100.8', 700, 7, 1, 1))), EXP)
         self.assertEqual(sorted(r[2] for r in self.stored()), [700, 1000])
-        self.assertEqual(self.c.exporters['192.0.2.1'].dup_dropped, 0)
+        self.assertEqual(self.c.take_stats()['exp']['192.0.2.1']['dup_dropped'], 0)
 
     def test_without_direction_field_nothing_is_dropped(self):
         fields = FIELDS[:-1]

@@ -7,6 +7,14 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 - **License: Elastic License 2.0** instead of MIT (1.1.0 and earlier stay MIT). FlowTrack stays free to use and
   modify; providing it as a hosted service and circumventing the license checks are not allowed.
+- **Compiled core (`ftcore`).** NetFlow v5/v9 and IPFIX decoding, license checks and the edition's limits run in a
+  compiled module instead of Python; the `netflow` Python package is no longer used. Stored data is the same as
+  before (checked record by record on real FortiGate captures and 4,000 synthetic v5/v9/IPFIX packets). A worker
+  stores 3.8–6.4 times more records per second.
+- IPFIX that FlowTrack could not read before: variable-length fields, reduced-size counters (e.g. 3-byte octet
+  counts), unknown and enterprise fields (enterprise fields were read as the standard field of the same number),
+  template withdrawal, reserved set ids. A packet whose template is not known yet no longer loses the records of
+  its other sets; templates in a packet apply to its data even when they come after it.
 
 ## 1.1.0 — unreleased
 

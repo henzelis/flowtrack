@@ -21,24 +21,16 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 
-from netflow import parse_packet
-from netflow.ipfix import IPFIXTemplateNotRecognized, TemplateField, TemplateFieldEnterprise
-from netflow.v9 import V9OptionsTemplateRecord, V9TemplateField, V9TemplateNotRecognized, V9TemplateRecord
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ftcore  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
-                    exporters_mtime, flows_retention_days, ipstr, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
+                    exporters_mtime, flows_retention_days, is_private, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
 FORWARD = [(h, int(p)) for h, p in (x.strip().rsplit(':', 1) for x in os.environ.get('FT_FORWARD', '').split(',') if x.strip())]
 ALLOW = {x.strip() for x in os.environ.get('FT_EXPORTERS', '').split(',') if x.strip()}
 TEMPLATES_FILE = os.path.join(STATE_DIR, 'templates.json')
-# sampling-rate fields: in data records, v9 options records and IPFIX options records
-# (the netflow library names v9 field 50 'NTERVAL' — a typo for FLOW_SAMPLER_RANDOM_INTERVAL)
-SAMPLING_FIELDS = ('SAMPLING_INTERVAL', 'FLOW_SAMPLER_RANDOM_INTERVAL', 'NTERVAL',
-                   'samplingInterval', 'samplingPacketInterval', 'samplerRandomInterval')
 RCVBUF = int(os.environ.get('FT_RCVBUF', str(32 * 1024 * 1024)))   # capped by net.core.rmem_max (install.sh raises it)
 BATCH_SECONDS = 2.0
 BATCH_MAX = 20000
@@ -65,21 +57,6 @@ def log(msg):
     print(f'[flowtrack] {msg}', flush=True)
 
 
-def g(rec, *names, default=None):
-    for n in names:
-        v = rec.get(n)
-        if v is not None:
-            return v
-    return default
-
-
-def gi(rec, *names):
-    try:
-        return int(g(rec, *names, default=0) or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def norm_addr(ip):
     """'::ffff:192.0.2.1' (IPv4 on a dual-stack socket) -> '192.0.2.1'; drop IPv6 zone ids."""
     ip = ip.split('%', 1)[0]
@@ -95,53 +72,6 @@ def parse_ratio(v):
         return 1
 
 
-def sampling_of(rec):
-    for k in SAMPLING_FIELDS:
-        v = rec.get(k)
-        if isinstance(v, int) and v > 1:
-            return v
-    return 0
-
-
-# ---- template persistence: exporters resend templates only every few minutes, so without this the
-# first minutes after a collector restart would be dropped as "no template"
-def templates_to_json(t):
-    out = {'v9': {}, 'ipfix': {}}
-    for tid, rec in t['netflow'].items():
-        if isinstance(rec, V9TemplateRecord):
-            out['v9'][str(tid)] = {'f': [[f.field_type, f.field_length] for f in rec.fields]}
-        elif isinstance(rec, V9OptionsTemplateRecord):
-            # field ORDER defines where each value sits in the packet: keep it as an ordered list
-            out['v9'][str(tid)] = {'s': [[k, v] for k, v in rec.scope_fields.items()],
-                                   'o': [[k, v] for k, v in rec.option_fields.items()]}
-    for tid, fields in t['ipfix'].items():
-        if fields:
-            out['ipfix'][str(tid)] = [list(f) for f in fields]
-    return out
-
-
-def templates_file_text(by_exporter):
-    """The exact text written to templates.json — never sort keys: template field order is significant."""
-    return json.dumps({ip: templates_to_json(t) for ip, t in by_exporter.items()})
-
-
-def templates_from_json(d):
-    t = {'netflow': {}, 'ipfix': {}}
-    for tid, rec in (d.get('v9') or {}).items():
-        tid = int(tid)
-        if 'f' in rec:
-            fields = [V9TemplateField(int(a), int(b)) for a, b in rec['f']]
-            t['netflow'][tid] = V9TemplateRecord(tid, len(fields), fields)
-        elif isinstance(rec.get('s'), list) and isinstance(rec.get('o'), list):
-            t['netflow'][tid] = V9OptionsTemplateRecord(tid, {int(k): int(v) for k, v in rec['s']},
-                                                        {int(k): int(v) for k, v in rec['o']})
-        # anything else (e.g. an options template saved as a sorted dict by an earlier version, whose field
-        # order is unreliable) is skipped: the exporter resends it within minutes
-    for tid, fields in (d.get('ipfix') or {}).items():
-        t['ipfix'][int(tid)] = [TemplateFieldEnterprise(*f) if len(f) == 3 else TemplateField(*f) for f in fields]
-    return t
-
-
 def utc(ts):
     return datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -151,30 +81,17 @@ def utc_ms(ts):
 
 
 class Exporter:
+    """What the configuration says about an exporter; decoding state (templates, sampling learned from options
+    records, the interfaces seen on ingress) lives in the compiled core."""
     def __init__(self, ip, cfg):
         self.ip = ip
         self.configure(cfg)
-        self.templates = {'netflow': {}, 'ipfix': {}}
-        self.ingress_ifs = set()     # interfaces this exporter reports ingress-observed records for
-        self.reset()
 
     def configure(self, cfg):
         self.wan = set(cfg.get('wan_ifs', []))
         self.local_if = cfg.get('local_if')          # FortiOS: 0 = the firewall itself
         self.self_ips = {norm_addr(str(x)) for x in cfg.get('public_ips', [])}   # the device's own public addresses
         self.cfg_sampling = parse_ratio(cfg.get('sampling', '1:1'))
-        self.opt_sampling = getattr(self, 'opt_sampling', 0)   # learned from options records
-
-    def sampling(self, rec, hdr):
-        """Rate for this record: record field > options records > v5 header > configured."""
-        r = sampling_of(rec) or self.opt_sampling
-        if not r and getattr(hdr, 'version', 0) == 5:
-            r = getattr(hdr, 'sampling_interval', 0) & 0x3FFF
-        return r if r and r > 1 else self.cfg_sampling
-
-    def reset(self):
-        self.records = self.no_template = self.decode_errors = self.dup_dropped = 0
-        self.max_sampling = 1
 
 
 # ---- packet accounting without decoding records: sequence numbers -> lost packets, and which packets
@@ -321,8 +238,8 @@ class Collector:
         # rate_limit=False is for benchmarks that measure the decoder itself
         self.rate_limited = rate_limit
         self.rps = edition()['rps'] if rate_limit else None
-        self.limit = ftcore.RateLimit(self.workers) if rate_limit else None
-        self.license_dropped = 0
+        # the compiled core decodes and applies the limit (rate=0, unlimited, exists in test builds of it only)
+        self.dec = ftcore.Decoder(self.workers) if rate_limit else ftcore.Decoder(self.workers, rate=0)
         self.geo = Geo()
         self.cfg = load_exporters()
         self.cfg_mtime = exporters_mtime()
@@ -342,63 +259,14 @@ class Collector:
         return e
 
     # ------------------------------------------------------------ records
-    def flow_times(self, rec, version, hdr, now):
-        """Unix (start, end) of a record."""
-        if version == 10:
-            end = gi(rec, 'flowEndMilliseconds') / 1000 or gi(rec, 'flowEndSeconds')
-            start = gi(rec, 'flowStartMilliseconds') / 1000 or gi(rec, 'flowStartSeconds')
-            if not end:
-                export = getattr(hdr, 'export_uptime', 0) or now   # IPFIX header field = export time (unix s)
-                end = start = export
-            start = start or end
-        else:
-            uptime, export = getattr(hdr, 'uptime', 0), getattr(hdr, 'timestamp', 0)
-            first, last = gi(rec, 'FIRST_SWITCHED'), gi(rec, 'LAST_SWITCHED')
-            if not export or not last:
-                return now, now
-            end = export - ((uptime - last) % 2**32) / 1000.0
-            start = export - ((uptime - first) % 2**32) / 1000.0
-        if not (now - 86400 < start <= end <= now + 120):      # exporter clock skew: trust arrival time
-            return now, now
-        return start, end
-
-    def handle_record(self, e, rec, version, hdr, now):
-        src = ipstr(g(rec, 'IPV4_SRC_ADDR', 'IPV6_SRC_ADDR', 'sourceIPv4Address', 'sourceIPv6Address'))
-        dst = ipstr(g(rec, 'IPV4_DST_ADDR', 'IPV6_DST_ADDR', 'destinationIPv4Address', 'destinationIPv6Address'))
-        if not src or not dst:
-            r = sampling_of(rec)             # an options record (e.g. IPFIX sampler config), not a flow
-            if r:
-                e.opt_sampling = r
-            return
-        nbytes = max(gi(rec, 'IN_BYTES', 'IN_OCTETS', 'octetDeltaCount'), gi(rec, 'OUT_BYTES', 'postOctetDeltaCount'))
-        npkts = max(gi(rec, 'IN_PKTS', 'IN_PACKETS', 'packetDeltaCount'), gi(rec, 'OUT_PKTS', 'postPacketDeltaCount'))
-        if nbytes <= 0:
-            return
-        rate = e.sampling(rec, hdr)
+    def store(self, e, f):
+        """One decoded flow (a tuple from the core, already within the records/s limit) -> a row."""
+        (src, dst, nbytes, npkts, proto, sport, dport, in_if, out_if, obs,
+         nat_src, nat_sport, nat_dst, nat_dport, start, end, app_tag, rate) = f
+        if rate <= 1:
+            rate = e.cfg_sampling
         if rate > 1:                    # sampled exporters report 1 of every N packets: scale up
             nbytes, npkts = nbytes * rate, npkts * rate
-            e.max_sampling = max(e.max_sampling, rate)
-        proto = gi(rec, 'PROTOCOL', 'PROTO', 'protocolIdentifier')
-        sport = gi(rec, 'L4_SRC_PORT', 'SRC_PORT', 'sourceTransportPort')
-        dport = gi(rec, 'L4_DST_PORT', 'DST_PORT', 'destinationTransportPort')
-        in_if = gi(rec, 'INPUT_SNMP', 'INPUT', 'ingressInterface')
-        out_if = gi(rec, 'OUTPUT_SNMP', 'OUTPUT', 'egressInterface')
-        # Exporters that monitor both directions on several interfaces see a routed packet twice: on the
-        # way in (ingress of in_if) and on the way out (egress of out_if). With the direction field
-        # (NetFlow v9 DIRECTION / IPFIX flowDirection: 0 ingress, 1 egress) the egress copy is dropped
-        # whenever in_if already reports ingress; egress records stay the only copy on interfaces that
-        # are monitored on egress only.
-        fdir = g(rec, 'DIRECTION', 'flowDirection')
-        obs = fdir if fdir in (0, 1) else 255
-        if obs == 0:
-            e.ingress_ifs.add(in_if)
-        elif obs == 1 and in_if in e.ingress_ifs:
-            e.dup_dropped += 1
-            return
-        if self.limit and not self.limit.take():           # over the edition's records/s limit: received and counted, not stored
-            e.records += 1
-            self.license_dropped += 1
-            return
 
         # inside / outside endpoint and direction
         if e.wan and out_if in e.wan and in_if not in e.wan:
@@ -418,11 +286,9 @@ class Collector:
                 d, ii, ei = 'transit', (src, sport), (dst, dport)
 
         if d == 'up':
-            nat_ip = ipstr(g(rec, 'NF_F_XLATE_SRC_ADDR_IPV4', 'postNATSourceIPv4Address', 'postNATSourceIPv6Address'))
-            nat_port = gi(rec, 'NF_F_XLATE_SRC_PORT', 'postNAPTSourceTransportPort')
+            nat_ip, nat_port = nat_src, nat_sport
         elif d == 'down':
-            nat_ip = ipstr(g(rec, 'NF_F_XLATE_DST_ADDR_IPV4', 'postNATDestinationIPv4Address', 'postNATDestinationIPv6Address'))
-            nat_port = gi(rec, 'NF_F_XLATE_DST_PORT', 'postNAPTDestinationTransportPort')
+            nat_ip, nat_port = nat_dst, nat_dport
         else:
             nat_ip, nat_port = '', 0
         if nat_ip in ('0.0.0.0', '::'):
@@ -430,17 +296,14 @@ class Collector:
 
         country, city, lat, lon, asn, as_org = self.geo.lookup(ei[0])
         l7, port_service = classify_l7(proto, ei[1])
-        start, end = self.flow_times(rec, version, hdr, now)
-        app_tag = gi(rec, 'APPLICATION_TAG', 'applicationId')
         self.buf.append({
             'ts': utc(end), 'ts_start': utc_ms(start), 'exporter': e.ip, 'in_if': in_if, 'out_if': out_if, 'dir': d,
             'int_ip': ii[0], 'int_port': ii[1], 'ext_ip': ei[0], 'ext_port': ei[1], 'proto': proto,
             'nat_ip': nat_ip, 'nat_port': nat_port, 'bytes': nbytes, 'packets': npkts, 'sampling': rate,
             'l7': l7, 'service': service_name(port_service, asn, as_org, ei[0]),
             'country': country, 'city': city, 'lat': lat, 'lon': lon, 'asn': asn, 'as_org': as_org,
-            'app_tag': app_tag if app_tag < 2**64 else 0, 'obs': obs,
+            'app_tag': app_tag, 'obs': obs,
         })
-        e.records += 1
 
     def handle_packet(self, data, addr, learn_only=False):
         """learn_only: another worker stores this packet's flows; only learn its templates / sampling here."""
@@ -450,38 +313,8 @@ class Collector:
         if self.acct:
             self.acct.account(ip, data)
         e = self.exporter(ip)
-        try:
-            pkt = parse_packet(data, e.templates)
-        except (V9TemplateNotRecognized, IPFIXTemplateNotRecognized):
-            if not learn_only:
-                e.no_template += 1
-            return
-        except Exception as ex:
-            if not learn_only:
-                e.decode_errors += 1
-                if e.decode_errors <= 5:
-                    log(f'WARN decode error from {ip}: {ex}')
-            return
-        hdr = pkt.header
-        now = time.time()
-        for opt in getattr(pkt, 'options', None) or []:          # NetFlow v9 options data (sampler config)
-            r = sampling_of(getattr(opt, 'data', {}) or {})
-            if r:
-                e.opt_sampling = r
-        for f in pkt.flows:
-            if hasattr(f, 'data') and isinstance(f.data, dict):
-                rec = f.data
-            elif hasattr(f, 'fields'):
-                rec = {k: getattr(f, k, None) for k in f.fields}
-            else:
-                rec = dict(vars(f))
-            if learn_only:
-                if not g(rec, 'IPV4_SRC_ADDR', 'IPV6_SRC_ADDR', 'sourceIPv4Address', 'sourceIPv6Address'):
-                    r = sampling_of(rec)     # IPFIX options record
-                    if r:
-                        e.opt_sampling = r
-                continue
-            self.handle_record(e, rec, hdr.version, hdr, now)
+        for f in self.dec.packet(ip, data, time.time(), learn_only):
+            self.store(e, f)
 
     # ------------------------------------------------------------ output
     def flush(self):
@@ -502,18 +335,20 @@ class Collector:
     def take_stats(self):
         """Per-exporter decoding counters since the last call, plus this worker's output state."""
         exp = {}
-        for e in self.exporters.values():
-            if e.records or e.no_template or e.decode_errors or e.dup_dropped:
-                exp[e.ip] = {'records': e.records, 'no_template': e.no_template, 'decode_errors': e.decode_errors, 'dup_dropped': e.dup_dropped,
-                             'templates': len(e.templates['netflow']) + len(e.templates['ipfix']),
-                             'sampling': max(e.max_sampling, e.opt_sampling or 1, e.cfg_sampling)}
-                e.reset()
-        out = {'exp': exp, 'buffered': len(self.buf), 'dropped_rows': self.dropped, 'license_dropped': self.license_dropped}
-        self.dropped = self.license_dropped = 0
+        stats, license_dropped = self.dec.take_stats()
+        for ip, x in stats.items():
+            if x['last_error']:
+                log(f"WARN {x['decode_errors']} packet(s) from {ip} could not be decoded: {x['last_error']}")
+            if x['records'] or x['no_template'] or x['decode_errors'] or x['dup_dropped']:
+                e = self.exporter(ip)
+                exp[ip] = {k: x[k] for k in ('records', 'no_template', 'decode_errors', 'dup_dropped', 'templates')}
+                exp[ip]['sampling'] = max(x['sampling'], x['opt_sampling'] or 1, e.cfg_sampling)
+        out = {'exp': exp, 'buffered': len(self.buf), 'dropped_rows': self.dropped, 'license_dropped': license_dropped}
+        self.dropped = 0
         return out
 
     def save_templates(self):
-        text = templates_file_text({ip: e.templates for ip, e in self.exporters.items()})
+        text = self.dec.templates_json()
         if text == self._saved_templates:
             return
         try:
@@ -539,10 +374,10 @@ class Collector:
         for ip, t in data.items():
             if ALLOW and ip not in ALLOW and ip not in self.cfg:
                 continue
+            self.exporter(ip)
             try:
-                self.exporter(ip).templates = templates_from_json(t)
-                n += len(t.get('v9', {})) + len(t.get('ipfix', {}))
-            except (TypeError, ValueError, KeyError) as ex:
+                n += self.dec.load_templates(ip, json.dumps(t))
+            except ValueError as ex:
                 log(f'WARN skipping saved templates of {ip}: {ex}')
         self._saved_templates = text
         log(f'restored {n} templates for {len(data)} exporter(s)')

@@ -374,7 +374,7 @@ def ipstr(v):
     """Normalize an address field (int, str, ipaddress object) to canonical text, or ''."""
     if v is None:
         return ''
-    if type(v) is str:                               # hot path: the netflow library hands addresses over as text
+    if type(v) is str:                               # hot path: addresses arrive as text
         return _ip_text(v)
     if type(v) is int and 0 <= v < 4294967296:
         return _ipv4_text(v)
