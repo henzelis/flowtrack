@@ -620,7 +620,8 @@ install_units() {
 #!/bin/sh
 # FlowTrack license on this server: status | request | activate FILE|CODE | deactivate
 [ "\$(id -u)" = 0 ] || exec sudo "\$0" "\$@"
-run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
+# the license server setting the services read from $ETC/env (only that, not the database password)
+run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" \$(grep -sE '^FT_LICENSE_SERVER(_PIN)?=[^ ]*\$' "$ETC/env") "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
 if [ "\$1" = activate ] && [ -f "\$2" ]; then run activate - < "\$2"; else run "\$@"; fi
 WRAP
   chmod 755 /usr/local/bin/flowtrack-license

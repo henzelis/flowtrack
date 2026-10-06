@@ -16,6 +16,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   `/etc/flowtrack/env` points FlowTrack to another address (e.g. inside the network of the server itself), and
   the installer keeps that setting.
 - Compiled core 1.3.0: trusts the license server's key for online licenses and their confirmations only.
+- **License files from the license server.** A `.lic` issued by the vendor for this server's activation request works
+  at once (it carries the license server's first confirmation) and is then confirmed online every day like a key —
+  so it can be revoked, renewed and moved. An offline license (for closed networks) never needs the server.
+- `flowtrack-license` (the command) now uses the license server set in `/etc/flowtrack/env`, like the services.
 - Overview → Network traffic: one **Live / Period** switch for Map, Graph and 3D. Live shows the last 2 minutes
   (the graph used to show only that, so a host that was quiet just now showed nothing even for "last 24 hours");
   Period shows the whole selected range. An empty map or globe now says that nothing matches the filter instead of

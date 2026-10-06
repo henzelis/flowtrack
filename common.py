@@ -351,6 +351,8 @@ def _check_new_license(text):
             licensing.save_lease(lease)
         try:
             licensing.check(text)
+            if lease:
+                licensing.forget_checkin()             # confirmed by the file; the last check-in was another license's
         except licensing.LicenseError as ex:
             if getattr(ex, 'code', '') != 'unconfirmed':
                 raise

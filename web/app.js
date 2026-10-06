@@ -1206,7 +1206,7 @@ function vGeneral(){
 }
 function vLicense(){
   document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license', 'Редакція і ліцензія'), T('limits in effect · a FlowTrack Pro license raises them', 'чинні ліміти · ліцензія FlowTrack Pro їх знімає'))}<div id="edBox" class="loading"></div></section>
-    ${isAdmin() ? `<section class="glass panel s12">${ph('key', T('Activation', 'Активація'), T('the license is bound to this server · works without internet', 'ліцензія прив’язується до цього сервера · працює без інтернету'))}<div id="actBox"></div></section>` : ''}</div>`;
+    ${isAdmin() ? `<section class="glass panel s12">${ph('key', T('Activation', 'Активація'), T('the license is bound to this server · a key or a license file', 'ліцензія прив’язується до цього сервера · ключ або файл ліцензії'))}<div id="actBox"></div></section>` : ''}</div>`;
   editionPanel();
 }
 function vDevices(){

@@ -238,9 +238,12 @@ class Online(Base):
         fts = lease(code)
         text = f"# FlowTrack Pro license\n# Licensed to: Test\n{code}\n# Confirmed by the license server until …\n{fts}\n"
         self.assertEqual(licensing.split_file(text), (code, fts))
+        with open(os.path.join(licensing.STATE_DIR, licensing.CHECKIN_FILE), 'w') as f:   # another license's last check-in
+            f.write('{"ts": 1, "ok": false, "error": "this license was revoked"}')
         ed = common.save_license(text)
         self.assertEqual((ed['status'], ed['license']['online']), ('active', True))
         self.assertEqual(common.read_license(), licensing.normalized(code))
+        self.assertIsNone(licensing.last_checkin())
 
     def test_lease_expiry_and_clock(self):
         code = self.online()

@@ -139,6 +139,14 @@ def _record(ok, error=''):
         pass
 
 
+def forget_checkin():
+    """The last check-in was about another license: a new one starts without it."""
+    try:
+        os.remove(os.path.join(STATE_DIR, CHECKIN_FILE))
+    except OSError:
+        pass
+
+
 def last_checkin():
     try:
         with open(os.path.join(STATE_DIR, CHECKIN_FILE)) as f:
