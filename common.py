@@ -268,9 +268,9 @@ def apply_schema(path):
 
 
 # ---------------------------------------------------------------- editions
-# FlowTrack Community is this repository. FlowTrack Pro is a separate module (`flowtrack_pro`, installed into
-# FT_PRO_DIR) that checks a license key and then raises the limits below and adds its own API routes and UI
-# scripts. The core knows nothing about what Pro does: it only asks `edition()` for limits and extensions.
+# FlowTrack Community is this repository. A license (licensing.py) bound to this installation raises the limits
+# below; FlowTrack Pro features come from a module (`flowtrack_pro` in FT_PRO_DIR) that adds API routes and UI
+# scripts while the license is active. The core knows nothing about what Pro does: it only asks `edition()`.
 COMMUNITY = {'name': 'community', 'rps': 5000, 'retention_days': 14, 'features': []}
 LICENSE_FILE = os.path.join(STATE_DIR, 'license.key')
 PRO_DIR = os.environ.get('FT_PRO_DIR', '/opt/flowtrack/pro')
@@ -298,49 +298,59 @@ def read_license():
 
 def edition():
     """Limits and extensions in effect: {'name', 'rps' (None = unlimited), 'retention_days', 'features',
-    'license': {...} or None, 'status': 'community' | 'active' | 'expired' | 'no_module' | 'invalid', 'message', 'module'}.
-    Licenses are time-limited: after the end date the Community limits apply again (stored data is kept).
-    Cached until the license file changes."""
+    'license': {...} or None, 'status': 'community' | 'active' | 'expired' | 'invalid' | 'other_instance' |
+    'returned' | 'clock', 'message', 'module'}. Licenses are time-limited: after the end date the Community limits
+    apply again (stored data is kept). Cached until the license file changes, re-checked every minute."""
+    import time as _t
+    import licensing
     try:
         mt = os.stat(LICENSE_FILE).st_mtime
     except OSError:
         mt = None
-    if _edition['key'] == mt and _edition['value'] is not None:
+    key = (mt, int(_t.time() // 60))
+    if _edition['key'] == key and _edition['value'] is not None:
         return _edition['value']
-    text, mod = read_license(), pro_module()
-    out = dict(COMMUNITY, license=None, status='community', message='', module=bool(mod))
-    if text and not mod:
-        out.update(status='no_module', message='a license key is installed, but the FlowTrack Pro module is not')
-    elif text:
+    text = read_license()
+    out = dict(COMMUNITY, license=None, status='community', message='', module=bool(pro_module()))
+    if text:
         try:
-            ed = mod.activate(text)
-            out.update(name=ed.get('name', 'pro'), rps=ed.get('rps'), features=list(ed.get('features', [])),
-                       retention_days=max(COMMUNITY['retention_days'], int(ed.get('retention_days') or 0)),
-                       license=ed.get('license'), status='active')
-        except Exception as ex:          # any problem with the key leaves the Community limits in place
-            out.update(status='expired' if getattr(ex, 'code', '') == 'expired' else 'invalid', message=str(ex)[:200],
-                       license=getattr(ex, 'license', None))
-    _edition.update(key=mt, value=out)
+            ed = licensing.check(text)
+            out.update(name=ed['name'], rps=ed['rps'], features=list(ed['features']), license=ed['license'], status='active',
+                       retention_days=max(COMMUNITY['retention_days'], int(ed['retention_days'] or 0)))
+        except Exception as ex:          # any problem with the license leaves the Community limits in place
+            out.update(status=getattr(ex, 'code', 'invalid'), message=str(ex)[:200], license=getattr(ex, 'license', None))
+    _edition.update(key=key, value=out)
     return out
 
 
 def save_license(text):
-    """Store a license key (the Pro module must accept it); '' removes it. -> edition()."""
+    """Activate a license code (it must be valid for this installation now); '' removes it. -> edition()."""
+    import licensing
     text = (text or '').strip()
     if text:
-        mod = pro_module()
-        if not mod:
-            raise ValueError('the FlowTrack Pro module is not installed')
-        mod.activate(text)                   # raises with the reason if the key is not valid
+        licensing.check(text)                # raises LicenseError (a ValueError) with the reason
         tmp = LICENSE_FILE + '.tmp'
         with open(tmp, 'w') as f:
-            f.write(text + '\n')
+            f.write(licensing.normalized(text) + '\n')
         os.chmod(tmp, 0o640)
         os.replace(tmp, LICENSE_FILE)
     elif os.path.exists(LICENSE_FILE):
         os.remove(LICENSE_FILE)
     _edition['value'] = None
     return edition()
+
+
+def deactivate_license():
+    """Deactivate the installed license to move it to another server -> the return code for the vendor.
+    This installation refuses that license from then on."""
+    import licensing
+    text = read_license()
+    if not text:
+        raise ValueError('no license is installed')
+    code = licensing.deactivate(text)
+    os.remove(LICENSE_FILE)
+    _edition['value'] = None
+    return code
 
 
 _TTL_RE = None

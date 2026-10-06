@@ -309,9 +309,9 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 
 ## Editions
 
-| | **FlowTrack Community** (this repository, MIT) | **FlowTrack Pro** (license key) |
+| | **FlowTrack Community** (this repository, MIT) | **FlowTrack Pro** (license for one server) |
 |---|---|---|
-| Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit |
+| Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit, or per license |
 | Flow details kept | **14 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
 | Term | — | subscription with an end date; afterwards the Community limits apply again |
 | Everything in [Features](#features) | ✓ | ✓ |
@@ -320,15 +320,26 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
 few thousand. Above the limit, records are not stored but counted: Settings → License and an event show how many.
 Installs made before the limits keep their 30 days of flow details; retention is never shortened
-automatically, not even when a license expires. A Pro license comes as two files — the module
-`flowtrack-pro-<version>.tar.gz` and the key. Install the module once (as root), then enter the key in Settings → License
-(administrators) or give it to the installer as well:
+automatically, not even when a license expires.
+
+**Activation works offline.** A license is issued for one installation and works on that server only:
+
+1. Settings → License (administrators) shows the **Instance ID** and an **activation request** (`FTR-…`), or run
+   `sudo flowtrack-license request` on the server. Send the request to your vendor — e-mail, a file, or read it out
+   by phone from a closed network.
+2. You receive a license (`FTL-…`, as text or a `.lic` file). Paste or load it in Settings → License, or run
+   `sudo flowtrack-license activate flowtrack.lic`, or give it to the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash -s -- --upgrade --pro ./flowtrack-pro-0.1.0.tar.gz --license ./license.key
+curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash -s -- --upgrade --license ./flowtrack.lic
 ```
 
-Settings → License (and the badge under the logo) warns 30 days before a license ends and an event two weeks before.
+The license is bound to the server's machine ID, board UUID and network cards (as salted hashes — nothing else
+leaves the server); replacing a network card or the board alone keeps it working. A copied disk or a shared
+license does not work elsewhere. To move FlowTrack to another server, **deactivate** the license in Settings →
+License (or `sudo flowtrack-license deactivate`) and send the return code (`FTX-…`) together with the new server's
+activation request. Settings → License (and the badge under the logo) warns 30 days before a license ends and an
+event two weeks before.
 
 ## Performance
 

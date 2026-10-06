@@ -20,7 +20,8 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, pro_module, save_license, iface_addrs, is_private, listen_signature,  # noqa: E402
+import licensing  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, pro_module, save_license, deactivate_license, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
@@ -235,8 +236,31 @@ def edition_info(admin=False):
     lic = ed['license'] or {}
     out['expires'], out['days_left'] = lic.get('expires'), lic.get('days_left')    # every user sees when the edition ends
     if admin:
-        out['license'], out['message'] = ed['license'], ed['message']
+        out['license'], out['message'] = ed['license'], license_message(ed['status'], ed['message'], ed['license'])
+        out['instance'], out['request'] = licensing.instance_id(), licensing.request_code()
     return out
+
+
+_LICENSE_UK = {
+    'this is not a FlowTrack license code': 'це не код ліцензії FlowTrack',
+    'the license code was mistyped or cut short': 'код ліцензії введено з помилкою або не повністю',
+    'this license is for another FlowTrack version': 'ця ліцензія для іншої версії FlowTrack',
+    'this license is for another FlowTrack edition': 'ця ліцензія для іншої редакції FlowTrack',
+    'the license was not issued by FlowTrack or was altered': 'ліцензію видав не FlowTrack або її змінено',
+    'this license was deactivated on this server to move it elsewhere': 'цю ліцензію деактивовано на цьому сервері для перенесення на інший',
+    'the system clock is behind — set the correct date and time (NTP)': 'системний годинник відстає — встановіть правильні дату й час (NTP)',
+    'no license is installed': 'ліцензію не встановлено',
+}
+
+
+def license_message(code, msg, lic=None):
+    """A licensing message in the UI language."""
+    lic = lic or {}
+    if code == 'expired' and lic.get('expires'):
+        return tr(msg, 'ліцензія закінчилась ' + time.strftime('%Y-%m-%d', time.gmtime(lic['expires'])))
+    if code == 'other_instance':
+        return tr(msg, f"цю ліцензію видано для інсталяції {lic.get('instance')}, а не для цієї ({licensing.instance_id()})")
+    return tr(msg, _LICENSE_UK.get(msg, msg)) if msg else ''
 
 
 def pro_ui_scripts():
@@ -258,8 +282,16 @@ def post_license(body):
     try:
         save_license(body.get('key', ''))
     except ValueError as ex:
-        raise BadRequest(str(ex)) from None
+        raise BadRequest(license_message(getattr(ex, 'code', 'invalid'), str(ex), getattr(ex, 'license', None))) from None
     return edition_info(admin=True)
+
+
+def post_license_deactivate():
+    try:
+        code = deactivate_license()
+    except ValueError as ex:
+        raise BadRequest(license_message('invalid', str(ex))) from None
+    return dict(edition_info(admin=True), return_code=code)
 
 
 def api_summary(q):
@@ -657,6 +689,11 @@ def api_alerts(q):
                     'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s); stored data is kept. Enter a renewed key in Settings → License.",
                                f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Введіть подовжений ключ у «Налаштування → Ліцензія»."),
                     'when': time.strftime('%Y-%m-%d', time.gmtime(lic.get('expires') or 0))})
+    elif ed['status'] in ('invalid', 'other_instance', 'returned', 'clock'):
+        out.append({'sev': 'crit', 'kind': 'license_invalid', 'title': tr('The license does not work on this server', 'Ліцензія не діє на цьому сервері'),
+                    'text': tr(f"{license_message(ed['status'], ed['message'], lic).capitalize()}. The Community limits apply ({COMMUNITY['rps']:,} records/s); stored data is kept. See Settings → License.",
+                               f"{license_message(ed['status'], ed['message'], lic).capitalize()}. Діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Див. «Налаштування → Ліцензія»."),
+                    'when': tr('now', 'зараз')})
     elif ed['status'] == 'active' and lic.get('days_left', 99) < 14:
         out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon', 'Ліцензія FlowTrack Pro скоро закінчиться'),
                     'text': tr(f"The license ends on {time.strftime('%Y-%m-%d', time.gmtime(lic['expires']))} ({lic['days_left']} day{'' if lic['days_left'] == 1 else 's'} left). After that the Community limits apply.",
@@ -939,6 +976,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/devices/delete': lambda: post_device_delete(body, user),
                 '/api/devices/interfaces': lambda: post_device_interfaces(body, user),
                 '/api/license': lambda: post_license(body),
+                '/api/license/deactivate': post_license_deactivate,
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})

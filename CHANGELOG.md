@@ -3,6 +3,20 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.1.0 — unreleased
+
+- **Licenses bound to the installation, activated offline.** Every installation has an Instance ID (from the machine
+  ID) and shows an activation request (`FTR-…`) in Settings → License and with the new `flowtrack-license` command.
+  A license (`FTL-…`) is issued for that request and works on that server only: it is bound to the machine ID and
+  to the board UUID or one of the network cards, so a copied disk or a shared license does not work elsewhere.
+  The codes are short enough to read out by phone; no network connection is needed. Deactivation gives a return
+  code (`FTX-…`) to move the license to another server; the server refuses that license afterwards. A clock turned
+  back is detected. FlowTrack 1.0 keys (`FT1.…`) are no longer accepted.
+- The core checks licenses itself (the `cryptography` package is installed always); the Pro module only adds
+  features. Installer: `--license CODE|FILE` no longer needs `--pro`; the summary shows the Instance ID and, in
+  Community, the activation request.
+- Licensing messages in Ukrainian; an event when a license does not work on this server.
+
 ## 1.0.0 — 2026-10-05
 
 First numbered release.

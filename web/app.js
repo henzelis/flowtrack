@@ -422,7 +422,7 @@ const navIcon = k => (NAV.find(n => n[0] === k) || [])[2];
 const icon = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M9 3a2 2 0 1 0 0 .01M4 13a2 2 0 1 0 0 .01M14 13a2 2 0 1 0 0 .01M8 5l-3 6M10 5l3 6', ip:'M3 5h12v6H3zM6 14h6M7 8h.01M10 8h.01', grid:navIcon('apps'), flow:navIcon('flows'),
   globe:'M9 2a7 7 0 1 0 0 14A7 7 0 0 0 9 2zM2 9h14M9 2c2.5 2.5 2.5 11.5 0 14M9 2c-2.5 2.5-2.5 11.5 0 14', chart:'M2 15l4-6 3 3 5-8 2 2', conv:'M3 5h8l-2-2M15 13H7l2 2', list:'M3 5h12M3 9h12M3 13h8',
-  users:navIcon('talkers'), shield:navIcon('threats'), dev:DEV_ICON, pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
+  users:navIcon('talkers'), key:'M12 3a3 3 0 1 0 .01 0M9.9 8.1L3 15M5 13l2 2M7 11l2 2', shield:navIcon('threats'), dev:DEV_ICON, pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
 const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const flowLive = () => state.flowLive && !isCustom();
@@ -1049,37 +1049,83 @@ const VENDORS = {
 };
 // ---- edition: limits in effect, the license key (admin), and UI scripts of an active Pro module
 const fmtInt = n => (+n || 0).toLocaleString(LOC);
-async function editionPanel(){
+const LIC_BAD = ['invalid', 'other_instance', 'returned', 'clock', 'expired'];
+function copyText(text, btn){
+  const done = () => { const t = btn.textContent; btn.textContent = T('Copied', 'Скопійовано'); setTimeout(() => btn.textContent = t, 1500); };
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done); return; }
+  const ta = Object.assign(document.createElement('textarea'), {value:text}); document.body.appendChild(ta); ta.select();   // plain-HTTP installs
+  try { document.execCommand('copy'); done(); } finally { ta.remove(); }
+}
+function saveText(name, text){
+  const a = Object.assign(document.createElement('a'), {href:URL.createObjectURL(new Blob([text], {type:'text/plain'})), download:name});
+  document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); });
+}
+async function editionPanel(returned){
   const box = document.getElementById('edBox'); if (!box) return;
   let ed; try { ed = await api('edition'); } catch (e) { box.innerHTML = errBox(e); box.classList.remove('loading'); return; }
   if (!box.isConnected) return;
   const pro = ed.status === 'active', lic = ed.license || {};
   const name = pro ? 'FlowTrack Pro' : 'FlowTrack Community';
   const status = {community:T('free edition', 'безкоштовна редакція'), active:T('license active', 'ліцензія активна'),
-    no_module:T('a key is installed, but the Pro module is not', 'ключ встановлено, але модуля Pro немає'), invalid:T('the license key is not valid', 'ключ ліцензії недійсний'),
+    invalid:T('the license is not valid', 'ліцензія недійсна'), other_instance:T('license of another server', 'ліцензія іншого сервера'),
+    returned:T('license deactivated', 'ліцензію деактивовано'), clock:T('the clock is wrong', 'неправильний годинник'),
     expired:T('license expired — Community limits apply', 'ліцензія закінчилась — діють ліміти Community')}[ed.status] || ed.status;
   const soon = pro && lic.days_left != null && lic.days_left < 30;
-  const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // keys end at 23:59 UTC of their last day
+  const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // licenses end at 23:59 UTC of their last day
   box.innerHTML = `<div class="edition">
-    <div class="ed-name"><b>${name}</b>${ed.module_version ? `<span class="nat">${T('Pro module', 'Модуль Pro')} ${esc(ed.module_version)}</span>` : ''}<span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : ed.status === 'expired' ? 'crit' : 'warn'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
+    <div class="ed-name"><b>${name}</b>${ed.module_version ? `<span class="nat">${T('Pro module', 'Модуль Pro')} ${esc(ed.module_version)}</span>` : ''}<span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : 'crit'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
     <div class="ed-lim">
       <div><span>${T('Records per second', 'Записів за секунду')}</span><b>${ed.rps ? T('up to ', 'до ') + fmtInt(ed.rps) : T('no limit', 'без обмежень')}</b></div>
       <div><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}</b></div>
       <div><span>${T('Not stored over the limit, 24 h', 'Не збережено понад ліміт, 24 год')}</span><b class="${ed.license_drops_24h ? 'warnc' : ''}">${fmtInt(ed.license_drops_24h)}</b></div>
-      ${lic.customer ? `<div><span>${T('Licensed to', 'Ліцензіат')}</span><b>${esc(lic.customer)}</b></div><div><span>${pro ? T('Valid until', 'Діє до') : T('Expired on', 'Закінчилась')}</span><b class="${soon || !pro ? 'warnc' : ''}">${until}</b></div>` : ''}
+      ${lic.customer ? `<div><span>${T('Licensed to', 'Ліцензіат')}</span><b>${esc(lic.customer)}</b></div><div><span>${pro ? T('Valid until', 'Діє до') : ed.status === 'expired' ? T('Expired on', 'Закінчилась') : T('Term', 'Термін')}</span><b class="${soon || !pro ? 'warnc' : ''}">${until}</b></div>` : ''}
     </div>
-    ${isAdmin() ? `<details class="ed-key"${['invalid', 'no_module', 'expired'].includes(ed.status) || soon ? ' open' : ''}><summary>${pro || ed.status === 'expired' ? T('Enter a renewed key or remove it', 'Ввести подовжений ключ або видалити') : T('Enter a FlowTrack Pro license key', 'Ввести ключ ліцензії FlowTrack Pro')}</summary>
-      ${ed.module ? '' : `<p class="note">${T('A key works once the FlowTrack Pro module is on this server. Install the file you received with your key (on the server, as root):', 'Ключ запрацює, коли на сервері буде модуль FlowTrack Pro. Встановіть файл, який ви отримали разом із ключем (на сервері, від root):')}<br><code class="mono">curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash -s -- --upgrade --pro ./flowtrack-pro-&lt;${T('version', 'версія')}&gt;.tar.gz</code><br>${T('Then paste the key here — or add <code>--license</code> with the key file to the same command.', 'Потім вставте ключ сюди — або додайте до тієї ж команди <code>--license</code> з файлом ключа.')}</p>`}
-      <textarea id="edKey" rows="3" spellcheck="false" placeholder="${T('paste the key here', 'вставте ключ сюди')}"></textarea>
-      <div class="acts"><span class="nat" id="edMsg" role="status"></span>${ed.status !== 'community' ? `<button class="btn" id="edDel">${T('Remove key', 'Видалити ключ')}</button>` : ''}<button class="btn primary" id="edSave">${T('Apply', 'Застосувати')}</button></div></details>` : ''}
   </div>`;
   box.classList.remove('loading');
+  const act = document.getElementById('actBox'); if (!act || !isAdmin()) return;
+  // activation: this server's identity and request on the left, the license from the vendor on the right
+  act.innerHTML = `<div class="lic-grid">
+    <div class="lic-col">
+      <div class="lic-step"><span class="lic-n">1</span><div><b>${T('Send the activation request', 'Надішліть запит на активацію')}</b>
+        <p class="note">${T('Send it to your FlowTrack vendor — by e-mail, or read it out by phone from a closed network. The license will work on this server only.', 'Надішліть його постачальнику FlowTrack — поштою або продиктуйте телефоном із закритої мережі. Ліцензія діятиме лише на цьому сервері.')}</p></div></div>
+      <div class="lic-field"><span>${T('Instance ID', 'ID інсталяції')}</span><code class="mono" id="licInst">${esc(ed.instance || '')}</code></div>
+      <div class="lic-field"><span>${T('Activation request', 'Запит на активацію')}</span><code class="mono lic-code" id="licReq">${esc(ed.request || '')}</code></div>
+      <div class="acts"><button class="btn" id="reqCopy">${T('Copy', 'Копіювати')}</button><button class="btn" id="reqSave">${T('Download', 'Завантажити')}</button></div>
+    </div>
+    <div class="lic-col">
+      <div class="lic-step"><span class="lic-n">2</span><div><b>${pro ? T('Enter a renewed license', 'Введіть подовжену ліцензію') : T('Enter the license', 'Введіть ліцензію')}</b>
+        <p class="note">${T('Paste the license code (FTL-…) or load the .lic file you received. No internet connection is needed.', 'Вставте код ліцензії (FTL-…) або завантажте отриманий файл .lic. Інтернет не потрібен.')}</p></div></div>
+      <textarea id="edKey" rows="4" spellcheck="false" autocomplete="off" placeholder="FTL-XXXXX-XXXXX-…" aria-label="${T('License code', 'Код ліцензії')}"></textarea>
+      <div class="acts"><span class="nat" id="edMsg" role="status"></span><input type="file" id="licFile" accept=".lic,.txt,text/plain" hidden>
+        <button class="btn" id="licLoad">${T('Load file…', 'Завантажити файл…')}</button><button class="btn primary" id="edSave">${T('Activate', 'Активувати')}</button></div>
+    </div>
+  </div>
+  ${returned ? `<div class="lic-return" role="alert"><b>${T('The license was deactivated on this server', 'Ліцензію на цьому сервері деактивовано')}</b>
+    <p class="note">${T('Send this return code to your vendor to get the license for another server. This server will not accept that license again.', 'Надішліть цей код повернення постачальнику, щоб отримати ліцензію для іншого сервера. Цей сервер більше не прийме цю ліцензію.')}</p>
+    <div class="lic-field"><code class="mono lic-code" id="retCode">${esc(returned)}</code></div><div class="acts"><button class="btn" id="retCopy">${T('Copy', 'Копіювати')}</button></div></div>` : ''}
+  ${ed.status !== 'community' ? `<div class="lic-move"><div><b>${T('Move the license to another server', 'Перенести ліцензію на інший сервер')}</b>
+    <p class="note">${T('Deactivation removes the license from this server and gives a return code for the vendor. Community limits apply here again; stored data is kept.', 'Деактивація знімає ліцензію з цього сервера і дає код повернення для постачальника. Тут знову діятимуть ліміти Community; збережені дані лишаться.')}</p></div>
+    <button class="btn danger" id="licOff">${ed.status === 'active' ? T('Deactivate…', 'Деактивувати…') : T('Remove…', 'Видалити…')}</button></div>` : ''}`;
   const say = (t, c) => { const m = document.getElementById('edMsg'); m.textContent = t; m.style.color = c || ''; };
-  const send = async key => { say(T('Checking…', 'Перевіряю…'));
-    try { await apiPost('license', {key}); META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionBadge(); editionPanel(); }
-    catch (e) { say(e.message, 'var(--crit)'); } };
-  const sv = document.getElementById('edSave'); if (sv) sv.onclick = () => { const k = document.getElementById('edKey').value.trim(); if (k) send(k); else say(T('Paste a key first', 'Спершу вставте ключ'), 'var(--crit)'); };
-  const dl = document.getElementById('edDel'); if (dl) dl.onclick = () => { if (confirm(T('Remove the license key? The Community limits apply again; stored data is kept.', 'Видалити ключ ліцензії? Знову діятимуть ліміти Community; збережені дані лишаться.'))) send(''); };
+  const refresh = async ret => { META = await fetch('api/meta').then(r => r.json()); loadProScripts(); editionBadge(); editionPanel(ret); };
+  document.getElementById('reqCopy').onclick = e => copyText(ed.request, e.currentTarget);
+  document.getElementById('reqSave').onclick = () => saveText(`flowtrack-request-${(ed.instance || '').replace(/-/g, '')}.txt`,
+    `# FlowTrack activation request\n# Instance ID: ${ed.instance}\n# FlowTrack ${META.version || ''}, ${new Date().toISOString().slice(0, 10)}\n${ed.request}\n`);
+  const file = document.getElementById('licFile');
+  document.getElementById('licLoad').onclick = () => file.click();
+  file.onchange = async () => { const f = file.files[0]; if (!f) return; document.getElementById('edKey').value = (await f.text()).trim(); file.value = ''; say(f.name); };
+  document.getElementById('edSave').onclick = async () => { const k = document.getElementById('edKey').value.trim();
+    if (!k) return say(T('Paste the license code first', 'Спершу вставте код ліцензії'), 'var(--crit)');
+    say(T('Checking…', 'Перевіряю…'));
+    try { await apiPost('license', {key:k}); await refresh(); } catch (e) { say(e.message, 'var(--crit)'); } };
+  const rc = document.getElementById('retCopy'); if (rc) rc.onclick = e => copyText(returned, e.currentTarget);
+  const off = document.getElementById('licOff'); if (off) off.onclick = async () => {
+    if (ed.status !== 'active') {           // a license that does not work here: just remove it
+      if (!confirm(T('Remove the license from this server?', 'Видалити ліцензію з цього сервера?'))) return;
+      try { await apiPost('license', {key:''}); await refresh(); } catch (e) { alert(e.message); } return; }
+    if (!confirm(T('Deactivate the license on this server? Community limits apply here again, and this server will not accept this license again. You get a return code to move the license to another server.',
+      'Деактивувати ліцензію на цьому сервері? Тут знову діятимуть ліміти Community, і цей сервер більше не прийме цю ліцензію. Ви отримаєте код повернення, щоб перенести ліцензію на інший сервер.'))) return;
+    try { const r = await apiPost('license/deactivate', {}); await refresh(r.return_code); } catch (e) { alert(e.message); } };
 }
 // the small API Pro scripts use to add pages
 window.FT = {T, api, apiPost, esc, ph, fill, section, icon, state, render: () => render(),
@@ -1094,9 +1140,9 @@ function editionBadge(){
   const b = document.getElementById('edBadge'), ed = META.edition; if (!b || !ed) return;
   const pro = ed.status === 'active', left = ed.days_left;
   b.textContent = pro ? 'Pro' : 'Community';
-  b.className = 'edbadge' + (pro ? ' pro' : '') + (pro && left != null && left < 30 ? ' warn' : '') + (ed.status === 'expired' || ed.status === 'invalid' ? ' crit' : '');
+  b.className = 'edbadge' + (pro ? ' pro' : '') + (pro && left != null && left < 30 ? ' warn' : '') + (LIC_BAD.includes(ed.status) ? ' crit' : '');
   b.title = (pro ? 'FlowTrack Pro' + (left != null ? T(` · ${left} days left`, ` · лишилось днів: ${left}`) : '') : `FlowTrack Community · ${T('up to', 'до')} ${fmtInt(ed.rps)} ${T('records/s', 'записів/с')}`)
-    + (ed.status === 'expired' ? T(' · license expired', ' · ліцензія закінчилась') : '') + ' — ' + T('edition and license', 'редакція і ліцензія');
+    + (ed.status === 'expired' ? T(' · license expired', ' · ліцензія закінчилась') : LIC_BAD.includes(ed.status) ? T(' · the license does not work here', ' · ліцензія тут не діє') : '') + ' — ' + T('edition and license', 'редакція і ліцензія');
   b.hidden = false;
   b.onclick = () => { state.view = 'settings'; state.setTab = 'license'; render(); };
 }
@@ -1133,7 +1179,8 @@ function vGeneral(){
   document.getElementById('myPass').onclick = openPassword;
 }
 function vLicense(){
-  document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license', 'Редакція і ліцензія'), T('limits in effect · a FlowTrack Pro key raises them', 'чинні ліміти · ключ FlowTrack Pro їх знімає'))}<div id="edBox" class="loading"></div></section></div>`;
+  document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license', 'Редакція і ліцензія'), T('limits in effect · a FlowTrack Pro license raises them', 'чинні ліміти · ліцензія FlowTrack Pro їх знімає'))}<div id="edBox" class="loading"></div></section>
+    ${isAdmin() ? `<section class="glass panel s12">${ph('key', T('Activation', 'Активація'), T('the license is bound to this server · works without internet', 'ліцензія прив’язується до цього сервера · працює без інтернету'))}<div id="actBox"></div></section>` : ''}</div>`;
   editionPanel();
 }
 function vDevices(){

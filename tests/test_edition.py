@@ -1,92 +1,192 @@
-"""Editions: Community limits by default, a Pro module + license lifts them, a bad key keeps Community,
-and the records/s limit is a token bucket averaged over a window. Run: python -m unittest discover -s tests"""
+"""Editions and licensing: Community limits by default; a license issued for this installation's activation request
+lifts them, on this server only; bad, foreign, expired, returned licenses keep Community; the records/s limit is a
+token bucket averaged over a window. Run: python -m unittest discover -s tests"""
 import os
 import sys
 import tempfile
-import textwrap
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 os.environ.setdefault('FT_STATE_DIR', tempfile.mkdtemp())
 os.environ.setdefault('FT_CONFIG_DIR', tempfile.mkdtemp())
 import common  # noqa: E402
+import licensing  # noqa: E402
+from cryptography.hazmat.primitives import serialization  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 
-REAL_PRO_DIR = common.PRO_DIR       # a Pro module installed on this machine must not leak into the tests
-
-FAKE_PRO = '''
-ROUTES = {'/api/pro/ping': lambda q: {'pong': True}}
-UI_SCRIPTS = ['pro.js']
-WEB_DIR = '/nonexistent'
-class LicenseError(ValueError):
-    def __init__(self, msg, code='invalid', license=None):
-        super().__init__(msg); self.code, self.license = code, license
-def activate(text):
-    if text == 'OLD':
-        raise LicenseError('the license expired on 2026-01-01', 'expired', {'customer': 'Test', 'expires': 1767225600})
-    if text != 'GOOD':
-        raise ValueError('the license key is damaged or was not issued by FlowTrack')
-    return {'name': 'pro', 'rps': None, 'retention_days': 90, 'features': ['alerts'], 'license': {'customer': 'Test'}}
-'''
+SK = Ed25519PrivateKey.generate()                   # the tests' own vendor key
+PK = SK.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+OTHER_SK = Ed25519PrivateKey.generate()
+HERE = {'machine': 'a' * 32, 'board': '4c4c4544-0042-3510-8051-b4c04f4e3732', 'macs': ['2c:f0:5d:96:61:98', 'e0:d4:e8:72:34:f9']}
+REAL_HW = licensing.hardware
+REAL_PRO_DIR = common.PRO_DIR
 
 
-class Edition(unittest.TestCase):
-    used = []
+def issue(hw=HERE, days=365, sk=SK, **kw):
+    now = int(time.time())
+    lic = dict(id=os.urandom(6), edition='pro', issued=now, expires=now + days * 86400, rps=None, retention_days=90,
+               features=['alerts'], binding=licensing.parse_request(licensing.request_code(hw))['binding'],
+               customer='ТОВ «Тест»')
+    lic.update(kw)
+    body = licensing.pack(lic)
+    return licensing.license_code(body, sk.sign(licensing.signed_message(body)))
 
+
+class Base(unittest.TestCase):
     def setUp(self):
-        self.state, self.pro = tempfile.mkdtemp(), tempfile.mkdtemp()
-        common.LICENSE_FILE = os.path.join(self.state, 'license.key')
-        common.PRO_DIR = self.pro
-        common._edition.update(key=None, value=None)
+        state = tempfile.mkdtemp()
+        common.LICENSE_FILE = os.path.join(state, 'license.key')
+        common.PRO_DIR = tempfile.mkdtemp()             # an installed Pro module must not leak into the tests
         sys.modules.pop('flowtrack_pro', None)
-        for d in Edition.used + [REAL_PRO_DIR]:     # earlier tests' and the installed module must not be importable
-            if d in sys.path:
-                sys.path.remove(d)
-        Edition.used.append(self.pro)
+        if REAL_PRO_DIR in sys.path:
+            sys.path.remove(REAL_PRO_DIR)
+        common._edition.update(key=None, value=None)
+        licensing.STATE_DIR = state
+        licensing.PUBLIC_KEY = PK
+        self.hw = dict(HERE)
+        licensing.hardware = lambda: self.hw
 
-    def install_module(self):
-        os.makedirs(os.path.join(self.pro, 'flowtrack_pro'))
-        with open(os.path.join(self.pro, 'flowtrack_pro', '__init__.py'), 'w') as f:
-            f.write(textwrap.dedent(FAKE_PRO))
+    def tearDown(self):
+        licensing.hardware = REAL_HW
 
+
+class Codes(unittest.TestCase):
+    def test_round_trip_and_typos(self):
+        data = os.urandom(29)
+        code = licensing.encode('FTR', data)
+        self.assertRegex(code, r'^FTR(-[0-9A-Z]{1,5})+$')
+        self.assertEqual(licensing.decode('FTR', code), data)
+        sloppy = '# a comment line\n' + code.lower().replace('-', ' ').replace('0', 'o').replace('1', 'l') + '\n'
+        self.assertEqual(licensing.decode('FTR', sloppy), data)
+        for i in (6, 20, len(code) - 2):
+            typo = code[:i] + ('A' if code[i] != 'A' else 'B') + code[i + 1:]
+            with self.assertRaisesRegex(ValueError, 'checksum'):
+                licensing.decode('FTR', typo)
+        with self.assertRaises(ValueError):                 # the last character's unused bits must be zero
+            licensing.decode('FTR', code[:-1] + licensing.ALPHABET[licensing.ALPHABET.index(code[-1]) ^ 1])
+
+    def test_request(self):
+        req = licensing.request_code(HERE)
+        self.assertLess(len(req), 70)                       # short enough to read out by phone
+        r = licensing.parse_request(req)
+        self.assertEqual((r['instance'], r['board'], r['nics']), (licensing.instance_id(HERE), True, 2))
+        self.assertRegex(r['instance'], r'^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$')
+        bare = licensing.parse_request(licensing.request_code({'machine': 'b' * 32, 'board': '', 'macs': []}))
+        self.assertEqual((bare['board'], bare['nics']), (False, 0))
+        with self.assertRaisesRegex(ValueError, 'not a FlowTrack activation request'):
+            licensing.parse_request('FTL-' + req[4:])
+
+    def test_real_hardware(self):
+        hw = REAL_HW()
+        self.assertTrue(hw['machine'])
+        self.assertTrue(licensing.bound_here(licensing.binding(hw), hw))
+
+
+class Edition(Base):
     def test_community_by_default(self):
         ed = common.edition()
-        self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days'], ed['module']), ('community', 'community', 5000, 14, False))
+        self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days']), ('community', 'community', 5000, 14))
 
-    def test_key_without_module(self):
-        with open(common.LICENSE_FILE, 'w') as f:
-            f.write('GOOD')
-        ed = common.edition()
-        self.assertEqual((ed['status'], ed['rps']), ('no_module', 5000))
-        with self.assertRaisesRegex(ValueError, 'not installed'):
-            common.save_license('GOOD')
-
-    def test_pro_license(self):
-        self.install_module()
-        ed = common.save_license('GOOD')
-        self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days'], ed['license']['customer']), ('pro', 'active', None, 90, 'Test'))
+    def test_license_for_this_server(self):
+        ed = common.save_license(issue(rps=20000))
+        self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days'], ed['features']), ('pro', 'active', 20000, 90, ['alerts']))
+        self.assertEqual((ed['license']['customer'], ed['license']['days_left'], ed['license']['instance']),
+                         ('ТОВ «Тест»', 365, licensing.instance_id(HERE)))
+        self.assertFalse(ed['module'])                      # limits need no Pro module
         self.assertEqual(oct(os.stat(common.LICENSE_FILE).st_mode & 0o777), '0o640')
-        ed = common.save_license('')                      # removing the key: Community again
+        self.assertTrue(common.read_license().startswith('FTL-'))
+        ed = common.save_license('')                        # removing it: Community again
         self.assertEqual((ed['status'], ed['rps']), ('community', 5000))
 
-    def test_bad_key_is_refused_and_keeps_community(self):
-        self.install_module()
-        with self.assertRaisesRegex(ValueError, 'damaged'):
-            common.save_license('BAD')
+    def test_typed_license_with_typos(self):
+        code = issue()
+        ed = common.save_license('\n'.join(code.lower().replace('-', ' ')[i:i + 40] for i in range(0, len(code), 40)))
+        self.assertEqual(ed['status'], 'active')
+
+    def test_another_server(self):
+        code = issue({'machine': 'b' * 32, 'board': '', 'macs': ['00:11:22:33:44:55']})
+        with self.assertRaises(licensing.LicenseError) as cm:
+            common.save_license(code)
+        self.assertEqual(cm.exception.code, 'other_instance')
+        self.assertIn(licensing.instance_id(HERE), str(cm.exception))
         self.assertFalse(os.path.exists(common.LICENSE_FILE))
-        with open(common.LICENSE_FILE, 'w') as f:            # a key that went bad on disk
-            f.write('BAD')
-        ed = common.edition()
-        self.assertEqual((ed['status'], ed['rps']), ('invalid', 5000))
 
-
-    def test_expired_license(self):
-        self.install_module()
-        with open(common.LICENSE_FILE, 'w') as f:
-            f.write('OLD')
+    def test_cloned_disk(self):
+        common.save_license(issue())
+        self.hw = dict(HERE, board='11111111-2222-3333-4444-555555555555', macs=['52:54:00:12:34:56'])   # same disk, other box
+        common._edition['value'] = None
         ed = common.edition()
-        self.assertEqual((ed['status'], ed['rps'], ed['retention_days'], ed['license']['customer']), ('expired', 5000, 14, 'Test'))
-        with self.assertRaisesRegex(ValueError, 'expired'):     # an expired key cannot be entered
-            common.save_license('OLD')
+        self.assertEqual((ed['status'], ed['rps']), ('other_instance', 5000))
+        self.assertEqual(ed['license']['customer'], 'ТОВ «Тест»')
+
+    def test_hardware_changes_on_the_same_server(self):
+        code = issue()
+        self.hw = dict(HERE, macs=['52:54:00:12:34:56'])                    # both cards replaced, same board
+        self.assertEqual(common.save_license(code)['status'], 'active')
+        self.hw = dict(HERE, board='', macs=['52:54:00:12:34:56', HERE['macs'][1]])   # board unreadable, one card left
+        common._edition['value'] = None
+        self.assertEqual(common.edition()['status'], 'active')
+
+    def test_forged_or_altered(self):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowTrack'):
+            common.save_license(issue(sk=OTHER_SK))
+        data = bytearray(licensing.decode('FTL', issue(rps=5000)))
+        data[17] ^= 1                                       # the records/s limit, with a valid checksum
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowTrack'):
+            common.save_license(licensing.encode('FTL', bytes(data)))
+        with self.assertRaisesRegex(ValueError, 'mistyped'):
+            common.save_license(issue()[:-7])
+        with self.assertRaisesRegex(ValueError, 'not a FlowTrack license'):
+            common.save_license('hello')
+        self.assertEqual(common.edition()['status'], 'community')
+        with open(common.LICENSE_FILE, 'w') as f:            # a license that went bad on disk
+            f.write('FTL-XXXXX')
+        common._edition['value'] = None
+        self.assertEqual((common.edition()['status'], common.edition()['rps']), ('invalid', 5000))
+
+    def test_expired(self):
+        code = issue(days=10)
+        common.save_license(code)
+        with self.assertRaises(licensing.LicenseError) as cm:
+            licensing.check(code, now=time.time() + 11 * 86400)
+        self.assertEqual(cm.exception.code, 'expired')
+        old = issue(issued=int(time.time()) - 100 * 86400, expires=int(time.time()) - 86400)
+        with self.assertRaisesRegex(ValueError, 'expired'):           # an expired license cannot be entered
+            common.save_license(old)
+
+    def test_clock_turned_back(self):
+        code = issue(days=30)
+        now = time.time()
+        licensing.check(code, now=now + 20 * 86400)                   # seen running on day 20
+        licensing.check(code, now=now + 19 * 86400)                   # a day back: NTP slack, fine
+        with self.assertRaises(licensing.LicenseError) as cm:
+            licensing.check(code, now=now + 5 * 86400)                # two weeks back: suspended
+        self.assertEqual(cm.exception.code, 'clock')
+        with self.assertRaises(licensing.LicenseError) as cm:
+            licensing.check(issue(), now=now - 3 * 86400)             # before the license was issued
+        self.assertEqual(cm.exception.code, 'clock')
+
+    def test_deactivate_and_move(self):
+        code = issue()
+        common.save_license(code)
+        ret = common.deactivate_license()
+        self.assertFalse(os.path.exists(common.LICENSE_FILE))
+        self.assertEqual(common.edition()['status'], 'community')
+        lic = licensing.verify(code)
+        data = licensing.decode('FTX', ret)                           # what the vendor checks against the register
+        self.assertEqual((data[:6].hex(), data[6:]), (lic['id'], licensing.return_tag(lic['id'], lic['binding'])))
+        with self.assertRaises(licensing.LicenseError) as cm:         # this server refuses it from now on
+            common.save_license(code)
+        self.assertEqual(cm.exception.code, 'returned')
+        self.assertEqual(common.save_license(issue())['status'], 'active')   # a new license for this server works
+        common.save_license('')
+        with self.assertRaisesRegex(ValueError, 'no license'):
+            common.deactivate_license()
+
+    def test_customer_name_limit(self):
+        with self.assertRaisesRegex(ValueError, 'longer than'):
+            issue(customer='Я' * 40)
 
 
 class Limit(unittest.TestCase):

@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/flowtrack/env
+# the board UUID binds a license to this server; it is readable by root only ('+' runs this line as root)
+ExecStartPre=+/bin/sh -c 'cat /sys/class/dmi/id/product_uuid > /var/lib/flowtrack/hw.board.%N 2>/dev/null && mv -f /var/lib/flowtrack/hw.board.%N /var/lib/flowtrack/hw.board || rm -f /var/lib/flowtrack/hw.board /var/lib/flowtrack/hw.board.%N'
 ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/app/api.py
 Restart=always
 RestartSec=3

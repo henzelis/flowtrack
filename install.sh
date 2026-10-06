@@ -11,8 +11,9 @@
 #           --uninstall    remove FlowTrack (asks whether to keep the data)
 #           --lang en|uk   installer language
 #           --pro FILE|URL       install the FlowTrack Pro module (flowtrack-pro-<version>.tar.gz you received)
-#           --license KEY|FILE   install a FlowTrack Pro license key (needs the Pro module: now or installed before)
-#                          e.g. … | sudo bash -s -- --upgrade --pro ./flowtrack-pro-0.1.0.tar.gz --license ./license.key
+#           --license CODE|FILE  activate a FlowTrack license (FTL-…) issued for this server's activation request;
+#                                the request code: sudo flowtrack-license request (also in Settings → License)
+#                          e.g. … | sudo bash -s -- --upgrade --license ./flowtrack.lic
 # Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_NETFLOW_IFACE FT_WEB_IFACE (interface name, IP or
 #                       'all'; default: the interface of the default route) FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
 #                       FT_WAN_IFS FT_CITY FT_COUNTRY FT_ADMIN_PASSWORD FT_OPEN_FIREWALL=yes|no
@@ -64,8 +65,8 @@ case "$PRO_SRC" in
 esac
 LIC_KEY=""
 if [ -n "$LIC_SRC" ]; then
-  if [ -f "$LIC_SRC" ]; then LIC_KEY=$(tr -d '[:space:]' < "$LIC_SRC"); else LIC_KEY=$(printf '%s' "$LIC_SRC" | tr -d '[:space:]'); fi
-  case "$LIC_KEY" in FT1.*.*) ;; *) echo "--license: not a FlowTrack license key (expected FT1.…): $LIC_SRC" >&2; exit 2 ;; esac
+  if [ -f "$LIC_SRC" ]; then LIC_KEY=$(grep -v '^[[:space:]]*#' "$LIC_SRC" | tr -d '[:space:]'); else LIC_KEY=$(printf '%s' "$LIC_SRC" | tr -d '[:space:]'); fi
+  case "$LIC_KEY" in [Ff][Tt][Ll]-*) ;; *) echo "--license: not a FlowTrack license code (expected FTL-…): $LIC_SRC" >&2; exit 2 ;; esac
 fi
 
 # ------------------------------------------------------------------ output helpers
@@ -460,8 +461,7 @@ make_venv() {
   "$PREFIX/venv/bin/python" -m pip install -q --upgrade pip
   "$PREFIX/venv/bin/python" -m pip install -q "netflow==0.12.2" "maxminddb>=2.2,<3"
   "$PREFIX/venv/bin/python" -c 'import netflow, maxminddb'
-  # FlowTrack Pro checks license signatures with `cryptography`; keep it when the venv is rebuilt
-  if [ -d "$PREFIX/pro/flowtrack_pro" ] || [ -n "$PRO_SRC" ]; then "$PREFIX/venv/bin/python" -m pip install -q "cryptography>=41"; fi
+  "$PREFIX/venv/bin/python" -m pip install -q "cryptography>=41"     # license signatures (licensing.py)
 }
 step "$(t 'Python environment' 'Python-оточення')" make_venv
 
@@ -604,6 +604,15 @@ install_units() {
      "$PREFIX/app/deploy/flowtrack-geoip.service" "$PREFIX/app/deploy/flowtrack-geoip.timer" /etc/systemd/system/
   systemctl daemon-reload
   systemctl enable -q flowtrack-geoip.timer $UNITS
+  # `flowtrack-license status|request|activate FILE|deactivate` for servers without a browser at hand
+  cat > /usr/local/bin/flowtrack-license <<WRAP
+#!/bin/sh
+# FlowTrack license on this server: status | request | activate FILE|CODE | deactivate
+[ "\$(id -u)" = 0 ] || exec sudo "\$0" "\$@"
+run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
+if [ "\$1" = activate ] && [ -f "\$2" ]; then run activate - < "\$2"; else run "\$@"; fi
+WRAP
+  chmod 755 /usr/local/bin/flowtrack-license
   # a larger UDP receive buffer absorbs export bursts (the collector asks for 32 MB; the kernel default cap is ~200 KB)
   if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 33554432 ]; then
     printf '%s\n' '# FlowTrack collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowtrack.conf
@@ -652,20 +661,19 @@ step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
 
 # the license last: the install or upgrade above is complete either way; a refused key leaves the previous edition
 install_license() {
-  [ -d "$PREFIX/pro/flowtrack_pro" ] || { echo "$(t 'A license key needs the FlowTrack Pro module: add --pro flowtrack-pro-<version>.tar.gz' 'Ключу ліцензії потрібен модуль FlowTrack Pro: додайте --pro flowtrack-pro-<версія>.tar.gz')"; return 1; }
   printf '%s' "$LIC_KEY" | runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" -c '
 import sys; sys.path.insert(0, "'"$PREFIX"'/app")
 import common
 try:
     ed = common.save_license(sys.stdin.read())
 except ValueError as ex:
-    sys.exit(f"license key refused: {ex}")
+    sys.exit(f"license refused: {ex}")
 lic = ed["license"] or {}
 print("licensed to", lic.get("customer"))'
 }
-if [ -n "$LIC_KEY" ] && ! step "$(t 'FlowTrack Pro license' 'Ліцензія FlowTrack Pro')" install_license; then
-  die "$(t 'The license key was not installed' 'Ключ ліцензії не встановлено'): $(tail -n 1 "$LOG")
-  $(t 'FlowTrack is installed and running with its previous edition. Fix the key and run the command again, or enter it in Settings → License.' 'FlowTrack встановлено й запущено з попередньою редакцією. Виправте ключ і запустіть команду ще раз або введіть його у «Налаштування → Ліцензія».')"
+if [ -n "$LIC_KEY" ] && ! step "$(t 'FlowTrack license' 'Ліцензія FlowTrack')" install_license; then
+  die "$(t 'The license was not activated' 'Ліцензію не активовано'): $(tail -n 1 "$LOG")
+  $(t 'FlowTrack is installed and running with its previous edition. Check the code and run the command again, or enter it in Settings → License.' 'FlowTrack встановлено й запущено з попередньою редакцією. Перевірте код і запустіть команду ще раз або введіть його у «Налаштування → Ліцензія».')"
 fi
 
 # ------------------------------------------------------------------ done
@@ -683,13 +691,21 @@ if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwo
 else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
 EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" FT_PRO_DIR="$PREFIX/pro" "$PREFIX/venv/bin/python" -c '
 import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")
-import common
+import common, licensing
 e = common.edition(); lic = e["license"] or {}
 if e["status"] == "active":
     print("FlowTrack Pro —", lic.get("customer"), "— until", time.strftime("%Y-%m-%d", time.gmtime(lic["expires"])))
 else:
-    print("FlowTrack Community — up to %d records/s" % e["rps"] + ("" if e["status"] == "community" else " (" + e["status"] + ": " + e["message"] + ")"))' 2>/dev/null || true)
-[ -z "$EDITION" ] || say "  $(t 'Edition' 'Редакція'): ${B}$EDITION${N}"
+    print("FlowTrack Community — up to %d records/s" % e["rps"] + ("" if e["status"] == "community" else " (" + e["status"] + ": " + e["message"] + ")"))
+print(licensing.instance_id()); print(licensing.request_code())' 2>/dev/null || true)
+if [ -n "$EDITION" ]; then
+  say "  $(t 'Edition' 'Редакція'): ${B}$(printf '%s\n' "$EDITION" | sed -n 1p)${N}"
+  say "  $(t 'Instance ID' 'ID інсталяції'): $(printf '%s\n' "$EDITION" | sed -n 2p)"
+  case "$EDITION" in "FlowTrack Pro"*) ;; *)
+    say "  ${D}$(t 'FlowTrack Pro: send this activation request to your vendor, then run  sudo flowtrack-license activate FILE  (or use Settings → License):' 'FlowTrack Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowtrack-license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
+    say "  $(printf '%s\n' "$EDITION" | sed -n 3p)" ;;
+  esac
+fi
 say ""
 if [ "$MODE" != upgrade ]; then
   CIP=$(bind_ips "$NF_BIND" | head -1); CIP=${CIP:-${LAN_IP:-<collector-ip>}}
@@ -764,7 +780,8 @@ uninstall() {
   remove_all() {
     systemctl disable --now flowtrack-geoip.timer $UNITS 2>/dev/null || true
     rm -f /etc/systemd/system/flowtrack-collector.service /etc/systemd/system/flowtrack-web.service \
-          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer /etc/sysctl.d/60-flowtrack.conf
+          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer /etc/sysctl.d/60-flowtrack.conf \
+          /usr/local/bin/flowtrack-license
     systemctl daemon-reload
     docker rm -f "$CH_NAME" 2>/dev/null || true
     if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowtrack 2>/dev/null || true

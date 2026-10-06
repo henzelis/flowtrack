@@ -387,11 +387,24 @@ tr.unseen td{opacity:.75}
 .ed-lim span{font-size:12px;color:var(--ink3)}
 .ed-lim b{font:700 15px var(--f-mono)}
 .ed-lim b.warnc{color:var(--warn)}
-.ed-key summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--blue-hi)}
-.ed-key textarea{width:100%;margin-top:10px;box-sizing:border-box;border:1px solid var(--edge);border-radius:10px;padding:10px;background:rgba(0,0,0,.3);font:500 12.5px var(--f-mono);color:var(--ink);resize:vertical}
-.ed-key .acts{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:8px}
-.ed-key .acts .nat{margin-right:auto}
-.ed-key .note code{word-break:break-all;color:var(--ink);font-size:12px}
+.lic-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px}
+.lic-col{display:grid;gap:10px;align-content:start;min-width:0}
+.lic-step{display:flex;gap:12px;align-items:flex-start}
+.lic-step b{font-size:14px}
+.lic-step .note{margin-top:4px}
+.lic-n{flex:none;display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:rgba(47,123,255,.2);border:1px solid var(--edge-hi);font:800 12px var(--f-mono);color:var(--blue-hi)}
+.lic-field{display:grid;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid var(--edge)}
+.lic-field>span{font-size:12px;color:var(--ink3)}
+.lic-field code{font:700 14px var(--f-mono);color:var(--ink);letter-spacing:.5px}
+.lic-field code.lic-code{font-size:13px;font-weight:600;word-break:break-all;line-height:1.55;user-select:all}
+#actBox textarea{width:100%;box-sizing:border-box;border:1px solid var(--edge);border-radius:10px;padding:10px;background:rgba(0,0,0,.3);font:500 12.5px var(--f-mono);color:var(--ink);resize:vertical}
+#actBox .acts{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+#actBox .acts .nat{margin-right:auto;min-width:0}
+.lic-return{margin-top:18px;display:grid;gap:8px;padding:14px;border-radius:12px;border:1px solid rgba(255,195,77,.45);background:rgba(255,195,77,.07)}
+.lic-move{margin-top:18px;padding-top:16px;border-top:1px solid var(--edge);display:flex;align-items:center;gap:16px;justify-content:space-between;flex-wrap:wrap}
+.lic-move>div{flex:1 1 320px}
+.btn.danger{background:rgba(255,92,122,.12);border-color:rgba(255,92,122,.45);color:var(--crit)}
+.btn.danger:hover{background:rgba(255,92,122,.25)}
 .edbadge{all:unset;display:table;cursor:pointer;margin-top:5px;padding:0 7px;border-radius:8px;font:800 9.5px Manrope,sans-serif;letter-spacing:.6px;text-transform:uppercase;line-height:16px;vertical-align:1px;color:var(--down);background:rgba(39,211,245,.14);border:1px solid rgba(39,211,245,.35)}
 .edbadge.pro{color:var(--ok);background:rgba(46,229,157,.14);border-color:rgba(46,229,157,.4)}
 .edbadge.warn{color:var(--warn);background:rgba(255,195,77,.16);border-color:rgba(255,195,77,.45)}
