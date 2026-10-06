@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## 1.3.0 — unreleased
+## 1.3.0 — 2026-10-06
 
 - **Online activation with a license key.** Paste a license key (`FTK-…`) in Settings → License, run
   `sudo flowtrack-license activate FTK-…`, or give it to the installer (`--license FTK-…`): FlowTrack activates it
