@@ -3,6 +3,25 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.3.2 — 2026-10-07
+
+Faster pages over long periods on busy networks (reported: a VM with 4 CPUs and 8 GB of RAM, ~720 records/s, 40
+million records a day — Overview for 24 hours took ~20 s at 100 % CPU and some panels failed). Measured on 40
+million synthetic records a day, 4 vCPUs:
+
+- **ClickHouse gets half of the RAM** (1–8 GiB; was a quarter rounded down to whole GiB, so 8 GB of RAM gave 1 GiB
+  and the panels of one page did not fit into it together). `--upgrade` applies it to existing installs (ClickHouse
+  restarts once, the collector keeps the records meanwhile).
+- **Top lists read the data once:** the total for the percentages comes from the same query (it was a second full
+  pass for every list); what an outside address is (service, country, city, AS) is looked up only for the addresses
+  shown; distinct addresses are counted by a 64-bit hash (the same numbers, less than half the work).
+- **Top conversations and Top hosts → main service** no longer run out of memory on millions of host-peer pairs:
+  exact while they fit, otherwise the heaviest candidates are found with a bounded-memory count and their numbers
+  are exact.
+- **The same request once:** widgets of a page that ask the same question share one answer (Overview asked for the
+  trend twice, and the map overlay repeated the top lists); answers over 6 hours or more are kept for 60 s on the
+  server, so reloads, other users and other pages with the same period do not read the day again.
+
 ## 1.3.1 — 2026-10-07
 
 - **Community keeps flow details for 30 days** (was 14). Compiled core 1.3.1.

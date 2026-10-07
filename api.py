@@ -320,6 +320,8 @@ def post_license_checkin():
     return edition_info(admin=True)
 
 
+# Distinct addresses are counted by their 64-bit hash: the same result (a collision among a million addresses has a
+# chance of about 1 in 30 million) at less than half the cost of comparing the address strings themselves.
 def api_summary(q):
     where, p, rng, step = scope(q)
     # current and previous window in one pass
@@ -328,8 +330,8 @@ def api_summary(q):
     r = ch(f"""SELECT
         sumIf(bytes, cur) AS s_bytes, sumIf(bytes, cur AND dir IN ('up', 'internal')) AS s_up, sumIf(bytes, cur AND dir NOT IN ('up', 'internal')) AS s_down,
         countIf(cur) AS s_flows, sumIf(packets, cur) AS s_packets,
-        uniqExactIf(int_ip, cur) + uniqExactIf(ext_ip, cur) AS s_ips, uniqExactIf(int_ip, cur) AS s_hosts, uniqExactIf(int_ip, NOT cur) AS s_p_hosts,
-        sumIf(bytes, NOT cur) AS s_p_bytes, countIf(NOT cur) AS s_p_flows, uniqExactIf(int_ip, NOT cur) + uniqExactIf(ext_ip, NOT cur) AS s_p_ips,
+        uniqExactIf(cityHash64(int_ip), cur) + uniqExactIf(cityHash64(ext_ip), cur) AS s_ips, uniqExactIf(cityHash64(int_ip), cur) AS s_hosts, uniqExactIf(cityHash64(int_ip), NOT cur) AS s_p_hosts,
+        sumIf(bytes, NOT cur) AS s_p_bytes, countIf(NOT cur) AS s_p_flows, uniqExactIf(cityHash64(int_ip), NOT cur) + uniqExactIf(cityHash64(ext_ip), NOT cur) AS s_p_ips,
         toUnixTimestamp(min(ts)) AS s_oldest
       FROM (SELECT ts, dir, bytes, packets, int_ip, ext_ip, ts >= toDateTime({{t0:UInt32}}) AS cur FROM flows WHERE {wprev})""", p, fmt='JSON')[0]
     r = {k[2:]: v for k, v in r.items()}
@@ -365,22 +367,79 @@ def api_series(q):
     return {'step': step, 'range': rng, 'from': p['t0'], 'to': p['t1'], 'rows': [[int(r['t']), int(r['dn']), int(r['up']), int(r['other']), int(r['fl'])] for r in rows]}
 
 
+# a query that groups by something with millions of values (conversations) may use this much memory; the rest is
+# left to the other widgets of the page, which load at the same time
+CH_QUERY_MEMORY = int(os.environ.get('FT_CH_MEMORY_MB', '1024')) * 1024 * 1024 * 2 // 5
+
+
+def ch_totals(query, params, settings=None):
+    """A GROUP BY … WITH TOTALS query -> (rows, the totals row of all groups, unaffected by LIMIT)."""
+    out = json.loads(ch(query, params, fmt='JSON', raw=True, settings=settings))
+    return out['data'], out.get('totals') or {}
+
+
+def attrs(rows, keys, what, where, p, cols=None):
+    """Add per-key attributes (`service, country, …`: the same for every record of a key, or any one of them) to the
+    top rows only: computing them for every group of a busy day (hundreds of thousands of outside addresses) cost
+    more than the top list itself. The top keys are frequent, so a few of their records are found after reading a
+    small part of the period (the query stops at its LIMIT); keys not met there are aggregated."""
+    if not rows:
+        return
+    cols = cols or keys
+    p = dict(p, **{f'a{i}': [r[k] for r in rows] for i, k in enumerate(keys)})
+    cond = ' AND '.join(f'{c} IN {{a{i}:Array(String)}}' for i, c in enumerate(cols))
+    got = {}
+    for x in ch(f"SELECT {', '.join(cols)}, {what} FROM flows WHERE {where} AND {cond} LIMIT {20 * len(rows)}", p, fmt='JSON'):
+        got.setdefault(tuple(x[c] for c in cols), x)
+    if len(got) < len({tuple(r[k] for k in keys) for r in rows}):
+        agg = ', '.join(f'any({w}) AS {w}' for w in what.split(', '))
+        for x in ch(f"SELECT {', '.join(cols)}, {agg} FROM flows WHERE {where} AND {cond} GROUP BY {', '.join(cols)}", p, fmt='JSON'):
+            got.setdefault(tuple(x[c] for c in cols), x)
+    for r in rows:
+        for k, v in got.get(tuple(r[k] for k in keys), {}).items():
+            if k not in cols:
+                r[k] = v
+
+
 def api_top(q):
     where, p, rng, step = scope(q)
+    totals = {}
     dim = q1(q, 'dim', 'int_ip')
     p['lim'] = max(1, min(q1(q, 'limit', '10', int), 500))
     if dim == 'conv':
-        rows = ch(f"""SELECT int_ip, ext_ip, any(service) AS service, any(country) AS country, any(city) AS city,
-                sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl, sum(packets) AS pk
-            FROM flows WHERE {where} GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+        # a busy day has millions of host-peer pairs: they are grouped by the pair's 64-bit hash (8 bytes instead of
+        # two address strings; a collision among 10 million pairs has a chance of about 1 in 300,000), then the pairs
+        # shown are read exactly with what they are
+        sums = """sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl, sum(packets) AS pk"""
+        try:
+            top, tb = ch_totals(f"""SELECT cityHash64(int_ip, ext_ip) AS h, sum(bytes) AS b FROM flows WHERE {where}
+                GROUP BY h WITH TOTALS ORDER BY b DESC LIMIT {{lim:UInt16}}""", p,      # beyond its memory share: on disk
+                settings={'max_memory_usage': CH_QUERY_MEMORY, 'max_bytes_before_external_group_by': CH_QUERY_MEMORY * 2 // 5})
+            p['hs'], totals = [int(r['h']) for r in top], {'up': tb.get('b', 0), 'dn': 0}
+        except CHError as ex:
+            if 'Code: 241' not in str(ex):
+                raise
+            # still out of memory (other panels loading at the same time): the heaviest candidates by a bounded-memory
+            # count (Space-Saving), many times the rows asked for, so the order of those shown is right
+            p['k'] = min(max(200, p['lim'] * 20), 5000)
+            cand = ch(f"SELECT topKWeighted({{k:UInt16}})(cityHash64(int_ip, ext_ip), bytes) AS t, sum(bytes) AS b FROM flows WHERE {where}", p, fmt='JSON')[0]
+            p['hs'], totals = [int(h) for h in cand['t']], {'up': cand['b'], 'dn': 0}
+        rows = ch(f"""SELECT int_ip, ext_ip, {sums}, any(service) AS service, any(country) AS country, any(city) AS city FROM flows
+            WHERE {where} AND cityHash64(int_ip, ext_ip) IN {{hs:Array(UInt64)}}
+            GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON') if p['hs'] else []
         for r in rows:
             r['name'] = NAMES.get(r['int_ip'])
     elif dim == 'host_svc':     # each inside host with its main service and L7 protocol
-        rows = ch(f"""SELECT int_ip AS k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto,
-                sum(u) AS up, sum(d) AS dn, sum(f) AS fl, 0 AS pk
-            FROM (SELECT int_ip, service, l7, proto, sum(bytes) AS b, sumIf(bytes, dir IN ('up', 'internal')) AS u, sumIf(bytes, dir NOT IN ('up', 'internal')) AS d, count() AS f
-                  FROM flows WHERE {where} GROUP BY int_ip, service, l7, proto)
-            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+        rows, totals = ch_totals(f"""SELECT int_ip AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
+                count() AS fl, 0 AS pk
+            FROM flows WHERE {where} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+        if rows:                # the main service / L7 / protocol of the hosts shown (per host x service of a whole day
+            p['hs'] = [r['k'] for r in rows]                                   # did not fit into memory)
+            main = {x['k']: x for x in ch(f"""SELECT k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto
+                FROM (SELECT int_ip AS k, service, l7, proto, sum(bytes) AS b FROM flows WHERE {where} AND int_ip IN {{hs:Array(String)}}
+                      GROUP BY k, service, l7, proto) GROUP BY k""", p, fmt='JSON')}
+            for r in rows:
+                r.update({c: main.get(r['k'], {}).get(c, d) for c, d in (('service', ''), ('l7', ''), ('proto', 0))})
         for r in rows:
             r['name'] = NAMES.get(r['k'])
             r['proto'] = int(r['proto'])
@@ -396,25 +455,28 @@ def api_top(q):
     elif dim in DIMS:
         col = DIMS[dim]
         extra = ''
-        if dim == 'ext_ip':
-            extra = ', any(service) AS service, any(country) AS country, any(city) AS city, any(asn) AS asn, any(as_org) AS as_org'
-        elif dim == 'asn':
+        if dim == 'asn':
             extra = ', any(as_org) AS as_org, any(country) AS country'
         elif dim == 'service':
-            extra = ', uniqExact(int_ip) AS hosts, any(l7) AS l7'
+            extra = ', uniqExact(cityHash64(int_ip)) AS hosts, any(l7) AS l7'
         elif dim == 'city':
             extra = ', any(country) AS country, any(lat) AS la, any(lon) AS lo'
         elif dim == 'ext_port':
-            extra = ', any(l7) AS l7, any(proto) AS proto_n, uniqExact(int_ip) AS hosts, uniqExact(ext_ip) AS peers, any(service) AS service'
-        rows = ch(f"""SELECT toString({col}) AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
+            extra = ', any(l7) AS l7, any(proto) AS proto_n, uniqExact(cityHash64(int_ip)) AS hosts, uniqExact(cityHash64(ext_ip)) AS peers, any(service) AS service'
+        rows, totals = ch_totals(f"""SELECT toString({col}) AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
                 count() AS fl, sum(packets) AS pk {extra}
-            FROM flows WHERE {where} GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+            FROM flows WHERE {where} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+        if dim == 'ext_ip':     # 200k+ outside addresses a day: what each one is, only for those shown
+            attrs(rows, ('k',), 'service, country, city, asn, as_org', where, p, cols=('ext_ip',))
         if dim == 'int_ip':
             for r in rows:
                 r['name'] = NAMES.get(r['k'])
     else:
         raise BadRequest('bad dim')
-    tot = ch(f"SELECT sum(bytes) AS b FROM flows WHERE {where}", p, fmt='JSON')[0]['b']
+    if dim == 'int_ip' and q1(q, 't', 'internet') == 'internal':     # there every record counts for two hosts
+        tot = ch(f"SELECT sum(bytes) AS b FROM flows WHERE {where}", p, fmt='JSON')[0]['b']
+    else:                       # up + dn of all groups, computed in the same pass (WITH TOTALS; no 2nd scan)
+        tot = int(totals.get('up') or 0) + int(totals.get('dn') or 0)
     for r in rows:
         for k in ('up', 'dn', 'fl', 'pk', 'hosts', 'asn', 'peers', 'proto_n'):
             if k in r:
@@ -456,7 +518,7 @@ def api_river(q):
     tops = ch(f"""SELECT
             (SELECT groupArray(k) FROM (SELECT int_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS l,
             (SELECT groupArray(k) FROM (SELECT ext_ip AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS r,
-            (SELECT uniqExact(int_ip) FROM flows WHERE {where}) AS nl, (SELECT uniqExact(ext_ip) FROM flows WHERE {where}) AS nr""", p, fmt='JSON')[0]
+            (SELECT uniqExact(cityHash64(int_ip)) FROM flows WHERE {where}) AS nl, (SELECT uniqExact(cityHash64(ext_ip)) FROM flows WHERE {where}) AS nr""", p, fmt='JSON')[0]
     left, right = tops['l'], tops['r']
     p['L'], p['R'] = left, right
     links = ch(f"""SELECT if(has({{L:Array(String)}}, int_ip), int_ip, '__other') AS l, if(has({{R:Array(String)}}, ext_ip), ext_ip, '__other') AS r,
@@ -486,7 +548,7 @@ def api_paths(q):
         p['wend'], p['win'] = wend, win
         where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     rows = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sum(bytes) AS b, sum(packets) AS pk, count() AS fl,
-            uniqExact(int_ip) AS hosts, topKWeighted(3)(service, bytes) AS services,
+            uniqExact(cityHash64(int_ip)) AS hosts, topKWeighted(3)(service, bytes) AS services,
             sumIf(bytes, dir IN ('up', 'down')) AS internet, sumIf(bytes, dir = 'internal') AS internal
         FROM flows WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 80""", p, fmt='JSON')
     for r in rows:
@@ -510,7 +572,7 @@ def api_devmap(q):
         where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     paths = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
-            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, count() AS fl, uniqExact(int_ip) AS hosts,
+            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, count() AS fl, uniqExact(cityHash64(int_ip)) AS hosts,
             topKWeighted(3)(service, toUInt64({metric})) AS services
         FROM flows WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 60""", p, fmt='JSON')
     # an inside host enters the box through: in_if when it sends (up, or the source of an internal record),
@@ -871,6 +933,54 @@ def post_device_delete(body, user):
     return {'ok': True}
 
 
+class Cache:
+    """Answers over long periods (6 hours or more, or a custom period that has ended) for 60 s: a page asks several
+    of them at once, other users and reloads ask the same, and over a day of a busy network each one reads tens of
+    millions of records. Live windows and everything else are always fresh; the minute is short against the 5-minute
+    steps of a day's charts."""
+    TTL, SIZE = 60, 300
+    PATHS = {'/api/summary', '/api/series', '/api/top', '/api/geo', '/api/river', '/api/paths', '/api/devmap', '/api/host'}
+    LIVE_BY_DEFAULT = {'/api/river'}
+
+    def __init__(self):
+        self.lock, self.items = threading.Lock(), {}
+
+    def key(self, path, q):
+        if path not in self.PATHS or q.get('live', ['1' if path in self.LIVE_BY_DEFAULT else '0'])[0] == '1':
+            return None
+        try:
+            if q.get('from') and q.get('to'):
+                if int(q['to'][0]) > time.time() - 60:       # a custom period still running
+                    return None
+            elif RANGES.get(q.get('range', ['24h'])[0], 86400) < 6 * 3600:
+                return None
+        except ValueError:
+            return None
+        return path + '?' + '&'.join(f'{k}={v}' for k, v in sorted((k, tuple(v)) for k, v in q.items()))
+
+    def clear(self):
+        with self.lock:
+            self.items.clear()
+
+    def get(self, path, q):
+        k = self.key(path, q)
+        with self.lock:
+            hit = self.items.get(k) if k else None
+            return hit[1] if hit and time.time() - hit[0] < self.TTL else None
+
+    def put(self, path, q, body):
+        k = self.key(path, q)
+        if not k:
+            return
+        with self.lock:
+            now = time.time()
+            if len(self.items) >= self.SIZE:
+                for x in [x for x, v in self.items.items() if now - v[0] >= self.TTL] or sorted(self.items, key=lambda x: self.items[x][0])[:self.SIZE // 4]:
+                    del self.items[x]
+            self.items[k] = (now, body)
+
+
+CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
@@ -950,7 +1060,12 @@ class H(BaseHTTPRequestHandler):
         fn = ROUTES.get(u.path)
         if fn:
             try:
-                return self.send(200, json.dumps(fn(parse_qs(u.query)), default=str).encode(), 'application/json')
+                q = parse_qs(u.query)
+                body = CACHE.get(u.path, q)
+                if body is None:
+                    body = json.dumps(fn(q), default=str).encode()
+                    CACHE.put(u.path, q, body)
+                return self.send(200, body, 'application/json')
             except BadRequest as e:
                 return self.send(400, json.dumps({'error': str(e)}).encode(), 'application/json')
             except (CHError, OSError) as e:
@@ -968,6 +1083,7 @@ class H(BaseHTTPRequestHandler):
 
 
     def do_POST(self):
+        CACHE.clear()            # names of hosts and devices, exporters' settings… may change: answer fresh
         u = urlparse(self.path)
         if not u.path.startswith('/api/'):
             return self.json(404, {'error': 'not found'})

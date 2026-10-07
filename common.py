@@ -233,16 +233,17 @@ class CHError(Exception):
     pass
 
 
-def ch(query, params=None, data=None, fmt=None, timeout=30):
+def ch(query, params=None, data=None, fmt=None, timeout=30, raw=False, settings=None):
     """Run a query over the ClickHouse HTTP interface.
     params: {name: value} bound to {name:Type} placeholders (server-side, no string interpolation).
     data: bytes to POST after the query (for INSERT ... FORMAT JSONEachRow).
-    Returns parsed JSON rows for fmt='JSON', else raw text."""
+    Returns parsed JSON rows for fmt='JSON' (the whole response text with raw=True), else raw text."""
     # WHERE must see real columns even when a SELECT alias has the same name (any(service) AS service)
     qs = {'database': CH_DB, 'prefer_column_name_to_alias': '1'}
+    qs.update({k: str(v) for k, v in (settings or {}).items()})
     for k, v in (params or {}).items():
-        if isinstance(v, (list, tuple)):     # Array(String) literal
-            v = '[' + ','.join("'" + str(x).replace('\\', '\\\\').replace("'", "\\'") + "'" for x in v) + ']'
+        if isinstance(v, (list, tuple)):     # Array(String) literal, or Array(UInt64) for numbers
+            v = '[' + ','.join(str(x) if isinstance(x, int) else "'" + str(x).replace('\\', '\\\\').replace("'", "\\'") + "'" for x in v) + ']'
         qs['param_' + k] = v if isinstance(v, str) else str(v)
     if fmt:
         query = f'{query} FORMAT {fmt}'
@@ -257,8 +258,10 @@ def ch(query, params=None, data=None, fmt=None, timeout=30):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             out = r.read().decode()
     except urllib.error.HTTPError as e:
-        raise CHError(e.read().decode()[:500]) from None
-    if fmt == 'JSON':
+        body = e.read().decode(errors='replace')
+        at = body.find('Code: ')         # with FORMAT JSON the error follows the start of the output: keep the error
+        raise CHError(body[at:at + 500] if at >= 0 else body[:500]) from None
+    if fmt == 'JSON' and not raw:
         return json.loads(out)['data']
     return out
 

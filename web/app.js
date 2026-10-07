@@ -34,9 +34,21 @@ const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'd
 const FILTER_LABEL = {iface:T('interface','інтерфейс'), in_if:T('in via','вхід через'), out_if:T('out via','вихід через'), ip:T('host','хост'), dst:T('ext. IP','зовн. IP'), service:T('service','сервіс'), l7:T('protocol','протокол'), country:T('country','країна'), city:T('city','місто'), port:T('port','порт'), device:T('device','пристрій'), asn:'ASN', dir:T('direction','напрямок'), proto:'L4'};
 let renderSeq = 0;
 
-async function api(path, params = {}, extraFilters = []){
+// widgets of one page often ask the same thing (Overview: the trend and the KPI sparklines, the map overlay and the
+// top lists): an identical request still running or answered in the last 3 s is shared, not sent again
+const API_SHARED = new Map();
+function api(path, params = {}, extraFilters = []){
   const qs = new URLSearchParams({...periodParams(), t:state.traffic, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
-  const r = await fetch(`api/${path}?${qs}`);
+  const url = `api/${path}?${qs}`, now = Date.now();
+  for (const [k, v] of API_SHARED) if (v.done && now - v.done > 3000) API_SHARED.delete(k);
+  const hit = API_SHARED.get(url);
+  if (hit) return hit.p;
+  const e = {done:0}; e.p = apiFetch(url).then(b => { e.done = Date.now(); return b; }, err => { API_SHARED.delete(url); throw err; });
+  API_SHARED.set(url, e);
+  return e.p;
+}
+async function apiFetch(url){
+  const r = await fetch(url);
   if (r.status === 401) { showLogin(T('Session ended — sign in again', 'Сесія завершилась — увійдіть знову')); throw new Error(T('login required', 'потрібен вхід')); }
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
@@ -508,7 +520,7 @@ function mountHero(){
       myScope.run(() => { const update = state.heroMode === 'map' ? flatMap(hb, geo, null, live) : globe(hb, geo);
         if (live && update) every(15000, () => load().then(d => { if (heroScope === myScope) { note(d); update(d); } }).catch(() => {})); }); }).catch(e => fill('heroBody', errBox(e)));
     section('heroOvl', async () => {
-      const [h, d, s] = await Promise.all([api('top', {dim:'int_ip', limit:1}), api('top', {dim:'ext_ip', limit:1}), api('top', {dim:'service', limit:1})]);
+      const [h, d, s] = await Promise.all([api('top', {dim:'int_ip', limit:5}), api('top', {dim:'ext_ip', limit:1}), api('top', {dim:'service', limit:5})]);   // the same requests as the top lists beside it
       if (heroScope !== myScope) return null;
       const a = h.rows[0], b = d.rows[0], c = s.rows[0];
       return `<div class="overlay"><div class="ovl">
