@@ -113,7 +113,7 @@ class Codes(unittest.TestCase):
 class Edition(Base):
     def test_community_by_default(self):
         ed = common.edition()
-        self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days']), ('community', 'community', 5000, 14))
+        self.assertEqual((ed['name'], ed['status'], ed['rps'], ed['retention_days']), ('community', 'community', 5000, 30))
 
     def test_license_for_this_server(self):
         ed = common.save_license(issue(rps=20000))

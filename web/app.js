@@ -1105,7 +1105,7 @@ async function editionPanel(returned){
     <div class="ed-name"><b>${name}</b><span class="pill ${pro ? 'ok' : ed.status === 'community' ? 'info' : 'crit'}">${esc(status)}</span>${soon ? `<span class="pill warn">${T(`ends in ${lic.days_left} day${lic.days_left === 1 ? '' : 's'}`, `закінчується через ${lic.days_left} дн.`)}</span>` : ''}${ed.message ? `<span class="nat">${esc(ed.message)}</span>` : ''}</div>
     <div class="ed-lim">
       <div><span>${T('Records per second', 'Записів за секунду')}</span><b>${ed.rps ? T('up to ', 'до ') + fmtInt(ed.rps) : T('no limit', 'без обмежень')}</b></div>
-      <div><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}</b></div>
+      <div title="${T(`New records are kept this long. Records already stored keep their own term and are never shortened; without a license only the last ${ed.community_days || 30} days are shown, older records show again with a license.`, `Нові записи зберігаються стільки днів. Уже збережені записи мають свій строк, і він ніколи не скорочується; без ліцензії видно лише останні ${ed.community_days || 30} днів, старіші записи знову видно з ліцензією.`)}"><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}${ed.view_days > ed.retention_days ? ` <small>${T(`(earlier records: the last ${ed.view_days} days shown)`, `(видно записи за останні ${ed.view_days} днів)`)}</small>` : ''}</b></div>
       <div><span>${T('Not stored over the limit, 24 h', 'Не збережено понад ліміт, 24 год')}</span><b class="${ed.license_drops_24h ? 'warnc' : ''}">${fmtInt(ed.license_drops_24h)}</b></div>
       ${lic.customer ? `<div><span>${T('Licensed to', 'Ліцензіат')}</span><b>${esc(lic.customer)}</b></div><div><span>${pro ? T('Valid until', 'Діє до') : ed.status === 'expired' ? T('Expired on', 'Закінчилась') : T('Term', 'Термін')}</span><b class="${soon || !pro ? 'warnc' : ''}">${until}</b></div>` : ''}
     </div>${online}
@@ -1522,7 +1522,7 @@ function openPeriod(){
   closePeriod();
   const now = Math.floor(Date.now() / 1000), t1 = isCustom() ? state.to : now, t0 = isCustom() ? state.from : now - rangeSecs();
   const loc = t => { const d = new Date(t * 1000 - new Date(t * 1000).getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
-  const keep = (META.edition || {}).retention_days || 30, min = loc(now - keep * 86400), max = loc(now + 60);
+  const keep = (META.edition || {}).view_days || (META.edition || {}).retention_days || 30, min = loc(now - keep * 86400), max = loc(now + 60);
   const el = document.createElement('div'); el.className = 'glass period-pop'; el.id = 'periodPop'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', T('Custom period', 'Свій період'));
   el.innerHTML = `<h3>${T('Custom period', 'Свій період')}</h3>
     <label>${T('From', 'Від')}<input type="datetime-local" id="pFrom" step="60" min="${min}" max="${max}" value="${loc(t0)}"></label>

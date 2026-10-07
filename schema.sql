@@ -29,14 +29,15 @@ CREATE TABLE IF NOT EXISTS flows
     asn        UInt32,
     as_org     LowCardinality(String),
     app_tag    UInt64,                           -- exporter-specific application id (FortiOS APPLICATION_TAG)
-    sampling   UInt32 DEFAULT 1                  -- 1 of N packets sampled; bytes/packets are already scaled up
+    sampling   UInt32 DEFAULT 1,                 -- 1 of N packets sampled; bytes/packets are already scaled up
+    keep_days  UInt16 DEFAULT 30                 -- days this record is kept: the edition's retention when received
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, int_ip, ext_ip)
-TTL ts + INTERVAL 14 DAY;   -- new installs (Community); the collector extends it for a Pro license and never shortens it
+TTL ts + toIntervalDay(keep_days);   -- per record; tables from before 1.3.1 are moved to it by common.flows_keep_days
 
--- Long-term usage per hour x exporter x inside host x direction (kept for years; raw flows for 14+ days).
+-- Long-term usage per hour x exporter x inside host x direction (kept for years; raw flows for 30+ days).
 CREATE TABLE IF NOT EXISTS usage_1h
 (
     ts       DateTime,
@@ -100,6 +101,8 @@ ALTER TABLE flows ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS sampling UInt32 DEFAULT 1;
 -- where the exporter observed the packet: 0 ingress, 1 egress, 255 not reported
 ALTER TABLE flows ADD COLUMN IF NOT EXISTS obs UInt8 DEFAULT 255;
+-- days the record is kept (1.3.1); common.flows_keep_days then gives older records the table's old TTL
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS keep_days UInt16 DEFAULT 30;
 -- egress copies dropped because the same traffic was already reported on ingress
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_dropped UInt64 DEFAULT 0;
 -- packets the exporter sent again (identical except the sequence number), dropped by the receiver

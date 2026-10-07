@@ -3,6 +3,17 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.3.1 — 2026-10-07
+
+- **Community keeps flow details for 30 days** (was 14). Compiled core 1.3.1.
+- **Retention per record.** Every flow record is kept for the days of the edition it was received under (column
+  `flows.keep_days`, TTL `ts + keep_days`). When a license ends, new records are kept 30 days and records received
+  under the license keep their days, but the UI and the API show only the last 30 days; older records show again with
+  the next license. A new license raises the stored records to its days (never lowers them); while it is active the
+  UI shows everything stored. On the first start of 1.3.1 every record keeps the retention its table had (installs
+  from before 1.3.1 had one TTL for the whole table), then the Community 30 days apply to records that had less.
+- Settings → License explains this next to "Flow details kept"; the license-ended event names the Community days.
+
 ## 1.3.0 — 2026-10-06
 
 - **Online activation with a license key.** Paste a license key (`FTK-…`) in Settings → License, run

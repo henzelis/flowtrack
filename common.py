@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -435,21 +436,33 @@ def deactivate_license(with_code=False):
 _TTL_RE = None
 
 
-def flows_retention_days(target=None):
-    """Days of flow details ClickHouse keeps (the TTL of `flows`). With `target`, the TTL is raised to it when
-    shorter — never lowered, so an expired license or a smaller edition never deletes stored data, and installs
-    made before the 14-day Community limit keep their 30 days."""
+def flows_keep_days(days):
+    """Flow details are kept per record: the collector writes `keep_days` (the edition's retention) with each one
+    and the TTL of `flows` is ts + keep_days. Raises the records still stored to `days` when they have fewer (a new
+    license keeps what is there longer; nothing is ever shortened, so an ended license deletes no data) -> how many
+    records were raised. Tables from before 1.3.1 (one TTL for the whole table) are moved to per-record days first,
+    each record keeping that TTL."""
     global _TTL_RE
-    if _TTL_RE is None:
-        import re
-        _TTL_RE = re.compile(r'TTL ts \+ (?:toIntervalDay\((\d+)\)|INTERVAL (\d+) DAY)')
     rows = ch("SELECT create_table_query AS q FROM system.tables WHERE database = currentDatabase() AND name = 'flows'", fmt='JSON')
-    m = _TTL_RE.search(rows[0]['q']) if rows else None
-    cur = int(m.group(1) or m.group(2)) if m else 0
-    if target and cur and target > cur:
-        ch(f'ALTER TABLE flows MODIFY TTL ts + INTERVAL {int(target)} DAY')
-        cur = int(target)
-    return cur
+    if not rows:
+        return 0
+    if 'keep_days' not in rows[0]['q'].split(' TTL ', 1)[-1]:
+        if _TTL_RE is None:
+            import re
+            _TTL_RE = re.compile(r'TTL ts \+ (?:toIntervalDay\((\d+)\)|INTERVAL (\d+) DAY)')
+        m = _TTL_RE.search(rows[0]['q'])
+        old = int(m.group(1) or m.group(2)) if m else 0
+        ch('ALTER TABLE flows ADD COLUMN IF NOT EXISTS keep_days UInt16 DEFAULT 30')
+        if old and old != 30:      # set before the TTL changes, so no record loses a day of the old TTL; records
+            # received meanwhile already carry their own days
+            ch(f'ALTER TABLE flows UPDATE keep_days = {old} WHERE keep_days != {old} AND ts < toDateTime({int(time.time())}) '
+               'SETTINGS mutations_sync = 2', timeout=3600)
+        ch('ALTER TABLE flows MODIFY TTL ts + toIntervalDay(keep_days)', timeout=600)
+    days = int(days)
+    n = int(ch(f'SELECT count() AS n FROM flows WHERE keep_days < {days}', fmt='JSON')[0]['n'])
+    if n:
+        ch(f'ALTER TABLE flows UPDATE keep_days = {days} WHERE keep_days < {days}')
+    return n
 
 
 # ---------------------------------------------------------------- enrichment

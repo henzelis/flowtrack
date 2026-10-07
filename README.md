@@ -57,7 +57,7 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
   (sustained upload, bursts, new countries, export loss), *Settings* — tabs for language and version, devices
   (exporters and interfaces), users, and the edition / license.
-- Any period within the kept flow details (14 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
+- Any period within the kept flow details (30 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
   drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
   incident view can be bookmarked or shared.
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
@@ -317,14 +317,16 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 | | **FlowTrack Community** (free) | **FlowTrack Pro** (license for one server) |
 |---|---|---|
 | Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit, or per license |
-| Flow details kept | **14 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
+| Flow details kept | **30 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
 | Term | — | subscription with an end date; afterwards the Community limits apply again |
 | Every feature, now and in future versions | ✓ | ✓ |
 
 Both editions are the same software: a license changes only the limits. 5,000 records/s covers homes and small and medium offices — a busy 1 Gbit/s internet edge typically exports a
 few thousand. Above the limit, records are not stored but counted: Settings → License and an event show how many.
-Installs made before the limits keep their 30 days of flow details; retention is never shortened
-automatically, not even when a license expires.
+Every flow record is kept for the days of the edition it was received under, and that is never shortened: when a
+license ends, new records are kept 30 days, records received under the license keep their days but only the last
+30 days are shown — older records show again with the next license. A new license keeps the stored records as long
+as its own term (records are raised, never lowered), and while it is active everything stored is shown.
 
 **Activation works offline.** A license is issued for one installation and works on that server only:
 

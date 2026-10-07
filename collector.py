@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ftcore  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
-                    exporters_mtime, flows_retention_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, service_name)
+                    exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -238,7 +238,9 @@ class Collector:
         # the edition's records/s limit, shared evenly by the workers (the receiver spreads packets round-robin);
         # rate_limit=False is for benchmarks that measure the decoder itself
         self.rate_limited = rate_limit
-        self.rps = edition()['rps'] if rate_limit else None
+        ed = edition()
+        self.rps = ed['rps'] if rate_limit else None
+        self.keep_days = ed['retention_days']       # written with every record: the days the edition keeps it
         # the compiled core decodes and applies the limit (rate=0, unlimited, exists in test builds of it only)
         self.dec = ftcore.Decoder(self.workers) if rate_limit else ftcore.Decoder(self.workers, rate=0)
         self.geo = Geo()
@@ -303,7 +305,7 @@ class Collector:
             'nat_ip': nat_ip, 'nat_port': nat_port, 'bytes': nbytes, 'packets': npkts, 'sampling': rate,
             'l7': l7, 'service': service_name(port_service, asn, as_org, ei[0]),
             'country': country, 'city': city, 'lat': lat, 'lon': lon, 'asn': asn, 'as_org': as_org,
-            'app_tag': app_tag, 'obs': obs,
+            'app_tag': app_tag, 'obs': obs, 'keep_days': self.keep_days,
         })
 
     def handle_packet(self, data, addr, learn_only=False):
@@ -402,8 +404,10 @@ class Collector:
             if self.worker == 0:            # every worker sees every template; one of them saves them
                 self.save_templates()
             self.reload_config()
-            if self.rate_limited:            # a license change applies without a restart (the core's limiter follows)
-                self.rps = edition()['rps']
+            ed = edition()                   # a license change applies without a restart (the core's limiter follows)
+            self.keep_days = ed['retention_days']
+            if self.rate_limited:
+                self.rps = ed['rps']
 
 
 def worker_main(n, q, results, ppid, workers=1):
@@ -526,15 +530,26 @@ class Receiver:
             log(f'WARN stats insert failed: {str(ex)[:200]}')
 
     def apply_retention(self):
-        """A license entered in the UI may keep flow details longer: raise the TTL without a restart (never lower it)."""
-        days = edition()['retention_days']
-        if days != getattr(self, 'retention_target', None):
+        """Every record is kept for the days of the edition it was received under. A license entered in the UI
+        applies without a restart, and the records still stored are kept that long too (never shortened); checked
+        again every hour for records that were buffered during the change."""
+        if not self.retention_lock.acquire(blocking=False):      # the first run (moving an old table) still busy
+            return
+        try:
+            self._apply_retention()
+        finally:
+            self.retention_lock.release()
+
+    def _apply_retention(self):
+        days, now = edition()['retention_days'], time.time()
+        if days != getattr(self, 'retention_target', None) or now - getattr(self, 'retention_checked', 0) >= 3600:
             try:
-                kept = flows_retention_days(days)
-                self.retention_target = days
-                log(f'flow details kept {kept} days')
+                raised = flows_keep_days(days)
+                if days != getattr(self, 'retention_target', None) or raised:
+                    log(f'flow details kept {days} days' + (f' ({raised:,} stored records raised to it)' if raised else ''))
+                self.retention_target, self.retention_checked = days, now
             except (CHError, OSError) as ex:
-                log(f'WARN could not check the retention of flows: {ex}')
+                log(f'WARN could not apply the retention of flows: {ex}')
 
     @staticmethod
     def license_checkins():
@@ -571,7 +586,8 @@ class Receiver:
             sys.exit(1)
         ed = edition()
         log(f"FlowTrack {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
-        self.apply_retention()
+        self.retention_lock = threading.Lock()   # moving a big table from before 1.3.1 takes a while: receive meanwhile
+        threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()
         threading.Thread(target=self.license_checkins, name='license-checkin', daemon=True).start()
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)

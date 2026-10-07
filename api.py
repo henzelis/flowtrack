@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import licensing  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, flows_retention_days, save_license, deactivate_license, license_checkin, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
@@ -33,18 +33,24 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 RANGES = {'1h': 3600, '6h': 6 * 3600, '24h': 86400, '7d': 7 * 86400, '30d': 30 * 86400}
 STEP = {3600: 60, 6 * 3600: 300, 86400: 300, 7 * 86400: 3600, 30 * 86400: 4 * 3600}
 NICE_STEPS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 4 * 3600)
-_retention = {'t': 0, 'days': 30}
+_stored = {'t': 0, 'days': 0}
 
 
-def retention_days():
-    """Days of flow details kept (the TTL of `flows`), re-read every minute."""
-    if time.time() - _retention['t'] > 60:
-        try:
-            _retention['days'] = flows_retention_days() or _retention['days']
-        except (CHError, OSError):
-            pass
-        _retention['t'] = time.time()
-    return _retention['days']
+def view_days():
+    """Days of flow details the UI and API show. Without a license: the edition's days, even when older records are
+    still stored (kept from an ended license, they show again with the next one). With a license: everything
+    stored. The longest `keep_days` stored is re-read every minute."""
+    ed = edition()
+    days = ed['retention_days']
+    if ed['status'] == 'active':
+        if time.time() - _stored['t'] > 60:
+            try:
+                _stored['days'] = int(ch("SELECT max(keep_days) AS d FROM flows", fmt='JSON')[0]['d'])
+            except (CHError, OSError, LookupError, TypeError, ValueError):
+                pass
+            _stored['t'] = time.time()
+        days = max(days, _stored['days'])
+    return days
 
 
 def period(q):
@@ -58,8 +64,8 @@ def period(q):
         t1 = min(t1, now + 60)
         if t1 - t0 < 60:
             raise BadRequest('the period must be at least a minute long')
-        if t1 - t0 > (retention_days() + 1) * 86400:
-            raise BadRequest(f'the period can be at most {retention_days() + 1} days long')
+        if t1 - t0 > (view_days() + 1) * 86400:
+            raise BadRequest(f'the period can be at most {view_days() + 1} days long')
         return t0, t1, True
     return now - RANGES.get(q.get('range', ['24h'])[0], 86400), now, False
 
@@ -129,7 +135,9 @@ def scope(q):
     params carry t0/t1 (unix s) and 'custom'."""
     t0, t1, custom = period(q)
     rng = t1 - t0
-    where, params = ['ts >= toDateTime({t0:UInt32})'], {'t0': t0, 't1': t1, 'custom': custom}
+    # never older than the edition shows (also for the previous window that summary compares with)
+    where = ['ts >= toDateTime({t0:UInt32})', 'ts >= toDateTime({floor:UInt32})']
+    params = {'t0': t0, 't1': t1, 'custom': custom, 'floor': int(time.time()) - view_days() * 86400}
     if custom:
         where.append('ts < toDateTime({t1:UInt32})')
     # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
@@ -219,7 +227,7 @@ def api_meta(q):
         devices.append({'ip': r['exporter'], 'name': c.get('name', r['exporter']), 'vendor': c.get('vendor', ''), 'model': c.get('model', ''),
                         'if_names': c.get('if_names', {}), 'local_if': c.get('local_if'),
                         'city': c.get('city', ''), 'country': c.get('country', ''), 'lat': c.get('lat'), 'lon': c.get('lon'), 'last': r['last']})
-    oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')
+    oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows WHERE ts >= now() - toIntervalDay({d:UInt16})", {'d': view_days()}, fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
             'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION}
 
@@ -227,7 +235,8 @@ def api_meta(q):
 def edition_info(admin=False):
     """What the UI shows about the edition; the license's customer/expiry and the error message only to admins."""
     ed = edition()
-    out = {'name': ed['name'], 'status': ed['status'], 'rps': ed['rps'], 'retention_days': retention_days()}
+    out = {'name': ed['name'], 'status': ed['status'], 'rps': ed['rps'], 'retention_days': ed['retention_days'], 'view_days': view_days(),
+           'community_days': COMMUNITY['retention_days']}
     col = collector_health(24 * 60)
     out['license_drops_24h'] = col['license_drops'] if col else 0
     lic = ed['license'] or {}
@@ -713,13 +722,13 @@ def api_alerts(q):
     lic = ed['license'] or {}
     if ed['status'] == 'expired':
         out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowTrack Pro license expired', 'Ліцензія FlowTrack Pro закінчилась'),
-                    'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s); stored data is kept. Enter a renewed key in Settings → License.",
-                               f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Введіть подовжений ключ у «Налаштування → Ліцензія»."),
+                    'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s, {COMMUNITY['retention_days']} days); stored data is kept, records older than {COMMUNITY['retention_days']} days show again with a renewed key. Enter it in Settings → License.",
+                               f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с, {COMMUNITY['retention_days']} днів); збережені дані лишаються, записи, старші за {COMMUNITY['retention_days']} днів, знову видно з подовженим ключем. Введіть його у «Налаштування → Ліцензія»."),
                     'when': time.strftime('%Y-%m-%d', time.gmtime(lic.get('expires') or 0))})
     elif ed['status'] in ('invalid', 'other_instance', 'returned', 'clock'):
         out.append({'sev': 'crit', 'kind': 'license_invalid', 'title': tr('The license does not work on this server', 'Ліцензія не діє на цьому сервері'),
-                    'text': tr(f"{license_message(ed['status'], ed['message'], lic).capitalize()}. The Community limits apply ({COMMUNITY['rps']:,} records/s); stored data is kept. See Settings → License.",
-                               f"{license_message(ed['status'], ed['message'], lic).capitalize()}. Діють ліміти Community ({COMMUNITY['rps']:,} записів/с); збережені дані лишаються. Див. «Налаштування → Ліцензія»."),
+                    'text': tr(f"{license_message(ed['status'], ed['message'], lic).capitalize()}. The Community limits apply ({COMMUNITY['rps']:,} records/s, {COMMUNITY['retention_days']} days); stored data is kept. See Settings → License.",
+                               f"{license_message(ed['status'], ed['message'], lic).capitalize()}. Діють ліміти Community ({COMMUNITY['rps']:,} записів/с, {COMMUNITY['retention_days']} днів); збережені дані лишаються. Див. «Налаштування → Ліцензія»."),
                     'when': tr('now', 'зараз')})
     elif ed['status'] == 'active' and lic.get('days_left', 99) < 14:
         out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon', 'Ліцензія FlowTrack Pro скоро закінчиться'),
