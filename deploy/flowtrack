@@ -1,0 +1,80 @@
+#!/bin/sh
+# FlowTrack on this server (installed by install.sh as /usr/local/bin/flowtrack):
+#   flowtrack upgrade [--force] [--license FILE|CODE]   newest version from GitHub, settings and data kept
+#   flowtrack status                                    version, services, edition
+#   flowtrack license status|request|activate FILE|deactivate
+#   flowtrack reconfigure                               the installer's questions again (ports, device, password …)
+#   flowtrack uninstall                                 remove FlowTrack (asks whether to keep the data)
+# FT_INSTALL_URL overrides where the installer comes from (testing).
+REPO=henzelis/flowtrack
+PREFIX=/opt/flowtrack
+ETC=/etc/flowtrack
+URL=${FT_INSTALL_URL:-https://raw.githubusercontent.com/$REPO/main/install.sh}
+L=$(cat "$ETC/install-lang" 2>/dev/null || echo en)
+t() { if [ "$L" = uk ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
+usage() {
+  if [ "$L" = uk ]; then cat <<'TXT'
+FlowTrack на цьому сервері:
+  sudo flowtrack upgrade [--force] [--license ФАЙЛ|КОД]   найновіша версія з GitHub; налаштування й дані зберігаються
+  flowtrack status                                        версія, сервіси, редакція
+  sudo flowtrack license status|request|activate ФАЙЛ|deactivate
+  sudo flowtrack reconfigure                              питання інсталятора ще раз (порти, пристрій, пароль …)
+  sudo flowtrack uninstall                                видалити FlowTrack (спитає, чи зберегти дані)
+TXT
+  else cat <<'TXT'
+FlowTrack on this server:
+  sudo flowtrack upgrade [--force] [--license FILE|CODE]  newest version from GitHub; settings and data are kept
+  flowtrack status                                        version, services, edition
+  sudo flowtrack license status|request|activate FILE|deactivate
+  sudo flowtrack reconfigure                              the installer's questions again (ports, device, password …)
+  sudo flowtrack uninstall                                remove FlowTrack (asks whether to keep the data)
+TXT
+  fi
+}
+
+root() { [ "$(id -u)" = 0 ] || exec sudo FT_INSTALL_URL="${FT_INSTALL_URL:-}" "$0" "$@"; }
+
+# the installer, downloaded whole before it runs, with the language of this install
+installer() {
+  tmp=$(mktemp -d) || exit 1
+  trap 'rm -rf "$tmp"' EXIT
+  if ! curl -fsSL --retry 2 -o "$tmp/install.sh" "$URL?$(date +%s)"; then
+    echo "$(t 'Could not download the installer from' 'Не вдалося завантажити інсталятор з') $URL" >&2; exit 1
+  fi
+  bash "$tmp/install.sh" --lang "$L" "$@"
+}
+
+version() { cat "$PREFIX/app/VERSION" 2>/dev/null || echo '?'; }
+
+case "${1:-}" in
+  upgrade)
+    root "$@"; shift
+    force=0; n=$#
+    while [ "$n" -gt 0 ]; do                  # take --force out, keep the rest (a license file name may have spaces)
+      a=$1; shift; n=$((n - 1))
+      if [ "$a" = --force ]; then force=1; else set -- "$@" "$a"; fi
+    done
+    cur=$(version); new=$(curl -fsSL "${URL%/install.sh}/VERSION?$(date +%s)" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$new" ] && [ "$new" = "$cur" ] && [ "$force" = 0 ] && [ $# = 0 ]; then
+      echo "$(t "FlowTrack $cur is the latest version." "FlowTrack $cur — найновіша версія.") $(t '(flowtrack upgrade --force installs it again)' '(flowtrack upgrade --force встановить її ще раз)')"
+      exit 0
+    fi
+    # never go back to an older version by accident (e.g. a build newer than the published one)
+    if [ -n "$new" ] && [ "$new" != "$cur" ] && [ "$(printf '%s\n%s\n' "$new" "$cur" | sort -V | tail -1)" = "$cur" ] && [ "$force" = 0 ]; then
+      echo "$(t "Installed FlowTrack $cur is newer than the published $new; nothing to do (--force installs $new)." "Встановлений FlowTrack $cur новіший за опублікований $new; нічого не роблю (--force встановить $new).")"
+      exit 0
+    fi
+    [ -n "$new" ] && [ "$new" != "$cur" ] && echo "FlowTrack $cur → $new"
+    installer --upgrade --yes "$@" ;;
+  reconfigure) root "$@"; installer ;;
+  uninstall) root "$@"; installer --uninstall ;;
+  license) shift; exec /usr/local/bin/flowtrack-license "$@" ;;
+  status)
+    echo "FlowTrack $(version)"
+    for u in flowtrack-collector flowtrack-web; do printf '  %-22s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null)"; done
+    [ -x /usr/local/bin/flowtrack-license ] && /usr/local/bin/flowtrack-license status | sed 's/^/  /' ;;
+  version|--version|-v) version ;;
+  ''|help|-h|--help) usage ;;
+  *) echo "$(t 'Unknown command:' 'Невідома команда:') $1" >&2; usage >&2; exit 2 ;;
+esac

@@ -3,6 +3,17 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.3.4 — 2026-10-08
+
+- **Upgrade with one command: `sudo flowtrack upgrade`.** The installer now puts a `flowtrack` command on the
+  server: `upgrade` fetches the newest version and upgrades without questions (settings, users, devices and data are
+  kept; it says so when the newest version is already installed; `--force` installs it again, `--license FILE`
+  activates a license at the same time), `status` shows the version, services and edition, `license …` is the same
+  as `flowtrack-license …`, `reconfigure` asks the installer's questions again and `uninstall` removes FlowTrack. It
+  speaks the language chosen at install. Installs from before 1.3.4 get the command with one last upgrade through
+  the install command (`… install.sh | sudo bash -s -- --upgrade --yes`).
+- README: the manual installation steps are gone (the installer does all of it); upgrading is one line.
+
 ## 1.3.3 — 2026-10-08
 
 Pages over hours and days read pre-aggregated totals instead of every flow record.

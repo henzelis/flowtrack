@@ -85,7 +85,7 @@ in ufw/firewalld. The web interface is served over **HTTPS** with an automatical
 self-signed certificate. It finishes with the URL, the certificate fingerprint and a ready-made exporter
 configuration for your vendor.
 
-Run the same command again to **upgrade**, **reconfigure** or **uninstall**. Unattended install:
+Unattended install:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | \
@@ -93,7 +93,30 @@ curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh 
 ```
 
 Supported: Debian/Ubuntu (apt) and Fedora/RHEL/Rocky/Alma (dnf) with systemd, x86_64 or arm64. Details
-are logged to `/var/log/flowtrack-install.log`. The manual steps below do the same by hand.
+are logged to `/var/log/flowtrack-install.log`.
+
+### Upgrade
+
+Which version you run is shown at the bottom of every page (newer versions also in Settings → General; or
+`cat /opt/flowtrack/app/VERSION` on the server).
+
+| Your version | How to upgrade |
+|---|---|
+| **1.3.4 or newer** | `sudo flowtrack upgrade` |
+| **1.3.3 or older** (any, from 1.0.0 on) | once: `curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh \| sudo bash -s -- --upgrade --yes`<br>(no `curl`: `wget -qO- https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh \| sudo bash -s -- --upgrade --yes`)<br>from then on: `sudo flowtrack upgrade` |
+
+The upgrade asks no questions: it installs the newest version, keeps settings, users, devices, the license and all
+collected data, and restarts the services (the collector pauses for a few seconds; exporters' templates are kept).
+If the newest version is already installed, `flowtrack upgrade` says so and changes nothing.
+
+Other commands on the server:
+
+| Command | What it does |
+|---|---|
+| `flowtrack status` | version, services, edition |
+| `sudo flowtrack license request` / `activate FILE` / `deactivate` | license of this server (see [Editions](#editions)) |
+| `sudo flowtrack reconfigure` | the installer's questions again: ports, device, admin password, firewall |
+| `sudo flowtrack uninstall` | remove FlowTrack; asks whether to keep the data |
 
 ## Requirements
 
@@ -102,68 +125,6 @@ are logged to `/var/log/flowtrack-install.log`. The manual steps below do the sa
   25 MB per million records. A small office exporting ~5 records/s needs about 300 MB for the 30-day
   raw retention. The pre-aggregated totals that make long periods fast (1.3.3) add about a fifth of that on a typical
   network, up to two thirds where hosts talk to very many different outside addresses.
-
-## Manual install
-
-Run from a checkout of this repository.
-
-```bash
-# 1. Service user and directories
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
-sudo mkdir -p /opt/flowtrack/clickhouse /opt/flowtrack/geoip /etc/flowtrack
-
-# 2. ClickHouse, reachable from this host only; deploy/clickhouse-flowtrack.xml turns off the diagnostic
-#    log tables (they grow by gigabytes and inflate memory use) and keeps caches small
-PW=$(openssl rand -hex 16)
-sudo mkdir -p /etc/flowtrack/clickhouse && sudo cp deploy/clickhouse-flowtrack.xml /etc/flowtrack/clickhouse/flowtrack.xml
-docker run -d --name flowtrack-ch --restart unless-stopped -p 127.0.0.1:8123:8123 --memory 4g \
-  --ulimit nofile=262144:262144 -v /opt/flowtrack/clickhouse:/var/lib/clickhouse \
-  -v /etc/flowtrack/clickhouse/flowtrack.xml:/etc/clickhouse-server/config.d/flowtrack.xml:ro \
-  -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD=$PW \
-  clickhouse/clickhouse-server:24
-
-# 3. GeoIP databases (monthly files, free, CC BY 4.0)
-M=$(date +%Y-%m)
-for f in city asn; do
-  curl -s https://download.db-ip.com/free/dbip-$f-lite-$M.mmdb.gz | gunzip | sudo tee /opt/flowtrack/geoip/dbip-$f.mmdb >/dev/null
-done
-
-# 4. Code and Python environment
-sudo mkdir -p /opt/flowtrack/app && sudo cp -r *.py schema.sql web deploy ftcore.lock /opt/flowtrack/app/
-# the compiled core named in ftcore.lock, from the GitHub release core-v<version> (x86_64 or aarch64)
-V=$(awk '$1 == "version" {print $2}' ftcore.lock); A=$(uname -m | sed 's/arm64/aarch64/')
-sudo curl -fsSL -o /opt/flowtrack/app/ftcore.abi3.so \
-  https://github.com/henzelis/flowtrack/releases/download/core-v$V/ftcore-$V-linux-$A.so
-grep -q "$(sha256sum /opt/flowtrack/app/ftcore.abi3.so | cut -d' ' -f1)" ftcore.lock && echo core ok
-sudo python3 -m venv /opt/flowtrack/venv
-sudo /opt/flowtrack/venv/bin/pip install maxminddb
-
-# 5. Configuration
-sudo cp deploy/flowtrack.env.example /etc/flowtrack/env
-sudo sed -i "s/^FT_CH_PASSWORD=.*/FT_CH_PASSWORD=$PW/" /etc/flowtrack/env
-sudo cp deploy/exporters.json.example /etc/flowtrack/exporters.json   # edit for your devices
-sudo cp deploy/hosts.json.example /etc/flowtrack/hosts.json           # optional host names
-sudo chown root:flowtrack /etc/flowtrack/env && sudo chmod 640 /etc/flowtrack/env
-
-# 6. HTTPS certificate (self-signed; replace with your own if you have one)
-sudo mkdir -p /etc/flowtrack/tls
-sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 -subj "/CN=$(hostname)" \
-  -addext "subjectAltName=DNS:$(hostname),IP:$(hostname -I | awk '{print $1}')" \
-  -keyout /etc/flowtrack/tls/key.pem -out /etc/flowtrack/tls/cert.pem
-sudo chown -R root:flowtrack /etc/flowtrack/tls && sudo chmod 750 /etc/flowtrack/tls && sudo chmod 640 /etc/flowtrack/tls/key.pem
-
-# 7. Services
-sudo cp deploy/flowtrack-* /etc/systemd/system/ && sudo chmod +x /opt/flowtrack/app/deploy/geoip-update.sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now flowtrack-collector flowtrack-web flowtrack-geoip.timer
-```
-
-Open `https://<collector>:3030` and sign in as **admin / flowtrack**. The UI keeps reminding you until
-the password is changed (user menu → *Change password*). The schema is created by the collector on its
-first start.
-
-Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
-users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`.
 
 ## Configuration
 
@@ -294,6 +255,8 @@ snippets.
   `FT_TLS=no` at install time keeps plain HTTP (e.g. behind a TLS reverse proxy — then set
   `X-Forwarded-Proto: https` there).
 - ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.
+- Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
+  users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`.
 
 ## API
 
@@ -332,19 +295,16 @@ as its own term (records are raised, never lowered), and while it is active ever
 **Activation works offline.** A license is issued for one installation and works on that server only:
 
 1. Settings → License (administrators) shows the **Instance ID** and an **activation request** (`FTR-…`), or run
-   `sudo flowtrack-license request` on the server. Send the request to your vendor — e-mail, a file, or read it out
+   `sudo flowtrack license request` on the server. Send the request to your vendor — e-mail, a file, or read it out
    by phone from a closed network.
 2. You receive a license (`FTL-…`, as text or a `.lic` file). Paste or load it in Settings → License, or run
-   `sudo flowtrack-license activate flowtrack.lic`, or give it to the installer:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash -s -- --upgrade --license ./flowtrack.lic
-```
+   `sudo flowtrack license activate flowtrack.lic` (or `sudo flowtrack upgrade --license flowtrack.lic` to
+   upgrade at the same time).
 
 The license is bound to the server's machine ID, board UUID and network cards (as salted hashes — nothing else
 leaves the server); replacing a network card or the board alone keeps it working. A copied disk or a shared
 license does not work elsewhere. To move FlowTrack to another server, **deactivate** the license in Settings →
-License (or `sudo flowtrack-license deactivate`) and send the return code (`FTX-…`) together with the new server's
+License (or `sudo flowtrack license deactivate`) and send the return code (`FTX-…`) together with the new server's
 activation request. Settings → License (and the badge under the logo) warns 30 days before a license ends and an
 event two weeks before.
 

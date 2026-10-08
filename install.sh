@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
 #
 # Installs FlowTrack (collector + ClickHouse + web UI) with its dependencies, asking a few
-# questions on the way. Re-run the same command to upgrade, reconfigure or uninstall.
+# questions on the way. Afterwards: sudo flowtrack upgrade | reconfigure | uninstall (or re-run this command).
 #
 # Options:  --yes          no questions: defaults, or values from FT_* variables below
 #           --upgrade      update code of an existing install, keep settings
@@ -632,6 +632,11 @@ run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" \$(grep -sE '^FT_LICEN
 if [ "\$1" = activate ] && [ -f "\$2" ]; then run activate - < "\$2"; else run "\$@"; fi
 WRAP
   chmod 755 /usr/local/bin/flowtrack-license
+  # `flowtrack upgrade | status | license … | reconfigure | uninstall`; replaced by a rename, because
+  # `flowtrack upgrade` is the running script while this installer is here
+  sed "s|^REPO=.*|REPO=$FT_REPO|" "$PREFIX/app/deploy/flowtrack" > /usr/local/bin/flowtrack.new
+  chmod 755 /usr/local/bin/flowtrack.new && mv -f /usr/local/bin/flowtrack.new /usr/local/bin/flowtrack
+  echo "$L" > "$ETC/install-lang"
   # a larger UDP receive buffer absorbs export bursts (the collector asks for 32 MB; the kernel default cap is ~200 KB)
   if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 33554432 ]; then
     printf '%s\n' '# FlowTrack collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowtrack.conf
@@ -721,7 +726,7 @@ if [ -n "$EDITION" ]; then
   say "  $(t 'Edition' 'Редакція'): ${B}$(printf '%s\n' "$EDITION" | sed -n 1p)${N}"
   say "  $(t 'Instance ID' 'ID інсталяції'): $(printf '%s\n' "$EDITION" | sed -n 2p)"
   case "$EDITION" in "FlowTrack Pro"*) ;; *)
-    say "  ${D}$(t 'FlowTrack Pro: send this activation request to your vendor, then run  sudo flowtrack-license activate FILE  (or use Settings → License):' 'FlowTrack Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowtrack-license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
+    say "  ${D}$(t 'FlowTrack Pro: send this activation request to your vendor, then run  sudo flowtrack license activate FILE  (or use Settings → License):' 'FlowTrack Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowtrack license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
     say "  $(printf '%s\n' "$EDITION" | sed -n 3p)" ;;
   esac
 fi
@@ -782,9 +787,9 @@ CFG
   esac
   say ""
 fi
-say "${D}$(t 'Status:' 'Стан:') systemctl status flowtrack-collector flowtrack-web"
+say "${D}$(t 'Status:' 'Стан:') flowtrack status"
 say "$(t 'Logs:' 'Логи:')  journalctl -u flowtrack-collector -f"
-say "$(t 'Upgrade, reconfigure or remove: run the same install command again.' 'Оновити, переналаштувати чи видалити: запустіть ту саму команду встановлення ще раз.')${N}"
+say "$(t 'Upgrade:' 'Оновлення:')  sudo flowtrack upgrade      $(t 'Reconfigure or remove:' 'Переналаштувати чи видалити:') sudo flowtrack reconfigure | uninstall${N}"
 }
 
 uninstall() {
@@ -800,7 +805,7 @@ uninstall() {
     systemctl disable --now flowtrack-geoip.timer $UNITS 2>/dev/null || true
     rm -f /etc/systemd/system/flowtrack-collector.service /etc/systemd/system/flowtrack-web.service \
           /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer /etc/sysctl.d/60-flowtrack.conf \
-          /usr/local/bin/flowtrack-license
+          /usr/local/bin/flowtrack-license /usr/local/bin/flowtrack "$ETC/install-lang"
     systemctl daemon-reload
     docker rm -f "$CH_NAME" 2>/dev/null || true
     if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowtrack 2>/dev/null || true
