@@ -18,8 +18,9 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 
 | | |
 |---|---|
-| ![Flows](docs/screenshots/flows.png) **Flows** — who exchanges how much with whom; click to filter | ![Top hosts](docs/screenshots/hosts.png) **Top hosts** — volume, trend, services and destinations |
-| ![Geolocation](docs/screenshots/geo.png) **Geolocation** — live connection map, countries, ASNs | ![Devices](docs/screenshots/devices.png) **Devices** — exporters, interfaces, collector health |
+| ![Flows](docs/screenshots/flows.png) **Flows** — who exchanges how much with whom; click to filter | ![Through device](docs/screenshots/through-device.png) **Through device** — input interface → device → output interface, hosts behind each |
+| ![Top hosts](docs/screenshots/hosts.png) **Top hosts** — volume, trend, services and destinations | ![Geolocation](docs/screenshots/geo.png) **Geolocation** — live connection map, countries, ASNs |
+| ![Services](docs/screenshots/services.png) **Services** — traffic by service and application, trends | ![Devices](docs/screenshots/devices.png) **Devices** — exporters, interfaces, collector health |
 
 ![Path analysis](docs/screenshots/path-analysis.png)
 **Path analysis** — layer-3 neighbours of a device and the hops of a source → destination path across devices
