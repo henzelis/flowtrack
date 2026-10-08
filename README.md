@@ -350,20 +350,40 @@ event two weeks before.
 
 ## Performance
 
-Measured on an AMD Ryzen 7 5700X (8 cores / 16 threads, ClickHouse on the same machine) with real FortiGate
-NetFlow v9 packets offered for 15 s, counting what was stored after the queues drained:
+Measured on 2026-10-08 with FlowTrack 1.3.3 in a VM with 4 vCPUs of an Intel Core i5-1145G7 (a laptop-class CPU)
+and 4 GB of RAM; ClickHouse runs in the same VM with the 2 GiB the installer gives it on such a machine.
 
-| Workers | Offered load | Stored | Lost |
-|---|---|---|---|
-| 1 | 41,600 records/s | 100 % (catches up ~10 s after the burst) | 0 |
-| 4 | 83,300 records/s | 100 % (keeps up) | 0 |
-| 4 | 125,000 records/s | 93 % | 7 % dropped at the worker queues, counted and reported |
+**Receiving.** Real FortiGate NetFlow v9 packets (about 10 records each) offered at a steady rate for 2 minutes;
+counted is what was stored once the queues had drained:
 
-One worker decodes and enriches about **30,000 records per second** on one core; the receiver itself needs about a
-quarter of a core at 125,000 records/s. For scale: a small office firewall exports a few records per
-second, a busy 1 Gbit/s internet edge typically a few thousand. If Settings → Devices reports drops, raise
-`FT_WORKERS` or use sampling on the exporter. The figures above are the decoder itself; FlowTrack Community stores
-up to 5,000 records/s (see [Editions](#editions)).
+| Workers (`FT_WORKERS`) | Stored completely | Above that |
+|---|---|---|
+| 1 | 41,700 records/s | 52,000 records/s offered → 97.8 % stored |
+| 2 (the default with 4 CPU threads) | 83,300 records/s | 125,000 records/s for 15 s → 92 % stored |
+| 4 | 104,000 records/s | 125,000 records/s offered → 97.2 % stored |
+
+Short bursts above these rates are absorbed by the queues (one worker took 62,500 records/s for 15 s without loss).
+Whatever does not fit is dropped at the worker queues, counted and shown in Settings → Devices — never silently. One
+worker decodes and enriches about **74,000 records per second** on one core (the decoder is compiled); the rest of
+the CPU goes to the receiver and to ClickHouse's inserts and merges. For scale: a small office firewall exports a few
+records per second, a busy 1 Gbit/s internet edge typically a few thousand. FlowTrack Community stores up to 5,000
+records/s (see [Editions](#editions)).
+
+**Pages.** A synthetic busy network of 40 million records a day (about 460 records/s on average; 5,000 inside hosts,
+200,000 outside addresses, 12 million host–peer pairs) in the same VM. Overview page, all panels loading at once,
+first load (nothing cached):
+
+| Period | Ready in | Rows read by ClickHouse |
+|---|---|---|
+| 1 hour | 0.5 s | 16 million |
+| 6 hours | about 2 s | 69 million |
+| 24 hours | 6–7 s | 205 million |
+
+Most of the 24 hours goes to Top conversations (pairs of an inside host and an outside address are read from the
+flow records); the other panels read the 5-minute and hourly totals. Periods of several days at this scale have not
+been measured yet. Answers for 6 hours or more are kept on the server for 60 s, so reloads and other users with the
+same period get them at once. On a small office network (about 4 records/s, 330,000 records a day; real data) every
+Overview request for 24 hours or 7 days is answered in under 0.1 s.
 
 ## Roadmap
 
