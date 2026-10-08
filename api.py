@@ -21,9 +21,12 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import licensing  # noqa: E402
+import rollups  # noqa: E402
 from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
+# pre-aggregated 5-minute totals for long periods (rollups.py); FT_ROLLUPS=0 reads only the records (for comparisons)
+USE_ROLLUPS = os.environ.get('FT_ROLLUPS', '1') != '0'
 BIND = os.environ.get('FT_WEB_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_WEB_PORT', '3030'))
 WEB_LISTEN = []          # set at start: what this web server listens on
@@ -140,12 +143,15 @@ def scope(q):
     params = {'t0': t0, 't1': t1, 'custom': custom, 'floor': int(time.time()) - view_days() * 86400}
     if custom:
         where.append('ts < toDateTime({t1:UInt32})')
+    ntime, fcols = len(where), set()     # what follows are filters: src() puts them over pre-aggregated data too
     # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
     traffic = q.get('t', ['internet'])[0]
     if traffic == 'internet':
         where.append("dir IN ('up', 'down')")
+        fcols.add('dir')
     elif traffic == 'internal':
         where.append("dir = 'internal'")
+        fcols.add('dir')
     try:
         flt = json.loads(q.get('f', ['[]'])[0])
     except ValueError:
@@ -157,17 +163,21 @@ def scope(q):
                 v = v[2:]
             if v.isdigit():
                 cond = f'asn = {{f{i}:UInt32}}'
+                fcols.add('asn')
             else:
                 cond = f'positionCaseInsensitive(as_org, {{f{i}:String}}) > 0'
+                fcols.add('as_org')
         elif k == 'iface':
             if not v.isdigit():
                 raise BadRequest('bad value for iface')
             cond = f'(in_if = {{f{i}:UInt32}} OR out_if = {{f{i}:UInt32}})'
+            fcols |= {'in_if', 'out_if'}
         elif k in FILTERS:
             col, typ = FILTERS[k]
             if typ != 'String' and not v.isdigit():
                 raise BadRequest(f'bad value for {k}')
             cond = f'{col} = {{f{i}:{typ}}}'
+            fcols.add(col)
         else:
             continue
         where.append(f'NOT ({cond})' if neg else cond)
@@ -175,7 +185,20 @@ def scope(q):
     step = STEP.get(rng) if not custom else None
     if not step:    # custom: the smallest round step that keeps the chart within ~300 points
         step = next((x for x in NICE_STEPS if rng / x <= 300), NICE_STEPS[-1])
+    # for src(): the filters alone, the columns they use and the period ("_" params are not sent to ClickHouse)
+    params.update(_filt=' AND '.join(where[ntime:]) or '1', _fcols=fcols, _step=step,
+                  _t0=max(t0, params['floor']), _t1=t1 if custom else None)
     return ' AND '.join(where), params, rng, step
+
+
+def src(p, cols, t0=None, t1=None, bucketed=False):
+    """`FROM … WHERE …` for a query over the scope in `p` (or [t0, t1)) that groups by / shows `cols`: whole 5-minute
+    buckets from the pre-aggregated tables when one holds all the columns (and for a time series only when its step
+    is a multiple of 5 minutes), the rest from the records. Rows have `flows` (records): sum(flows) counts them."""
+    t0 = p['_t0'] if t0 is None else t0
+    t1 = p['_t1'] if t1 is None and t0 == p['_t0'] else t1
+    sql, _ = rollups.source(cols, t0, t1, p['_fcols'], use=USE_ROLLUPS, step=p['_step'] if bucketed else None)
+    return f"{sql} WHERE {p['_filt']}"
 
 
 def q1(q, key, default, cast=str):
@@ -324,19 +347,27 @@ def post_license_checkin():
 # chance of about 1 in 30 million) at less than half the cost of comparing the address strings themselves.
 def api_summary(q):
     where, p, rng, step = scope(q)
-    # current and previous window in one pass
-    wprev = where.replace('ts >= toDateTime({t0:UInt32})', 'ts >= toDateTime({p0:UInt32})', 1)
-    p['p0'] = p['t0'] - rng
+    # the current and the previous window (each from its own source: a 5-minute total must not straddle them)
+    cur0, prev0 = p['_t0'], max(p['t0'] - rng, p['floor'])
+    both = lambda cols: (f"(SELECT {cols}, 1 AS cur FROM {src(p, cols.split(', '))} UNION ALL "   # noqa: E731
+                         f"SELECT {cols}, 0 AS cur FROM {src(p, cols.split(', '), prev0, cur0)})")
     r = ch(f"""SELECT
         sumIf(bytes, cur) AS s_bytes, sumIf(bytes, cur AND dir IN ('up', 'internal')) AS s_up, sumIf(bytes, cur AND dir NOT IN ('up', 'internal')) AS s_down,
-        countIf(cur) AS s_flows, sumIf(packets, cur) AS s_packets,
-        uniqExactIf(cityHash64(int_ip), cur) + uniqExactIf(cityHash64(ext_ip), cur) AS s_ips, uniqExactIf(cityHash64(int_ip), cur) AS s_hosts, uniqExactIf(cityHash64(int_ip), NOT cur) AS s_p_hosts,
-        sumIf(bytes, NOT cur) AS s_p_bytes, countIf(NOT cur) AS s_p_flows, uniqExactIf(cityHash64(int_ip), NOT cur) + uniqExactIf(cityHash64(ext_ip), NOT cur) AS s_p_ips,
-        toUnixTimestamp(min(ts)) AS s_oldest
-      FROM (SELECT ts, dir, bytes, packets, int_ip, ext_ip, ts >= toDateTime({{t0:UInt32}}) AS cur FROM flows WHERE {wprev})""", p, fmt='JSON')[0]
-    r = {k[2:]: v for k, v in r.items()}
-    top = ch(f"SELECT service AS k, sum(bytes) AS b FROM flows WHERE {where} GROUP BY k ORDER BY b DESC LIMIT 1", p, fmt='JSON')
-    r = {k: int(v) for k, v in r.items()}
+        sumIf(flows, cur) AS s_flows, sumIf(packets, cur) AS s_packets,
+        sumIf(bytes, NOT cur) AS s_p_bytes, sumIf(flows, NOT cur) AS s_p_flows, toUnixTimestamp(min(ts)) AS s_oldest
+      FROM {both('ts, dir, bytes, packets, flows')}""", p, fmt='JSON')[0]
+    r = {k[2:]: int(v) for k, v in r.items()}
+    # distinct inside and outside addresses, from the per-host and per-address totals
+    h = ch(f"SELECT uniqExactIf(cityHash64(int_ip), cur) AS c, uniqExactIf(cityHash64(int_ip), NOT cur) AS p FROM {both('int_ip')}", p, fmt='JSON')[0]
+    e = ch(f"SELECT uniqExactIf(cityHash64(ext_ip), cur) AS c, uniqExactIf(cityHash64(ext_ip), NOT cur) AS p FROM {both('ext_ip')}", p, fmt='JSON')[0]
+    r.update(hosts=int(h['c']), p_hosts=int(h['p']), ips=int(h['c']) + int(e['c']), p_ips=int(h['p']) + int(e['p']))
+    if r['oldest'] and r['oldest'] % rollups.BUCKET == 0:    # a rollup's bucket: the first record in it
+        p['ob'] = r['oldest']
+        first = ch(f"SELECT toUnixTimestamp(min(ts)) AS t, count() AS n FROM flows WHERE {where.replace('ts >= toDateTime({t0:UInt32})', 'ts >= toDateTime({ob:UInt32})', 1)} "
+                   f"AND ts < toDateTime({{ob:UInt32}}) + {rollups.CUT}", p, fmt='JSON')
+        if first and int(first[0]['n']):
+            r['oldest'] = int(first[0]['t'])
+    top = ch(f"SELECT service AS k, sum(bytes) AS b FROM {src(p, ['service'])} GROUP BY k ORDER BY b DESC LIMIT 1", p, fmt='JSON')
     # history starts when the collector started receiving (late-exported flows can carry older timestamps)
     started = ch("SELECT toUnixTimestamp(min(ts)) - 60 AS t FROM exporter_stats", fmt='JSON')
     if started and int(started[0]['t']) > 0:
@@ -357,13 +388,14 @@ def api_series(q):
         top = q1(q, 'top', '7', int)
         p['top'] = max(1, min(top, 20))
         col = DIMS[by]
-        rows = ch(f"""WITH (SELECT groupArray(k) FROM (SELECT toString({col}) AS k FROM flows WHERE {where} GROUP BY k ORDER BY sum(bytes) DESC LIMIT {{top:UInt8}})) AS tops
+        s = src(p, [col], bucketed=True)
+        rows = ch(f"""WITH (SELECT groupArray(k) FROM (SELECT toString({col}) AS k FROM {s} GROUP BY k ORDER BY sum(bytes) DESC, k LIMIT {{top:UInt8}})) AS tops
             SELECT {bucket} AS t, if(has(tops, toString({col})), toString({col}), '__other') AS k, sum(bytes) AS b
-            FROM flows WHERE {where} GROUP BY t, k ORDER BY t""", p, fmt='JSON')
+            FROM {s} GROUP BY t, k ORDER BY t, k""", p, fmt='JSON')
         return {'step': step, 'range': rng, 'from': p['t0'], 'to': p['t1'], 'rows': [[int(r['t']), r['k'], int(r['b'])] for r in rows]}
     rows = ch(f"""SELECT {bucket} AS t, sumIf(bytes, dir = 'down') AS dn, sumIf(bytes, dir IN ('up', 'internal')) AS up,
-            sumIf(bytes, dir NOT IN ('up', 'down')) AS other, count() AS fl
-        FROM flows WHERE {where} GROUP BY t ORDER BY t""", p, fmt='JSON')
+            sumIf(bytes, dir NOT IN ('up', 'down')) AS other, sum(flows) AS fl
+        FROM {src(p, [], bucketed=True)} GROUP BY t ORDER BY t""", p, fmt='JSON')
     return {'step': step, 'range': rng, 'from': p['t0'], 'to': p['t1'], 'rows': [[int(r['t']), int(r['dn']), int(r['up']), int(r['other']), int(r['fl'])] for r in rows]}
 
 
@@ -388,12 +420,13 @@ def attrs(rows, keys, what, where, p, cols=None):
     cols = cols or keys
     p = dict(p, **{f'a{i}': [r[k] for r in rows] for i, k in enumerate(keys)})
     cond = ' AND '.join(f'{c} IN {{a{i}:Array(String)}}' for i, c in enumerate(cols))
+    s = src(p, list(cols) + what.split(', '))       # the per-address totals hold the attributes too
     got = {}
-    for x in ch(f"SELECT {', '.join(cols)}, {what} FROM flows WHERE {where} AND {cond} LIMIT {20 * len(rows)}", p, fmt='JSON'):
+    for x in ch(f"SELECT {', '.join(cols)}, {what} FROM {s} AND {cond} LIMIT {20 * len(rows)}", p, fmt='JSON'):
         got.setdefault(tuple(x[c] for c in cols), x)
     if len(got) < len({tuple(r[k] for k in keys) for r in rows}):
         agg = ', '.join(f'any({w}) AS {w}' for w in what.split(', '))
-        for x in ch(f"SELECT {', '.join(cols)}, {agg} FROM flows WHERE {where} AND {cond} GROUP BY {', '.join(cols)}", p, fmt='JSON'):
+        for x in ch(f"SELECT {', '.join(cols)}, {agg} FROM {s} AND {cond} GROUP BY {', '.join(cols)}", p, fmt='JSON'):
             got.setdefault(tuple(x[c] for c in cols), x)
     for r in rows:
         for k, v in got.get(tuple(r[k] for k in keys), {}).items():
@@ -431,12 +464,12 @@ def api_top(q):
             r['name'] = NAMES.get(r['int_ip'])
     elif dim == 'host_svc':     # each inside host with its main service and L7 protocol
         rows, totals = ch_totals(f"""SELECT int_ip AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
-                count() AS fl, 0 AS pk
-            FROM flows WHERE {where} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+                sum(flows) AS fl, 0 AS pk
+            FROM {src(p, ['int_ip'])} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
         if rows:                # the main service / L7 / protocol of the hosts shown (per host x service of a whole day
             p['hs'] = [r['k'] for r in rows]                                   # did not fit into memory)
             main = {x['k']: x for x in ch(f"""SELECT k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto
-                FROM (SELECT int_ip AS k, service, l7, proto, sum(bytes) AS b FROM flows WHERE {where} AND int_ip IN {{hs:Array(String)}}
+                FROM (SELECT int_ip AS k, service, l7, proto, sum(bytes) AS b FROM {src(p, ['int_ip', 'service', 'l7', 'proto'])} AND int_ip IN {{hs:Array(String)}}
                       GROUP BY k, service, l7, proto) GROUP BY k""", p, fmt='JSON')}
             for r in rows:
                 r.update({c: main.get(r['k'], {}).get(c, d) for c, d in (('service', ''), ('l7', ''), ('proto', 0))})
@@ -454,18 +487,24 @@ def api_top(q):
             r['name'] = NAMES.get(r['k'])
     elif dim in DIMS:
         col = DIMS[dim]
-        extra = ''
+        extra, cols = '', [col]
         if dim == 'asn':
-            extra = ', any(as_org) AS as_org, any(country) AS country'
+            extra, cols = ', any(as_org) AS as_org, any(country) AS country', [col, 'as_org', 'country']
         elif dim == 'service':
-            extra = ', uniqExact(cityHash64(int_ip)) AS hosts, any(l7) AS l7'
+            extra, cols = ', uniqExact(cityHash64(int_ip)) AS hosts, any(l7) AS l7', [col, 'int_ip', 'l7']
         elif dim == 'city':
-            extra = ', any(country) AS country, any(lat) AS la, any(lon) AS lo'
-        elif dim == 'ext_port':
-            extra = ', any(l7) AS l7, any(proto) AS proto_n, uniqExact(cityHash64(int_ip)) AS hosts, uniqExact(cityHash64(ext_ip)) AS peers, any(service) AS service'
+            extra, cols = ', any(country) AS country, any(lat) AS la, any(lon) AS lo', [col, 'country', 'lat', 'lon']
+        elif dim == 'ext_port':     # its hosts and peers: below, for the ports shown
+            extra, cols = ', any(l7) AS l7, any(proto) AS proto_n, any(service) AS service', [col, 'l7', 'proto', 'service']
         rows, totals = ch_totals(f"""SELECT toString({col}) AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
-                count() AS fl, sum(packets) AS pk {extra}
-            FROM flows WHERE {where} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+                sum(flows) AS fl, sum(packets) AS pk {extra}
+            FROM {src(p, cols)} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+        if dim == 'ext_port' and rows:
+            p['ports'] = [int(r['k']) for r in rows]
+            hp = {str(x['k']): x for x in ch(f"""SELECT ext_port AS k, uniqExact(cityHash64(int_ip)) AS hosts, uniqExact(cityHash64(ext_ip)) AS peers
+                FROM flows WHERE {where} AND ext_port IN {{ports:Array(UInt64)}} GROUP BY k""", p, fmt='JSON')}
+            for r in rows:
+                r.update(hosts=int(hp.get(r['k'], {}).get('hosts', 0)), peers=int(hp.get(r['k'], {}).get('peers', 0)))
         if dim == 'ext_ip':     # 200k+ outside addresses a day: what each one is, only for those shown
             attrs(rows, ('k',), 'service, country, city, asn, as_org', where, p, cols=('ext_ip',))
         if dim == 'int_ip':
@@ -626,8 +665,11 @@ def api_live(q):
 def api_geo(q):
     where, p, rng, step = scope(q)
     where, live = live_window(q, where, p, default='0')
-    rows = ch(f"""SELECT exporter, country, city, any(lat) AS la, any(lon) AS lo, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl
-        FROM flows WHERE {where} AND lat != 0 GROUP BY exporter, country, city ORDER BY up + dn DESC LIMIT 300""", p, fmt='JSON')
+    # the live window is 2 minutes of records; a period comes from the per-city totals (has_ll = has coordinates)
+    frm = f'flows WHERE {where} AND lat != 0' if live else f"{src(p, ['exporter', 'country', 'city', 'has_ll', 'lat', 'lon'])} AND has_ll"
+    rows = ch(f"""SELECT exporter, country, city, any(lat) AS la, any(lon) AS lo, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
+            {'count()' if live else 'sum(flows)'} AS fl
+        FROM {frm} GROUP BY exporter, country, city ORDER BY up + dn DESC, exporter, country, city LIMIT 300""", p, fmt='JSON')
     for r in rows:
         r['up'], r['dn'], r['fl'] = int(r['up']), int(r['dn']), int(r['fl'])
     return {'rows': rows, 'live': live, 'window': p.get('win', 0), 'window_end': p.get('wend', 0)}

@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ftcore  # noqa: E402
+import rollups  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, service_name)
 
@@ -548,8 +549,24 @@ class Receiver:
                 if days != getattr(self, 'retention_target', None) or raised:
                     log(f'flow details kept {days} days' + (f' ({raised:,} stored records raised to it)' if raised else ''))
                 self.retention_target, self.retention_checked = days, now
+                self.retention_ready.set()
             except (CHError, OSError) as ex:
                 log(f'WARN could not apply the retention of flows: {ex}')
+
+    def rollups(self):
+        """Pre-aggregated tables for long periods (rollups.py): created at the first start of 1.3.3, then the history
+        is filled in the background, newest day first; receiving goes on meanwhile. The history waits for the first
+        retention run: an install from before 1.3.1 gets every record's days there first (the rollups take them over,
+        and must not expire before the records they sum up)."""
+        for attempt in range(30):
+            try:
+                rollups.ensure(log)
+                self.retention_ready.wait()
+                rollups.backfill(log)
+                return
+            except (CHError, OSError) as ex:
+                log(f'WARN rollups: {str(ex)[:200]} — trying again in a minute')
+                time.sleep(60)
 
     @staticmethod
     def license_checkins():
@@ -587,8 +604,10 @@ class Receiver:
         ed = edition()
         log(f"FlowTrack {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
         self.retention_lock = threading.Lock()   # moving a big table from before 1.3.1 takes a while: receive meanwhile
+        self.retention_ready = threading.Event()  # set after the first successful run (rollups' history waits for it)
         threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()
         threading.Thread(target=self.license_checkins, name='license-checkin', daemon=True).start()
+        threading.Thread(target=self.rollups, name='rollups', daemon=True).start()
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:

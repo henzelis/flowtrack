@@ -3,6 +3,28 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.3.3 — 2026-10-08
+
+Pages over hours and days read pre-aggregated totals instead of every flow record.
+
+- **Rollup tables.** The collector keeps 5-minute totals per device × direction × service / application / protocol /
+  country / AS, × port, × city, × inside host, and hourly totals per host × service and per outside address. They
+  fill themselves as records arrive (materialized views) and are kept exactly as long as the records they sum.
+  Overview, Top lists, trends by dimension and the period map read whole buckets from them and only the edges of a
+  period from the records, so every number stays exact. Conversations, flows, paths and the host page still read
+  the records. Measured on 40 million synthetic records a day, 4 vCPUs: Overview 24 h reads 191 million rows instead
+  of 353 million, 21 CPU-seconds instead of 31–35, ready in ~6 s instead of ~9 s; the remaining time is mostly Top
+  conversations.
+- **Upgrade from any earlier version** (including 1.2 and older, whose records first get their retention per record):
+  on its first start 1.3.3 creates the tables, which fill from the next bucket boundary on (5 minutes, or the next
+  full hour for the hourly ones), and then adds the stored history in the background, newest day first, while
+  receiving goes on. Until a day is in, pages read it from the records as before. A restart in the middle of it
+  redoes the unfinished day (nothing is counted twice).
+- **Disk:** the totals add about a fifth to the records on a typical network (measured on a small office: 2.1 MB next
+  to 10.6 MB of records), up to two thirds where hosts talk to very many different outside addresses.
+- The period map lists places with equal traffic in a fixed order (it could change between two loads).
+- `FT_ROLLUPS=0` in `/etc/flowtrack/env` makes the web API read only the records (for comparisons).
+
 ## 1.3.2 — 2026-10-07
 
 Faster pages over long periods on busy networks (reported: a VM with 4 CPUs and 8 GB of RAM, ~720 records/s, 40

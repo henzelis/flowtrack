@@ -242,6 +242,8 @@ def ch(query, params=None, data=None, fmt=None, timeout=30, raw=False, settings=
     qs = {'database': CH_DB, 'prefer_column_name_to_alias': '1'}
     qs.update({k: str(v) for k, v in (settings or {}).items()})
     for k, v in (params or {}).items():
+        if k.startswith('_'):                # the caller's own notes (api.scope), not query parameters
+            continue
         if isinstance(v, (list, tuple)):     # Array(String) literal, or Array(UInt64) for numbers
             v = '[' + ','.join(str(x) if isinstance(x, int) else "'" + str(x).replace('\\', '\\\\').replace("'", "\\'") + "'" for x in v) + ']'
         qs['param_' + k] = v if isinstance(v, str) else str(v)
@@ -465,6 +467,12 @@ def flows_keep_days(days):
     n = int(ch(f'SELECT count() AS n FROM flows WHERE keep_days < {days}', fmt='JSON')[0]['n'])
     if n:
         ch(f'ALTER TABLE flows UPDATE keep_days = {days} WHERE keep_days < {days}')
+    try:                    # the 5-minute totals of those records are kept as long (rollups.py, 1.3.3)
+        import rollups
+        if rollups.ready_from() is not None:
+            rollups.raise_keep_days(days)
+    except CHError:
+        pass
     return n
 
 

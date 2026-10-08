@@ -100,7 +100,8 @@ are logged to `/var/log/flowtrack-install.log`. The manual steps below do the sa
 - Linux host reachable from the exporters (UDP 2055), Python 3.10+, Docker (for ClickHouse).
 - Disk: measured about 22 bytes per flow record after ClickHouse compression (~4.5×), i.e. roughly
   25 MB per million records. A small office exporting ~5 records/s needs about 300 MB for the 30-day
-  raw retention.
+  raw retention. The pre-aggregated totals that make long periods fast (1.3.3) add about a fifth of that on a typical
+  network, up to two thirds where hosts talk to very many different outside addresses.
 
 ## Manual install
 
@@ -385,6 +386,7 @@ up to 5,000 records/s (see [Editions](#editions)).
 | `collector.py` | NetFlow v5/v9 + IPFIX listener, enrichment, batched inserts into ClickHouse |
 | `api.py`, `auth.py` | JSON API, users and sessions, static web server |
 | `common.py`, `schema.sql` | ClickHouse client, GeoIP/ASN/service enrichment; database schema |
+| `rollups.py` | 5-minute and hourly totals for long periods: tables, filling the history, which one a query reads |
 | `web/` | the web UI (plain HTML/CSS/JS, ECharts vendored — no build step) |
 | `deploy/` | systemd units, GeoIP refresh, configuration examples |
 | `install.sh` | the one-line installer |
