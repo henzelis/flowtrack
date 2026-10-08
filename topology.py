@@ -195,7 +195,7 @@ def build(cfg, near, ifaces, exporting, pairs=()):
             if (d, w) in facing:         # a WAN interface towards another device: the internet is beyond that one
                 continue
             v = vol.get((d, w), {})
-            links.append({'a': d, 'b': INTERNET, 'a_if': w, 'b_if': None, 'state': 'observed' if d in exporting else 'unobserved',
+            links.append({'a': d, 'b': INTERNET, 'a_if': w, 'b_if': None, 'state': ('observed' if int(v.get('out_bytes', 0)) + int(v.get('in_bytes', 0)) else 'adjacent') if d in exporting else 'unobserved',
                           'evidence': 'wan', 'a_addr': (cfg.get(d, {}).get('if_addrs', {}).get(str(w)) or [''])[0], 'b_addr': '', 'net': '',
                           'a_out': int(v.get('out_bytes', 0)), 'a_in': int(v.get('in_bytes', 0)), 'b_out': 0, 'b_in': 0,
                           'a_dir': {k: int(v.get(k, 0)) for k in ('up', 'down', 'internal')}, 'b_dir': {}})

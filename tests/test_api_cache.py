@@ -58,3 +58,22 @@ class Cache(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NetworkScope(unittest.TestCase):
+    """Path analysis: no device filter, all traffic, a host filter matches the host at either end (internal records
+    carry the sender in int_ip, so `ip` alone would drop the replies)."""
+
+    def test_host_both_directions(self):
+        flt = '[{"k":"ip","v":"10.20.0.5"},{"k":"device","v":"192.0.2.1"},{"k":"port","v":"22"}]'
+        where, p, _, _ = api.scope(api.network_q({'range': ['1h'], 'f': [flt]}))
+        self.assertIn('(int_ip = {f0:String} OR ext_ip = {f0:String})', where)
+        self.assertEqual(p['f0'], '10.20.0.5')
+        self.assertNotIn('exporter', where)
+        self.assertNotIn('dir', where)
+        self.assertIn('ext_port = {f1:UInt16}', where)
+
+    def test_other_pages_keep_the_inside_host(self):
+        where, _, _, _ = api.scope({'range': ['1h'], 'f': ['[{"k":"ip","v":"10.20.0.5"}]']})
+        self.assertIn('int_ip = {f0:String}', where)
+        self.assertNotIn('ext_ip', where)

@@ -297,6 +297,11 @@ class Collector:
             nat_ip, nat_port = '', 0
         if nat_ip in ('0.0.0.0', '::'):
             nat_ip, nat_port = '', 0
+        # arriving through destination NAT (MikroTik's replies to masqueraded hosts, a FortiGate VIP): the record's
+        # destination is the public address, the translated one is the inside host — keep the inside host as int_ip and
+        # the public address as nat_ip, as for outgoing records
+        if d == 'down' and nat_ip and nat_ip != ii[0] and is_private(nat_ip) and not is_private(ii[0]):
+            ii, (nat_ip, nat_port) = (nat_ip, nat_port), ii
 
         country, city, lat, lon, asn, as_org = self.geo.lookup(ei[0])
         l7, port_service = classify_l7(proto, ei[1])

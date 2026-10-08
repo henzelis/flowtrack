@@ -3,6 +3,22 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.4.1 — 2026-10-08
+
+- **A host filter shows what the host sent AND what it received, on every page.** Between two inside networks a
+  record names the sender as the inside host, so `host: X` kept only what X sent: the replies to an SSH session or
+  a web page opened from X were missing and "received" showed 0. With one host chosen, the pages now read every
+  record from that host's side — sent and received, the peers as destinations, the conversations both ways; in
+  *Flows* a received record shows ←. Excluding a host (`-ip:X`) leaves it out at either end. With a host chosen
+  the pages read the flow records, not the 5-minute totals.
+- **The inside host of traffic arriving through destination NAT.** MikroTik exports the replies to masqueraded
+  hosts (and FortiGate the traffic to a VIP) with the public address as the destination and the inside host in the
+  NAT field, so that traffic counted for the router's public address instead of the host. The collector now keeps
+  the inside host and puts the public address into the NAT field, as for outgoing traffic. Records collected before
+  the upgrade stay as they were.
+- Path analysis: a host filter takes the host's packets in both directions; an internet link without traffic in the
+  period is drawn as "no traffic" instead of "observed".
+
 ## 1.4.0 — 2026-10-08
 
 - **Path analysis** — a new page next to *Through device*: traffic across several devices instead of one.

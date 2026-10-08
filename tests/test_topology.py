@@ -53,6 +53,9 @@ class Subnets(unittest.TestCase):
         ifs = [iface(A, 9, 1000, 500), iface(B, 1, 500, 1600)]      # B's interface also carries other traffic
         self.assertEqual(links(T.build(self.cfg, [], ifs, {A, B}))[frozenset((A, B))]['state'], 'observed')
 
+    def test_internet_without_traffic(self):
+        self.assertEqual(links(T.build(self.cfg, [], [iface(A, 9, 10, 10)], {A, B}))[frozenset((A, T.INTERNET))]['state'], 'adjacent')
+
     def test_adjacent_without_traffic(self):
         self.assertEqual(links(T.build(self.cfg, [], [], {A, B}))[frozenset((A, B))]['state'], 'adjacent')
 

@@ -207,15 +207,15 @@ RAW_EXPR = {'has_ll': 'lat != 0'}       # rollup key columns that are expression
 _TYPES = {c: t for r in ROLLUPS.values() for c, t, *_ in r['keys'] + r['attrs']}
 
 
-def source(cols, t0, t1, flt_cols, use=True, step=None):
+def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
     """FROM-expression for a query over [t0, t1) (t1 None = up to now) that groups by or shows `cols` (a rollup's
     attributes only through any()) and filters on `flt_cols`; `step`: a time series' step (a rollup only when its
     bucket divides it). -> (sql, rollup name or None). Rows have ts, exporter, dir, `cols`, the filter columns,
     bytes, packets and flows (records), so a query sums `flows` instead of count(). The period is inside; the
-    filters stay with the caller."""
+    filters stay with the caller. `table`: what the records are read from (api.host_view for a chosen host)."""
     cols = list(dict.fromkeys(list(cols) + [c for c in flt_cols]))
     rcols = ', '.join(['ts', 'exporter', 'dir'] + [f'{RAW_EXPR[c]} AS {c}' if c in RAW_EXPR else c for c in cols if c not in ('exporter', 'dir')])
-    raw = lambda cond: f"SELECT {rcols}, bytes, packets, toUInt64(1) AS flows FROM flows WHERE {cond}"   # noqa: E731
+    raw = lambda cond: f"SELECT {rcols}, bytes, packets, toUInt64(1) AS flows FROM {table} WHERE {cond}"   # noqa: E731
     end = f' AND ts < toDateTime({int(t1)})' if t1 else ''
     whole = '(' + raw(f'ts >= toDateTime({int(t0)}){end}') + ')'
     if not use:
