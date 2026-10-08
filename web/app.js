@@ -430,7 +430,7 @@ function globe(el, geo){
 
 // ===================== shared UI =====================
 const NAV = [
-  ['overview',T('Overview','Огляд'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows','Потоки'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device','Через пристрій'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 5 6 5M6 14c3 0 3-10 6-10M6 9h6'], ['talkers',T('Top hosts','Топ хостів'),'M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
+  ['overview',T('Overview','Огляд'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows','Потоки'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device','Через пристрій'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 5 6 5M6 14c3 0 3-10 6-10M6 9h6'], ['network',T('Path analysis','Аналіз шляху'),'M9 2.5a2 2 0 1 0 0 .01M3.5 13a2 2 0 1 0 0 .01M14.5 13a2 2 0 1 0 0 .01M8 4.5L4.5 11M10 4.5l3.5 6.5M5.5 13h7'], ['talkers',T('Top hosts','Топ хостів'),'M6 7a2.5 2.5 0 1 0 0-.01M2 15c0-2.5 2-4 4-4s4 1.5 4 4M13 8a2 2 0 1 0 0-.01M11.5 15c.3-2 1.3-3 3-3'],
   ['apps',T('Services','Сервіси'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports','Порти'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation','Геолокація'),'M9 16s5-4.5 5-8.5A5 5 0 0 0 4 7.5C4 11.5 9 16 9 16zM9 9a1.6 1.6 0 1 0 0-.01'],
   ['threats',T('Events','Події'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'],
   ['settings',T('Settings','Налаштування'),'M9 6.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5zM9 1.5v2M9 14.5v2M1.5 9h2M14.5 9h2M3.7 3.7l1.4 1.4M12.9 12.9l1.4 1.4M3.7 14.3l1.4-1.4M12.9 5.1l1.4-1.4'],
@@ -892,6 +892,267 @@ function vPaths(){
     try { draw(await load()); } catch (e) { fill('pTable', errBox(e)); }
     if (live) every(10000, () => load().then(d => { if (seq === renderSeq) draw(d); }).catch(() => {}));
   })().catch(e => fill('cPaths', errBox(e)));
+}
+// ===================== path analysis: layer-3 neighbours of a device and the path of traffic across devices =====================
+const LINK_STATE = {
+  observed:[T('Observed', 'Видно'), T('traffic recorded by both ends', 'трафік записали обидва кінці')],
+  gap:[T('Gap', 'Розрив'), T('one end sent much more than the other received', 'один кінець відправив значно більше, ніж інший отримав')],
+  unobserved:[T('No observation', 'Не спостерігається'), T('the other end sends no NetFlow', 'інший кінець не надсилає NetFlow')],
+  one_sided:[T('One side', 'З одного боку'), T('the interface of the other end towards this one is not known', 'інтерфейс іншого кінця в цей бік невідомий')],
+  adjacent:[T('No traffic', 'Без трафіку'), T('neighbours by addressing, no traffic in the period', 'сусіди за адресацією, трафіку за період немає')]};
+const HOP_STATE = {observed:T('recorded', 'записав'), gap:T('recorded nothing — gap', 'нічого не записав — розрив'), unobserved:T('sends no NetFlow', 'не надсилає NetFlow'),
+  internet:T('the internet', 'інтернет'), branch:T('on another exit', 'на іншому виході'), unplaced:T('recorded it, place on the path unknown', 'записав, місце на шляху невідоме')};
+const RED = '#FF5C7A';
+const devIcon = n => n.ip === 'internet' ? ICO.globe : DEV_ICON;
+function createTopoMap(host, opts){
+  host.innerHTML = '<div class="netin"><canvas></canvas><div class="rtip" hidden></div></div>';
+  const box = host.firstChild, cv = box.querySelector('canvas'), tip = box.querySelector('.rtip'), ctx = cv.getContext('2d');
+  let W = 0, H = 0, dpr = 1, data = null, hover = null, shapes = [], centred = null, GAP = 184;
+  const CW = 136, CH = 74, SAT = 44;      // card size, internet chip above a card; GAP: room between columns for the interface labels
+  function size(){ const r = host.getBoundingClientRect(); H = r.height; dpr = Math.min(2, devicePixelRatio || 1); draw(); }
+  const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
+  const rr = (x, y, w, h, r) => { const p = new Path2D(); p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r); p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath(); return p; };
+  const clip = (str, font, max) => { ctx.font = font; str = String(str || ''); if (ctx.measureText(str).width <= max) return str; while (str.length > 2 && ctx.measureText(str + '…').width > max) str = str.slice(0, -1); return str + '…'; };
+  const vol = l => l.a_out + l.a_in + l.b_out + l.b_in;
+  // columns: the Point of View in the middle, its internet and the busiest neighbours to the right, the rest to the left;
+  // a device further away keeps the side of the one it is reached through. The internet of any other device is a chip
+  // above its card (one shared Internet node would tie the picture into knots).
+  function layout(){
+    const pov = data.pov, adj = new Map(), hop = new Map(data.nodes.map(n => [n.ip, n.hop]));
+    data.links.forEach(l => { if (l.b === 'internet') return; for (const [a, b] of [[l.a, l.b], [l.b, l.a]]) { if (!adj.has(a)) adj.set(a, []); adj.get(a).push({n:b, l}); } });
+    const col = new Map([[pov, 0]]), parent = new Map(), seen = new Set([pov]);
+    const povNet = data.links.some(l => l.a === pov && l.b === 'internet');
+    if (povNet) { col.set('internet', 1); parent.set('internet', pov); }
+    let right = povNet ? 1 : 0, left = 0;
+    const first = (adj.get(pov) || []).sort((x, y) => vol(y.l) - vol(x.l));
+    for (const x of first) { if (seen.has(x.n)) continue; seen.add(x.n); const s = right <= left ? 1 : -1; s > 0 ? right++ : left++; col.set(x.n, s); parent.set(x.n, pov); }
+    let frontier = first.map(x => x.n);
+    while (frontier.length) { const next = [];
+      for (const p of frontier) for (const x of (adj.get(p) || []).sort((u, v) => vol(v.l) - vol(u.l))) if (!seen.has(x.n) && hop.has(x.n)) {
+        seen.add(x.n); col.set(x.n, col.get(p) + Math.sign(col.get(p))); parent.set(x.n, p); next.push(x.n); }
+      frontier = next; }
+    const cols = [...new Set(col.values())].sort((a, b) => a - b), lo = cols[0], hi = cols[cols.length - 1];
+    // the room between columns shrinks to 120 px before the map scrolls sideways
+    const avail = host.clientWidth;
+    GAP = hi === lo ? 184 : Math.max(120, Math.min(220, (avail - 28 - (hi - lo + 1) * CW) / (hi - lo)));
+    W = Math.max(avail, (hi - lo + 1) * CW + (hi - lo) * GAP + 28);
+    const x0 = 14 + CW / 2, x1 = W - 14 - CW / 2, xs = c => hi === lo ? W / 2 : x0 + (x1 - x0) * (c - lo) / (hi - lo);
+    const sat = new Set(data.links.filter(l => l.b === 'internet' && l.a !== pov).map(l => l.a));
+    const pos = new Map();
+    // the middle column first, then outwards: each column ordered by its parents' height, then centred on them
+    for (const c of [...cols].sort((a, b) => Math.abs(a) - Math.abs(b) || b - a)) {
+      const list = [...col.keys()].filter(n => col.get(n) === c).sort((a, b) => ((pos.get(parent.get(a)) || {}).y || 0) - ((pos.get(parent.get(b)) || {}).y || 0));
+      const hs = list.map(n => CH + (sat.has(n) ? SAT : 0)), room = H - 24, total = hs.reduce((s, h) => s + h, 0), gap = Math.min(56, Math.max(8, (room - total) / Math.max(1, list.length)));
+      let y = (H - total - gap * (list.length - 1)) / 2;
+      const ys = list.map((n, k) => { const top = y + (sat.has(n) ? SAT : 0); y += hs[k] + gap; return top + CH / 2; });
+      if (c !== 0 && list.length) {
+        const want = list.reduce((s, n) => s + ((pos.get(parent.get(n)) || {y:H / 2}).y), 0) / list.length, cur = ys.reduce((s, v) => s + v, 0) / ys.length;
+        const d = Math.max(12 + (sat.has(list[0]) ? SAT : 0) + CH / 2 - ys[0], Math.min(H - 12 - CH / 2 - ys[ys.length - 1], want - cur));
+        ys.forEach((v, k) => ys[k] = v + d);
+      }
+      list.forEach((n, k) => pos.set(n, {x:xs(c), y:ys[k], w:CW, h:CH, c}));
+    }
+    return {pos, sat};
+  }
+  function draw(){
+    if (!H) return;
+    if (!data) { W = host.clientWidth; return; }
+    const {pos, sat} = data.nodes.length ? layout() : {pos:new Map(), sat:new Set()};
+    if (!data.nodes.length) W = host.clientWidth;
+    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr;
+    if (centred !== data.pov && pos.has(data.pov)) { centred = data.pov; host.scrollLeft = Math.max(0, pos.get(data.pov).x - host.clientWidth / 2); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
+    ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
+    if (!data.nodes.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No device has sent data yet', 'Ще жоден пристрій не надіслав дані'), W / 2, H / 2); return; }
+    const node = new Map(data.nodes.map(n => [n.ip, n])), onPath = opts.pathSet ? opts.pathSet() : null;
+    const v = x => state.scale === 'lin' ? x : Math.sqrt(x);
+    const vmax = Math.max(1e-9, ...data.links.map(l => v(Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in))));
+    const lw = x => x > 0 ? 2 + 14 * v(x) / vmax : 0;
+    const nm = d => esc(d === 'internet' ? T('Internet', 'Інтернет') : (node.get(d) || {}).name || d);
+    // a ribbon of three strands (from the internet, to the internet, internal) along a path, as one end measured it
+    const ribbon = (curve, l, w, horizontal) => {
+      const dirs = l.a_dir.up + l.a_dir.down + l.a_dir.internal >= ((l.b_dir || {}).up || 0) + ((l.b_dir || {}).down || 0) + ((l.b_dir || {}).internal || 0) ? l.a_dir : l.b_dir;
+      const parts = [[dirs.down || 0, C.down], [dirs.up || 0, C.up], [dirs.internal || 0, C.int]].filter(x => x[0] > 0), sum = parts.reduce((s, x) => s + x[0], 0) || 1;
+      let off = -w / 2;
+      for (const [val, colr] of parts) { const sw = Math.max(1.2, w * val / sum);
+        ctx.strokeStyle = hexA(colr, hover && hover.l === l ? 1 : .82); ctx.lineWidth = sw; ctx.shadowColor = hexA(colr, .55); ctx.shadowBlur = 10; ctx.stroke(curve(off + sw / 2)); off += sw; }
+      ctx.shadowBlur = 0;
+    };
+    const pill = (text, x, y, colr) => { ctx.font = '700 11px Manrope, sans-serif'; const tw = ctx.measureText(text).width + 14;
+      ctx.fillStyle = 'rgba(8,16,40,.92)'; ctx.fill(rr(x - tw / 2, y - 9, tw, 18, 9)); ctx.strokeStyle = hexA(colr, .6); ctx.lineWidth = 1; ctx.stroke(rr(x - tw / 2, y - 9, tw, 18, 9));
+      ctx.fillStyle = colr; ctx.textAlign = 'center'; ctx.fillText(text, x, y + .5); };
+    const stateLook = l => l.state === 'adjacent' ? ['rgba(170,190,230,.55)', T('no traffic', 'без трафіку')] : l.state === 'gap' || l.state === 'unobserved' ? [RED, '⨯ ' + LINK_STATE[l.state][0]] : null;
+    const tipOf = l => `<b>${nm(l.a)} ${esc(l.a_name)} ↔ ${nm(l.b)} ${esc(l.b_name)}</b>${l.net ? ` <span class="nat">${esc(l.net)}</span>` : ''}<div style="color:${l.state === 'observed' ? C.ext : l.state === 'adjacent' || l.state === 'one_sided' ? C.ink2 : RED}">${LINK_STATE[l.state][0]} — ${LINK_STATE[l.state][1]}</div>`
+      + (l.b === 'internet' ? `<div>${T('to the internet', 'в інтернет')}: <b class="mono">${fmtB(l.a_out)}</b> · ${T('from it', 'з нього')}: <b class="mono">${fmtB(l.a_in)}</b></div>`
+        : [[l.a, l.b, l.a_out, l.b_in], [l.b, l.a, l.b_out, l.a_in]].map(([f, t, s, g]) => `<div>${nm(f)} → ${nm(t)}: <b class="mono">${fmtB(s)}</b> ${T('sent', 'відправив')} · <b class="mono">${fmtB(g)}</b> ${T('received', 'отримав')}</div>`).join(''));
+    // where each link meets a card: links on the same side of a card are spread over its height, ordered by the far end
+    const ends = new Map(), anchor = new Map();
+    for (const l of data.links) { const A = pos.get(l.a), B = pos.get(l.b); if (!A || !B) continue;
+      for (const [me, other, P, Q] of [[l.a, l.b, A, B], [l.b, l.a, B, A]]) { const k = me + (Q.x > P.x ? '>R' : '>L'); if (!ends.has(k)) ends.set(k, []); ends.get(k).push({l, me, y:Q.y}); } }
+    for (const list of ends.values()) { list.sort((a, b) => a.y - b.y); const n = list.length, spread = Math.min(CH - 28, 16 * (n - 1));
+      list.forEach((e, k) => anchor.set(e.l, {...anchor.get(e.l), [e.me === e.l.a ? 'a' : 'b']:{dy:n === 1 ? 0 : -spread / 2 + spread * k / (n - 1), first:k === 0, last:k === n - 1, n}})); }
+    const labels = [];
+    for (const l of data.links) {
+      const A = pos.get(l.a), B = pos.get(l.b);
+      const dim = onPath && !(onPath.has(l.a) && (onPath.has(l.b) || l.b === 'internet'));
+      const w = lw(Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in)), look = stateLook(l);
+      ctx.globalAlpha = dim ? .15 : 1;
+      if (l.b === 'internet' && sat.has(l.a) && A) {
+        // the device's own internet: a chip above its card
+        const x = A.x, yb = A.y - A.h / 2, yt = yb - SAT + 13, curve = off => { const p = new Path2D(); p.moveTo(x + off, yb); p.lineTo(x + off, yt + 9); return p; };
+        if (w) ribbon(curve, l, Math.min(w, 12), false);
+        ctx.font = '700 11px Manrope, sans-serif'; const tw = ctx.measureText(T('Internet', 'Інтернет')).width + 34, chip = rr(x - tw / 2, yt - 9, tw, 20, 10);
+        ctx.fillStyle = 'rgba(14,26,60,.95)'; ctx.fill(chip); ctx.strokeStyle = 'rgba(46,229,157,.5)'; ctx.lineWidth = 1; ctx.stroke(chip);
+        ctx.save(); ctx.translate(x - tw / 2 + 5, yt - 7); ctx.scale(.85, .85); ctx.strokeStyle = C.ext; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
+        ctx.fillStyle = C.ink2; ctx.textAlign = 'left'; ctx.fillText(T('Internet', 'Інтернет'), x - tw / 2 + 24, yt + 1);
+        ctx.font = '600 10.5px JetBrains Mono, monospace'; ctx.fillStyle = C.ink3; ctx.fillText(clip(l.a_name, ctx.font, GAP / 2), x + tw / 2 + 6, yt + 1);
+        ctx.globalAlpha = 1;
+        const hit = new Path2D(); hit.moveTo(x, yb); hit.lineTo(x, yt); shapes.push({stroke:hit, sw:14, l, tip:tipOf(l)}, {path:chip, l, tip:tipOf(l)});
+        continue;
+      }
+      if (!A || !B) { ctx.globalAlpha = 1; continue; }
+      const L = A.x <= B.x ? A : B, R = L === A ? B : A, flip = L !== A, an = anchor.get(l) || {}, ea = (flip ? an.b : an.a) || {dy:0, n:1}, eb = (flip ? an.a : an.b) || {dy:0, n:1};
+      const xa = L.x + L.w / 2, xb = R.x - R.w / 2, ya = L.y + ea.dy, yb = R.y + eb.dy, xm = (xa + xb) / 2;
+      const curve = off => { const p = new Path2D(); p.moveTo(xa, ya + off); p.bezierCurveTo(xm, ya + off, xm, yb + off, xb, yb + off); return p; };
+      if (w && l.state !== 'adjacent') ribbon(curve, l, w, true);
+      if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? w / 2 + 4 : 0)); ctx.setLineDash([]); }
+      // interface · address at each end, on the side the ribbon bends away from (two lines when one does not fit)
+      const la = flip ? [l.b_name, l.b_addr] : [l.a_name, l.a_addr], lb = flip ? [l.a_name, l.a_addr] : [l.b_name, l.b_addr], room = xb - xa - 14;
+      // the outer links of a card side keep their labels outside; a lone link: the side its ribbon bends away from
+      const sideOf = (e, bendsUp) => e.n > 1 ? (e.first ? -1 : e.last ? 1 : -1) : bendsUp ? 1 : -1;
+      labels.push({parts:la, x:xa + 7, y:ya, align:'left', side:sideOf(ea, yb < ya - 2), w, room, dim});
+      if (l.b !== 'internet') labels.push({parts:lb, x:xb - 7, y:yb, align:'right', side:eb.n > 1 ? sideOf(eb, false) : (ya > yb + 2 ? -1 : 1), w, room, dim});
+      if (look) pill(look[1], xm, (ya + yb) / 2, look[0]);
+      ctx.globalAlpha = 1;
+      const hit = new Path2D(); hit.moveTo(xa, ya); hit.bezierCurveTo(xm, ya, xm, yb, xb, yb);
+      shapes.push({stroke:hit, sw:Math.max(12, w + 6), l, tip:tipOf(l)});
+    }
+    // interface · address labels over the ribbons, on a dark plate (two lines when one does not fit)
+    ctx.font = '600 10.5px JetBrains Mono, monospace';
+    for (const lb of labels) {
+      const parts = lb.parts.filter(Boolean); if (!parts.length) continue;
+      const one = parts.join(' · '), lines = ctx.measureText(one).width <= lb.room || parts.length < 2 ? [one] : parts;
+      const txt = lines.map(s => clip(s, ctx.font, lb.room)), tw = Math.max(...txt.map(s => ctx.measureText(s).width)), th = 13 * txt.length;
+      const top = lb.side < 0 ? lb.y - lb.w / 2 - 5 - th : lb.y + lb.w / 2 + 5, x0 = lb.align === 'left' ? lb.x - 3 : lb.x - tw - 3;
+      ctx.globalAlpha = lb.dim ? .2 : 1; ctx.fillStyle = 'rgba(9,18,44,.78)'; ctx.fill(rr(x0, top - 1, tw + 6, th + 2, 4));
+      ctx.fillStyle = C.ink2; ctx.textAlign = lb.align; txt.forEach((s, k) => ctx.fillText(s, lb.x, top + 6.5 + 13 * k)); ctx.globalAlpha = 1;
+    }
+    // device cards
+    for (const n of data.nodes) {
+      const p = pos.get(n.ip); if (!p) continue;
+      const x = p.x - p.w / 2, y = p.y - p.h / 2, isPov = n.ip === data.pov, dim = onPath && !onPath.has(n.ip) && !(n.ip === 'internet' && onPath.has('internet')), card = rr(x, y, p.w, p.h, 14);
+      ctx.globalAlpha = dim ? .35 : 1;
+      ctx.fillStyle = isPov ? 'rgba(20,52,92,.96)' : 'rgba(14,26,60,.95)'; ctx.fill(card);
+      ctx.strokeStyle = isPov ? '#27D3F5' : hover && hover.n === n ? 'rgba(150,190,255,.8)' : 'rgba(110,160,255,.35)'; ctx.lineWidth = isPov ? 2 : 1.2;
+      if (isPov) { ctx.shadowColor = 'rgba(39,211,245,.6)'; ctx.shadowBlur = 16; } ctx.stroke(card); ctx.shadowBlur = 0;
+      ctx.save(); ctx.translate(x + 11, y + 13); ctx.strokeStyle = n.ip === 'internet' ? C.ext : C.ink2; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(devIcon(n))); ctx.restore();
+      ctx.textAlign = 'left'; ctx.font = '700 13px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(clip(n.ip === 'internet' ? T('Internet', 'Інтернет') : n.name || n.ip, ctx.font, p.w - 52), x + 36, y + 22);
+      ctx.font = '500 11px Manrope, sans-serif'; ctx.fillStyle = C.ink3;
+      ctx.fillText(clip(n.ip === 'internet' ? T('beyond the WAN', 'за WAN') : [n.vendor, n.model].filter(Boolean).join(' ') || T('device', 'пристрій'), ctx.font, p.w - 24), x + 12, y + 44);
+      ctx.font = '600 11px JetBrains Mono, monospace'; ctx.fillStyle = C.ink2; if (n.ip !== 'internet') ctx.fillText(n.ip, x + 12, y + 60);
+      if (n.ip !== 'internet') { ctx.beginPath(); ctx.arc(x + p.w - 13, y + 14, 4, 0, 7); ctx.fillStyle = n.exporting ? C.ext : C.ink3; ctx.fill(); }
+      if (n.more) { const bx = x + p.w - 34, by = y + p.h - 22; ctx.fillStyle = 'rgba(47,123,255,.35)'; ctx.fill(rr(bx, by, 26, 16, 8)); ctx.font = '700 10.5px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.fillText('+' + n.more, bx + 13, by + 8.5); }
+      const k = onPath && opts.hopNo ? opts.hopNo(n.ip) : 0;
+      if (k) { ctx.beginPath(); ctx.arc(x + 2, y + 2, 10, 0, 7); ctx.fillStyle = '#27D3F5'; ctx.fill(); ctx.font = '800 11px Manrope, sans-serif'; ctx.fillStyle = '#04102A'; ctx.textAlign = 'center'; ctx.fillText(k, x + 2, y + 2.5); }
+      ctx.globalAlpha = 1;
+      shapes.push({path:card, n, tip:`<b>${nm(n.ip)}</b>${n.ip !== 'internet' ? ` <span class="nat">${esc(n.ip)}</span><div>${n.exporting ? T('sends NetFlow', 'надсилає NetFlow') : T('sent no NetFlow in this period', 'не надсилав NetFlow за цей період')}</div>` : ''}${n.more ? `<div>${T(`${n.more} more neighbour(s) beyond`, `ще ${n.more} сусід(и) далі`)}</div>` : ''}${n.ip !== data.pov && n.ip !== 'internet' ? `<div class="nat">${T('Click: look from this device', 'Клік: дивитися з цього пристрою')}</div>` : ''}`});
+    }
+  }
+  const pick = e => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    for (let i = shapes.length - 1; i >= 0; i--) { const sh = shapes[i];
+      if (sh.path && ctx.isPointInPath(sh.path, x * dpr, y * dpr)) return {s:sh, x, y};
+      if (sh.stroke) { ctx.lineWidth = sh.sw; if (ctx.isPointInStroke(sh.stroke, x * dpr, y * dpr)) return {s:sh, x, y}; } }
+    return null; };
+  cv.addEventListener('mousemove', e => { const h = pick(e), s = h ? h.s : null;
+    if (s !== hover) { hover = s; draw(); }
+    if (h) { tip.hidden = false; tip.innerHTML = s.tip; tip.style.left = Math.max(0, Math.min(W - tip.offsetWidth - 4, h.x + 14)) + 'px'; tip.style.top = Math.min(H - tip.offsetHeight - 4, h.y + 14) + 'px'; cv.style.cursor = s.n ? 'pointer' : 'default'; } else { tip.hidden = true; cv.style.cursor = ''; } });
+  cv.addEventListener('mouseleave', () => { hover = null; tip.hidden = true; draw(); });
+  cv.addEventListener('click', e => { const h = pick(e); if (h && h.s.n && opts.onNode) opts.onNode(h.s.n); });
+  return {set:d => { data = d; draw(); }, redraw:draw};
+}
+function vNetwork(){
+  const v = document.getElementById('view'), live = !!state.netLive && !isCustom(), depth = state.netDepth || 1;
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s9">${ph('nodes', T('Path analysis', 'Аналіз шляху'), T('layer-3 neighbours of the Point of View · width = volume · click a device to look from it', 'L3-сусіди точки огляду · ширина = обсяг · клік по пристрою — дивитися з нього'),
+      `<span id="nPovSeg"></span>` + seg('nDepthSeg', [['1', '1'], ['2', '2'], ['3', '3']].map(([k, l]) => [k, l, T(`Neighbours up to ${k} hop(s) away`, `Сусіди на відстані до ${k} хоп(ів)`)]), String(depth))
+      + seg('nScaleSeg', [['sqrt', T('Compressed', 'Стиснений'), T('Width ∝ √volume — small links stay visible next to big ones', 'Ширина ∝ √обсягу — дрібні зв’язки помітні поруч із великими')], ['lin', T('Linear', 'Лінійний')]], state.scale)
+      + seg('nLiveSeg', [['live', T('Live', 'Наживо')], ['period', T('Period', 'За період')]], live ? 'live' : 'period'))}
+      <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>${T('from the internet', 'з інтернету')}</span><span><i class="bar" style="background:${C.up}"></i>${T('to the internet', 'в інтернет')}</span><span><i class="bar" style="background:${C.int}"></i>${T('internal', 'внутрішній')}</span><span><i class="bar dash" style="border-color:${RED}"></i>${T('no observation / gap', 'не спостерігається / розрив')}</span><span><i class="bar dash" style="border-color:#AABEE6"></i>${T('L3 adjacency, no traffic', 'L3-суміжність, без трафіку')}</span></div>
+      <div class="river netmap" id="cNet"></div>
+      <p class="note">${T('Devices are neighbours when their interfaces share a subnet (Settings → Devices → Interfaces) or when one records the other’s addresses on an interface. All traffic regardless of the Internet / Internal selector and the device filter.', 'Пристрої — сусіди, коли їхні інтерфейси в одній підмережі (Налаштування → Пристрої → Інтерфейси) або коли один бачить адреси іншого на своєму інтерфейсі. Увесь трафік незалежно від перемикача «Інтернет / Внутрішній» і фільтра пристрою.')}</p></section>
+    <div class="col s3">
+      <div id="nKpi" class="col"></div>
+      <section class="glass panel">${ph('search', T('Path', 'Шлях'), T('the hops from a source to a destination', 'хопи від джерела до призначення'))}
+        <form class="form trace" id="nTrace" autocomplete="off"><label>${T('Source', 'Джерело')}<input id="nSrc" class="mono" placeholder="10.20.0.21 ${T('or', 'або')} 10.20.0.0/24" value="${esc(state.netSrc || '')}"></label>
+          <label>${T('Destination', 'Призначення')}<input id="nDst" class="mono" placeholder="8.8.8.8 ${T('or', 'або')} 0.0.0.0/0" value="${esc(state.netDst || '')}"></label>
+          <div class="acts"><button type="button" class="btn" id="nSwap" title="${T('Swap: the reply direction', 'Поміняти: зворотний напрямок')}">⇄</button><button class="btn primary" id="nGo">${T('Trace', 'Простежити')}</button>${state.netPath ? `<button type="button" class="btn" id="nClear">${T('Clear', 'Скинути')}</button>` : ''}</div></form>
+        <div id="nPath"></div></section>
+    </div>
+    <section class="glass panel s12">${ph('conv', T('Links', 'Зв’язки'), T('what each end of a link sent and the other received', 'що кожен кінець зв’язку відправив і що інший отримав'))}<div id="nLinks" class="loading"></div></section></div>`;
+  wireSeg('nDepthSeg', m => { if (+m === depth) return; state.netDepth = +m; render(); });
+  wireSeg('nScaleSeg', m => { if (m === state.scale) return; state.scale = m; render(); });
+  lockLive('nLiveSeg');
+  wireSeg('nLiveSeg', m => { const l = m === 'live'; if (l === !!state.netLive) return; state.netLive = l; render(); });
+  const seq = renderSeq, P = () => ({t:'all', live:live ? 1 : 0, win:120});
+  let topo = null, path = null;
+  const hopIndex = () => { const m = new Map(); if (path) path.hops.forEach((h, k) => { if (!m.has(h.device) && h.state !== 'unplaced' && h.state !== 'branch') m.set(h.device, k + 1); }); return m; };
+  const map = createTopoMap(document.getElementById('cNet'), {onNode:n => { if (n.ip === 'internet' || n.ip === state.netPov) return; state.netPov = n.ip; if (n.more) state.netDepth = Math.max(depth, 1); render(); },
+    pathSet:() => path && path.hops.length ? new Set(path.hops.filter(h => h.state !== 'unplaced').map(h => h.device)) : null, hopNo:ip => hopIndex().get(ip)});
+  const nm = ip => ip === 'internet' ? T('Internet', 'Інтернет') : ((topo && topo.devices.find(d => d.ip === ip)) || {}).name || ip;
+  const drawSide = () => {
+    const ls = topo.links, cnt = s => ls.filter(l => l.state === s).length;
+    const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span>${sub ? `<span class="nat" style="grid-column:2">${sub}</span>` : ''}</section>`;
+    const pv = topo.devices.find(d => d.ip === topo.pov);
+    fill('nKpi', kc('dev', T('Point of View', 'Точка огляду'), esc(pv ? pv.name : '—'), pv ? T(`${pv.neighbours} L3 neighbour(s)`, `${pv.neighbours} L3-сусід(ів)`) : '')
+      + kc('nodes', T('Links shown', 'Зв’язків показано'), ls.length, `${cnt('observed')} ${T('observed', 'видно')}`)
+      + kc('shield', T('Gaps · not observed', 'Розриви · не видно'), `${cnt('gap')} · ${cnt('unobserved')}`, T('links to check', 'зв’язки, які варто перевірити'), cnt('gap') + cnt('unobserved') ? RED : ''));
+    const row = (d, name, addr) => `<b>${esc(nm(d))}</b> <span class="mono">${esc(name)}</span>${addr ? ` <span class="nat mono">${esc(addr)}</span>` : ''}`;
+    const sr = (sent, got, inet) => inet ? `<b class="mono">${fmtB(sent)}</b>` : `<b class="mono">${fmtB(sent)}</b> <span class="nat">/ ${fmtB(got)}</span>`;
+    const tb = fill('nLinks', ls.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('End A', 'Кінець A')}</th><th></th><th>${T('End B', 'Кінець B')}</th><th>${T('State', 'Стан')}</th><th class="num">${T('A → B sent / received', 'A → B відправлено / отримано')}</th><th class="num">${T('B → A sent / received', 'B → A відправлено / отримано')}</th><th>${T('Found by', 'Знайдено за')}</th></tr></thead><tbody>
+      ${ls.map(l => { const inet = l.b === 'internet', bad = l.state === 'gap' || l.state === 'unobserved';
+        return `<tr><td>${row(l.a, l.a_name, l.a_addr)}</td><td class="nat">↔</td><td>${inet ? `<b>${T('Internet', 'Інтернет')}</b>` : row(l.b, l.b_name, l.b_addr)}</td>
+          <td><span class="tag" title="${esc(LINK_STATE[l.state][1])}"${bad ? ` style="color:${RED};border-color:${hexA(RED, .5)}"` : ''}>${LINK_STATE[l.state][0]}</span></td>
+          <td class="num">${sr(l.a_out, l.b_in, inet)}</td><td class="num">${inet ? `<b class="mono">${fmtB(l.a_in)}</b>` : sr(l.b_out, l.a_in)}</td>
+          <td class="nat">${l.evidence === 'subnet' ? T('subnet', 'підмережа') + ' ' + esc(l.net) : l.evidence === 'wan' ? T('WAN interface', 'WAN-інтерфейс') : T('addresses in the records', 'адреси в записах')}</td></tr>`; }).join('')}</tbody></table></div>`
+      : `<div class="empty">${T('This device has no layer-3 neighbours among the devices: set interface addresses in Settings → Devices → Interfaces, or wait for traffic between the devices.', 'Цей пристрій не має L3-сусідів серед пристроїв: вкажіть адреси інтерфейсів у Налаштування → Пристрої → Інтерфейси або дочекайтеся трафіку між пристроями.')}</div>`);
+    if (tb) tb.classList.remove('loading');
+  };
+  const drawPath = () => {
+    if (!path) { fill('nPath', `<p class="note" style="margin:8px 0 0">${T('Enter an address or a network on each side. Each device on the way shows the interfaces the traffic used; a device that should have seen it but recorded nothing marks a gap.', 'Вкажіть адресу або мережу з кожного боку. Кожен пристрій на шляху покаже інтерфейси, якими пройшов трафік; пристрій, який мав його бачити, але нічого не записав, позначає розрив.')}</p>`); return; }
+    const hs = path.hops, real = hs.filter(h => !['internet', 'unplaced', 'branch'].includes(h.state)), obs = real.filter(h => h.state === 'observed').length, gaps = real.length - obs;
+    if (!hs.length) { fill('nPath', `<div class="empty">${T('No device recorded traffic from this source to this destination in the period.', 'Жоден пристрій не записав трафік від цього джерела до цього призначення за період.')}</div>`); return; }
+    const total = Math.max(0, ...hs.map(h => h.bytes));
+    const el = fill('nPath', `<div class="pstats"><div><span>${T('Hops', 'Хопів')}</span><b>${real.length}</b></div><div><span>${T('Observed', 'Видно')}</span><b>${obs} / ${real.length}</b></div><div><span>${T('Gaps', 'Розриви')}</span><b${gaps ? ` style="color:${RED}"` : ''}>${gaps}${gaps ? ' ⚠' : ''}</b></div><div><span>${T('Traffic', 'Трафік')}</span><b>${fmtB(total)}</b></div></div>
+      <ol class="hops">${hs.map((h, k) => { const bad = h.state === 'gap' || h.state === 'unobserved';
+        return `<li class="hop ${h.state}" data-dev="${esc(h.device)}"><span class="no">${h.state === 'unplaced' ? '?' : h.state === 'branch' ? '↳' : k + 1}</span><div><b>${esc(h.state === 'internet' ? T('Internet', 'Інтернет') : h.name)}</b>
+          ${h.state === 'observed' || h.state === 'unplaced' || h.state === 'branch' ? `<div class="mono">${esc(h.in_name)} → ${esc(h.out_name)}</div><div class="nat">${fmtB(h.bytes)} · ${fmtN(h.convs)} ${T('conversations', 'розмов')}${h.share < 1 ? ` · ${Math.round(100 * h.share)}% ${T('of the busiest hop', 'від найбільшого хопа')}` : ''}</div>
+            <div class="vbar"><i style="width:${(100 * h.share).toFixed(1)}%;background:linear-gradient(90deg,${hexA(C.down, .6)},${C.down})"></i></div>` : ''}
+          ${h.nat && h.nat.length ? `<div class="nat">NAT → <span class="mono">${esc(h.nat.join(', '))}</span></div>` : ''}
+          ${(h.other_exits || []).map(e => `<div class="nat">${T('also leaves via', 'також виходить через')} <span class="mono">${esc(e.out_name)}</span>${e.next ? ` → ${esc(nm(e.next))}` : ''}: ${fmtB(e.bytes)}</div>`).join('')}
+          <div class="st"${bad ? ` style="color:${RED}"` : ''}>${HOP_STATE[h.state]}${h.state === 'branch' ? ` ${T('of hop', 'хопа')} ${h.via_hop + 1}` : ''}</div></div></li>`; }).join('')}</ol>
+      <p class="note" style="margin:6px 0 0">${path.complete ? T('Every device on the way recorded the traffic.', 'Кожен пристрій на шляху записав цей трафік.') : T('The path is not seen whole: see the marked hops.', 'Шлях видно не повністю: дивіться позначені хопи.')}</p>`);
+    if (el) el.querySelectorAll('li[data-dev]').forEach(li => li.onclick = () => { const d = li.dataset.dev; if (d === 'internet' || d === state.netPov) return; state.netPov = d; render(); });
+  };
+  const load = () => api('topology', {...P(), pov:state.netPov || '', depth});
+  const show = d => { if (seq !== renderSeq) return; topo = d; state.netPov = d.pov;
+    const opts = d.devices.slice().sort((a, b) => a.name.localeCompare(b.name)).map(x => `<option value="${esc(x.ip)}"${x.ip === d.pov ? ' selected' : ''}${!x.neighbours ? ' disabled' : ''}>${esc(x.name)} (${esc(x.ip)})${!x.neighbours ? ' — ' + T('no L3 neighbours', 'немає L3-сусідів') : ''}</option>`).join('');
+    fill('nPovSeg', `<label class="sel glass" title="${T('Point of View', 'Точка огляду')}">${icon(ICO.dev, 16)}<select id="nPovSel" aria-label="${T('Point of View', 'Точка огляду')}">${opts}</select></label>`);
+    const ps = document.getElementById('nPovSel'); if (ps) ps.onchange = () => { state.netPov = ps.value; render(); };
+    map.set(d); drawSide(); };
+  const trace = async () => {
+    const s = document.getElementById('nSrc').value.trim(), t = document.getElementById('nDst').value.trim();
+    state.netSrc = s; state.netDst = t;
+    if (!s || !t) { path = null; state.netPath = false; drawPath(); map.redraw(); return; }
+    fill('nPath', '<div class="loading" style="min-height:60px"></div>');
+    try { path = await api('path', {...P(), src:s, dst:t}); if (seq !== renderSeq) return; state.netPath = true; drawPath(); map.redraw(); }
+    catch (e) { if (seq === renderSeq) fill('nPath', errBox(e)); }
+  };
+  document.getElementById('nTrace').onsubmit = e => { e.preventDefault(); trace(); };
+  document.getElementById('nSwap').onclick = () => { const a = document.getElementById('nSrc'), b = document.getElementById('nDst'); [a.value, b.value] = [b.value, a.value]; if (state.netPath) trace(); };
+  const cl = document.getElementById('nClear'); if (cl) cl.onclick = () => { state.netSrc = state.netDst = ''; state.netPath = false; render(); };
+  drawPath();
+  load().then(d => { show(d); if (state.netPath && state.netSrc && state.netDst) trace(); }).catch(e => { if (seq === renderSeq) { fill('cNet', errBox(e)); fill('nLinks', ''); } });
+  if (live) every(10000, () => load().then(show).catch(() => {}));
 }
 function recTable(rows){
   return `<div class="tw"><table><thead><tr><th>${T('Time', 'Час')}</th><th>${T('Exporter', 'Експортер')}</th><th>${T('Inside address', 'Внутрішня адреса')}</th><th></th><th>${T('Outside address', 'Зовнішня адреса')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Service', 'Сервіс')}</th><th>${T('Country', 'Країна')}</th><th class="num">${T('Bytes', 'Байти')}</th><th class="num">${T('Packets', 'Пакети')}</th><th class="num">${T('Dur.', 'Трив.')}</th></tr></thead><tbody>
@@ -1497,7 +1758,7 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });

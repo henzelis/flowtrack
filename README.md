@@ -21,6 +21,9 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 | ![Flows](docs/screenshots/flows.png) **Flows** — who exchanges how much with whom; click to filter | ![Top hosts](docs/screenshots/hosts.png) **Top hosts** — volume, trend, services and destinations |
 | ![Geolocation](docs/screenshots/geo.png) **Geolocation** — live connection map, countries, ASNs | ![Devices](docs/screenshots/devices.png) **Devices** — exporters, interfaces, collector health |
 
+![Path analysis](docs/screenshots/path-analysis.png)
+**Path analysis** — layer-3 neighbours of a device and the hops of a source → destination path across devices
+
 ## Features
 
 **Collection**
@@ -54,6 +57,10 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - *Flows*: top-10 inside × top-10 outside exchange (ribbon width = bytes, packets or flows; colour =
   direction), inspector for the selected host or conversation, protocols, raw flow records with NAT,
   ASN and interfaces.
+- *Through device*: one exporter as a box — input interface → output interface, hosts behind each interface.
+- *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
+  included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
+  missing, and the hops of any source → destination path across the devices, with NAT and gaps.
 - *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
   (sustained upload, bursts, new countries, export loss), *Settings* — tabs for language and version, devices
   (exporters and interfaces), users, and the edition / license.
@@ -272,6 +279,9 @@ JSON over HTTP, same session cookie as the UI. Read endpoints take `range` (`1h`
 | `GET /api/river` | top inside × top outside links (live 2-minute window or whole period) |
 | `GET /api/flows`, `GET /api/live?since=` | raw records; records newer than a timestamp |
 | `GET /api/geo`, `GET /api/host?ip=` | per-city aggregates; one host's details |
+| `GET /api/paths`, `GET /api/devmap` | traffic through one device (the `device` filter): interface pairs, hosts behind them |
+| `GET /api/topology?pov=&depth=` | layer-3 neighbours of a device, links with what each end sent and received |
+| `GET /api/path?src=&dst=` | the hops from a source to a destination (address or network) across the devices |
 | `GET /api/devices`, `GET /api/alerts`, `GET /api/meta` | exporters and interfaces; detections; metadata |
 | `POST /api/login`, `/api/logout`, `/api/me/password` | session and own password |
 | `GET/POST /api/users…`, `POST /api/devices/save`, `/api/devices/delete` | admin only |
@@ -366,6 +376,7 @@ Overview request for 24 hours or 7 days is answered in under 0.1 s.
 | `collector.py` | NetFlow v5/v9 + IPFIX listener, enrichment, batched inserts into ClickHouse |
 | `api.py`, `auth.py` | JSON API, users and sessions, static web server |
 | `common.py`, `schema.sql` | ClickHouse client, GeoIP/ASN/service enrichment; database schema |
+| `topology.py` | Path analysis: layer-3 neighbours of the devices, link states, the hops of a path |
 | `rollups.py` | 5-minute and hourly totals for long periods: tables, filling the history, which one a query reads |
 | `web/` | the web UI (plain HTML/CSS/JS, ECharts vendored — no build step) |
 | `deploy/` | systemd units, GeoIP refresh, configuration examples |

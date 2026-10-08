@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
+import topology  # noqa: E402
 from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
@@ -637,6 +638,66 @@ def api_devmap(q):
     return {'paths': paths, 'inside': inside, 'outside': outside, 'live': live, 'window_end': wend, 'window': win if live else rng, 'range': rng}
 
 
+def network_q(q):
+    """Path analysis looks at every device and all traffic: device filters are dropped (the Point of View is chosen
+    instead) and the traffic scope defaults to all."""
+    q = dict(q)
+    try:
+        flt = json.loads(q.get('f', ['[]'])[0])
+    except ValueError:
+        raise BadRequest('bad filter JSON')
+    q['f'] = [json.dumps([f for f in (flt if isinstance(flt, list) else []) if isinstance(f, dict) and f.get('k') != 'device'])]
+    q.setdefault('t', ['all'])
+    return q
+
+
+def network_topology(q):
+    where, p, rng, step = scope(network_q(q))
+    where, live = live_window(q, where, p, default='0')
+    cfg = exporters_cfg()
+    known = {a.split('/')[0] for c in cfg.values() for v in c.get('if_addrs', {}).values() for a in v} | set(cfg) | \
+        {a for c in cfg.values() for a in c.get('public_ips', [])}
+    topo = topology.build(cfg, *topology.query(ch, where, p, known))
+    for lk in topo['links']:
+        for e in ('a', 'b'):
+            i = lk[e + '_if']
+            lk[e + '_name'] = (cfg.get(lk[e], {}).get('if_names', {}).get(str(i)) or f'if {i}') if i is not None else ''
+    return topo, cfg, where, p, live, rng
+
+
+def api_topology(q):
+    """Path analysis: the devices that are layer-3 neighbours of the Point of View (`pov`), `depth` links deep, with
+    the traffic of every link as each end recorded it. `devices` lists them all for the selector."""
+    topo, cfg, where, p, live, rng = network_topology(q)
+    devs = sorted(d for d in topo['nodes'] if d != topology.INTERNET)
+    pov = q1(q, 'pov', '')
+    if pov not in topo['nodes']:
+        pov = max(devs, key=lambda d: sum(1 for lk in topo['links'] if d in (lk['a'], lk['b']))) if devs else ''
+    depth = max(1, min(q1(q, 'depth', '1', int), 6))
+    part = topology.around(topo, pov, depth) if pov else {'nodes': [], 'links': []}
+    degree = {d: len({lk['b'] if lk['a'] == d else lk['a'] for lk in topo['links'] if d in (lk['a'], lk['b']) and topology.INTERNET not in (lk['a'], lk['b'])})
+              for d in devs}
+    devices = [{**topo['nodes'][d], 'neighbours': degree[d]} for d in devs]
+    return {'pov': pov, 'depth': depth, 'devices': devices, **part, 'live': live, 'window': p.get('win', rng),
+            'window_end': p.get('wend'), 'range': rng}
+
+
+def api_path(q):
+    """Path analysis: the hops of the traffic from `src` to `dst` (an address or a network each) across the
+    exporting devices, in order, with gaps where a device on the way recorded none of it."""
+    def net(k):
+        v = q1(q, k, '').strip()
+        try:
+            return str(ipaddress.ip_network(v, strict=False))
+        except ValueError:
+            raise BadRequest(f'bad {k}')
+    s, d = net('src'), net('dst')
+    topo, cfg, where, p, live, rng = network_topology(q)
+    rows = topology.path_query(ch, where, p, s, d)
+    out = topology.path(topo, cfg, rows)
+    return {'src': s, 'dst': d, **out, 'live': live, 'window': p.get('win', rng), 'window_end': p.get('wend'), 'range': rng}
+
+
 def api_flows(q):
     where, p, rng, step = scope(q)
     p['lim'] = max(1, min(q1(q, 'limit', '50', int), 1000))
@@ -981,7 +1042,7 @@ class Cache:
     millions of records. Live windows and everything else are always fresh; the minute is short against the 5-minute
     steps of a day's charts."""
     TTL, SIZE = 60, 300
-    PATHS = {'/api/summary', '/api/series', '/api/top', '/api/geo', '/api/river', '/api/paths', '/api/devmap', '/api/host'}
+    PATHS = {'/api/summary', '/api/series', '/api/top', '/api/geo', '/api/river', '/api/paths', '/api/devmap', '/api/host', '/api/topology', '/api/path'}
     LIVE_BY_DEFAULT = {'/api/river'}
 
     def __init__(self):
@@ -1024,7 +1085,7 @@ class Cache:
 
 CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
-          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
+          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 

@@ -3,6 +3,23 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.4.0 — 2026-10-08
+
+- **Path analysis** — a new page next to *Through device*: traffic across several devices instead of one.
+  - Choose a device as the *Point of View*: its layer-3 neighbours are drawn around it (1, 2 or 3 hops deep), each
+    link as a ribbon (from / to the internet, internal) with the interface and address at both ends. A device with
+    no layer-3 neighbour cannot be chosen.
+  - Neighbours come from the same data as *Through device*: interfaces of two devices in one subnet (Settings →
+    Devices → Interfaces) and, without any addresses set, from the records themselves — one device's own addresses
+    and inside networks seen on another's interface, and the same conversation recorded by both. A tunnel between
+    two sites (GRE, IPsec) is found this way too.
+  - Every link shows what each end sent and the other received: a red dashed line marks a link whose far end sends
+    no NetFlow, or a *gap* where much less arrived than was sent.
+  - *Path*: enter a source and a destination (an address or a network) and get the hops in order — the interfaces
+    each device used, NAT, other exits, the share of conversations each device recorded, and where the path is not
+    seen whole. ⇄ shows the reply direction.
+  - API: `GET /api/topology?pov=&depth=`, `GET /api/path?src=&dst=`.
+
 ## 1.3.4 — 2026-10-08
 
 - **Upgrade with one command: `sudo flowtrack upgrade`.** The installer now puts a `flowtrack` command on the
