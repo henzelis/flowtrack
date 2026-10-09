@@ -3,6 +3,32 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.5.0 — 2026-10-09
+
+- **SNMP v2c and v3.** A device can now be polled over SNMP (Settings → Devices → the device → *Read interface
+  names and IP addresses over SNMP*, off by default). FlowTrack reads the interfaces' names, descriptions, state
+  and IP addresses with prefix (IF-MIB, IP-MIB; IPv4 and IPv6) when the device is saved and then every hour, or
+  at once with *Poll now* under Interfaces. v3 supports MD5 / SHA / SHA-224…512 authentication and DES / AES /
+  AES-192 / AES-256 privacy. *Test SNMP* in the dialog polls with the typed settings before saving and names the
+  likely cause of a failure (no answer, unknown user, wrong password).
+- The device dialog adds the SNMP configuration for the chosen vendor (FortiGate, Cisco, MikroTik, Juniper, Linux)
+  to the NetFlow snippet, filled in with the typed values. The protocol lists offer only what that vendor's agent accepts
+  (RouterOS: MD5 / SHA1 and DES / AES-128; FortiOS: no AES-192; Cisco and Junos: AES-128).
+- *Through device* and *Path analysis* name interfaces from SNMP and show their addresses; the subnets read over
+  SNMP also place devices next to each other on *Path analysis*. Names and addresses entered by hand still win.
+- *Path analysis* without interface addresses shows what the records reveal on each end, as *Through device* does:
+  the network both ends share, the inside network or the NAT address.
+- **Check for renewal** in Settings → License (and `sudo flowtrack license renew`) for every installed license: an
+  offline or expired license gets the renewed one from the license server when the vendor extended its key (before,
+  only online licenses checked in, so an offline one stayed expired until a new file was loaded). Offline licenses
+  still never contact the server by themselves.
+- MikroTik's NetFlow snippet exports NetFlow v9 (`version=9`) instead of IPFIX.
+- Settings → Devices: interface names or addresses saved within a few seconds of opening the page showed the old
+  values until the next visit.
+- The installer adds the net-snmp tools (`snmp` / `net-snmp-utils`); `sudo flowtrack upgrade` installs them too.
+  Community and passwords are stored for the service only (`/var/lib/flowtrack/snmp.json`, mode 600), passed to the
+  tools in a private configuration file (not on the command line) and never sent back to the browser.
+
 ## 1.4.1 — 2026-10-08
 
 - **A host filter shows what the host sent AND what it received, on every page.** Between two inside networks a

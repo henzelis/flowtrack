@@ -280,6 +280,40 @@ class Online(Base):
         ed = common.save_license(issue())
         self.assertEqual((ed['status'], ed['license']['online'], ed['lease_until']), ('active', False, None))
 
+    def test_renewal_on_request(self):
+        """Settings → License "Check for renewal": an offline license that ran out gets the renewed one from the server."""
+        now = int(time.time())
+        old = issue(issued=now - 40 * 86400, expires=now - 86400)
+        common._write_license(old)                       # expired, as on a server whose vendor renewed the key since
+        self.assertEqual(common.edition()['status'], 'expired')
+        new = issue()
+        calls = []
+        real = licensing._post
+        try:
+            licensing._post = lambda path, body, timeout=20: calls.append((path, body['license'])) or {'license': new, 'lease': ''}
+            ed, renewed = common.license_refresh()
+            self.assertTrue(renewed)
+            self.assertEqual(ed['status'], 'active')
+            self.assertEqual(calls, [('/v1/checkin', old)])
+            self.assertEqual(''.join(common.read_license().split()), ''.join(licensing.normalized(new).split()))
+            licensing._post = lambda path, body, timeout=20: {'lease': ''}                # nothing new on the server
+            ed, renewed = common.license_refresh()
+            self.assertFalse(renewed)
+            self.assertEqual(ed['status'], 'active')
+
+            def refuse(path, body, timeout=20):
+                raise licensing.ServerError('this license was revoked', 'revoked')
+            licensing._post = refuse                     # an offline license is not dropped by a refusal
+            with self.assertRaises(licensing.ServerError):
+                common.license_refresh()
+            self.assertEqual(common.edition()['status'], 'active')
+        finally:
+            licensing._post = real
+        os.remove(common.LICENSE_FILE)
+        common._edition['value'] = None
+        with self.assertRaisesRegex(ValueError, 'no license'):
+            common.license_refresh()
+
     def test_deactivation_drops_the_lease(self):
         code = self.online()
         ftcore.save_lease(lease(code), licensing.STATE_DIR)

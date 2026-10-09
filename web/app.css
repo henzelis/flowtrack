@@ -240,6 +240,13 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .form input:focus,.form select:focus{border-color:var(--blue-hi)}
 .form select option{background:#0c1838}
 .form .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form label.chk{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.form label.chk input{width:16px;height:16px;margin:0;accent-color:var(--blue-hi)}
+.snmpbox{display:grid;gap:12px;padding:12px;border:1px solid var(--hair);border-radius:12px;background:rgba(0,0,0,.15)}
+.snmpbox[hidden]{display:none}
+.snmpbox .note{margin:0}
+.snmptest{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ifsnmp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;font-size:12px}
 .vendors{display:flex;flex-wrap:wrap;gap:6px}
 .vendors button{all:unset;cursor:pointer;font-size:12px;font-weight:700;padding:4px 10px;border-radius:9px;border:1px solid var(--edge);color:var(--ink2)}
 .vendors button[aria-pressed="true"]{color:#fff;border-color:var(--blue-hi);background:rgba(47,123,255,.3)}
@@ -278,6 +285,9 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .modal header .x{margin-left:auto}
 .modal h4{margin:0 0 8px;font-size:13px;font-weight:700;color:var(--ink2)}
 .modal .cols{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:22px;align-items:start}
+.modal .cols>*,.form .two>*,.form label{min-width:0}
+.form input,.form select{min-width:0;width:100%;box-sizing:border-box}
+.form label.chk input{width:16px}
 .modal .codebox{max-height:340px}
 @media (max-width:820px){.modal .cols{grid-template-columns:1fr}}
 

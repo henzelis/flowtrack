@@ -263,13 +263,13 @@ fi
 pkg_install() {   # installs only what is missing — never upgrades the user's existing packages
   local missing=()
   if [ "$PKG" = apt ]; then
-    for p in curl ca-certificates python3 python3-venv python3-pip openssl iproute2 tar gzip; do
+    for p in curl ca-certificates python3 python3-venv python3-pip openssl iproute2 tar gzip snmp; do
       dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
     [ ${#missing[@]} -eq 0 ] && { echo "all packages present"; return 0; }
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -q && apt-get install -yq --no-upgrade "${missing[@]}"
   else
-    for p in curl ca-certificates python3 python3-pip openssl iproute tar gzip; do
+    for p in curl ca-certificates python3 python3-pip openssl iproute tar gzip net-snmp-utils; do
       rpm -q "$p" >/dev/null 2>&1 || missing+=("$p"); done
     [ ${#missing[@]} -eq 0 ] && { echo "all packages present"; return 0; }
     dnf install -yq "${missing[@]}"

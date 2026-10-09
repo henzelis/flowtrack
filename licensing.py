@@ -20,7 +20,8 @@ vendor) need no network.
 The work is done by the compiled FlowTrack core (`ftcore`), which also holds the vendor's public key and the
 Community limits; this module is its Python face.
 
-Command line (installed as `flowtrack-license`): licensing.py status | request | activate FILE|CODE|KEY|- | checkin | deactivate
+Command line (installed as `flowtrack-license`): licensing.py status | request | activate FILE|CODE|KEY|- | checkin | renew | deactivate
+(renew: ask the license server now whether the vendor renewed the installed license — offline ones too)
 """
 import hashlib
 import http.client
@@ -196,6 +197,18 @@ def checkin(text):
     return r.get('license')
 
 
+def renewal(text):
+    """Ask the license server now whether the vendor renewed the license `text` (any license the server issued, online
+    or offline) -> the renewed license code, else None. Only on request: an offline license never asks by itself."""
+    try:
+        r = _post('/v1/checkin', {'license': text, 'request': request_code()})
+    except ServerError as ex:
+        _record(False, str(ex))
+        raise
+    _record(True)
+    return r.get('license')
+
+
 def release_online(text):
     """Tell the license server that this installation gave the license up (the key is free for another server)."""
     _post('/v1/deactivate', {'license': text, 'request': request_code()})
@@ -223,6 +236,10 @@ def _cli(argv):
     elif cmd == 'checkin':
         ed = common.license_checkin()
         print('Edition:', ed['name'], ed['status'], '· confirmed until', time.strftime('%Y-%m-%d', time.gmtime(ed['lease_until'])) if ed.get('lease_until') else '')
+    elif cmd == 'renew':
+        ed, renewed = common.license_refresh()
+        until = time.strftime('%Y-%m-%d', time.gmtime(ed['license']['expires'])) if ed['license'] else ''
+        print(f'Renewed: valid until {until}' if renewed else f"No renewal on the license server ({ed['status']}, until {until})")
     elif cmd == 'deactivate':
         r = common.deactivate_license(with_code=True)
         if r['released']:

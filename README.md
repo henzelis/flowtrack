@@ -51,6 +51,10 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - Collector health: packets dropped by the kernel (socket buffer full), by the worker queues, and records
   lost while ClickHouse was unreachable — shown in Settings → Devices and raised as an event.
 - Optional raw forwarding (`FT_FORWARD`) so another collector keeps receiving the same feed.
+- Optional SNMP v2c / v3 per device (Settings → Devices): interface names, descriptions, state and IP addresses
+  (IPv4 and IPv6, with prefix) read from IF-MIB / IP-MIB when the device is saved and then every hour. They name the
+  interfaces on *Through device* and *Path analysis* and place the devices by subnet; names and addresses entered by
+  hand win. Without SNMP the interfaces show what the records reveal (inside networks, NAT address).
 
 **Web UI**
 - *Overview*: KPIs with trend against the previous period, live inside ↔ outside exchange, connection
@@ -122,7 +126,7 @@ Other commands on the server:
 | Command | What it does |
 |---|---|
 | `flowtrack status` | version, services, edition |
-| `sudo flowtrack license request` / `activate FILE` / `deactivate` | license of this server (see [Editions](#editions)) |
+| `sudo flowtrack license request` / `activate FILE` / `renew` / `deactivate` | license of this server (`renew`: fetch a renewal from the license server; see [Editions](#editions)) |
 | `sudo flowtrack reconfigure` | the installer's questions again: ports, device, admin password, firewall |
 | `sudo flowtrack uninstall` | remove FlowTrack; asks whether to keep the data |
 
@@ -242,11 +246,19 @@ interface GigabitEthernet0/0/1
 
 ```
 /ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m
-/ip traffic-flow target add dst-address=<COLLECTOR_IP> port=2055 version=ipfix
+/ip traffic-flow target add dst-address=<COLLECTOR_IP> port=2055 version=9
 ```
 
 **Juniper**, **pmacct / Linux** and others: the *Connect device* dialog in the UI shows ready-made
 snippets.
+
+**SNMP (optional).** Tick *Read interface names and IP addresses over SNMP* in the device dialog, choose v2c
+(community) or v3 (user, authentication MD5 / SHA / SHA-2, privacy DES / AES / AES-192 / AES-256): the dialog adds
+the matching SNMP configuration to the device snippet, and *Test SNMP* checks it before saving. The device must let
+the FlowTrack server poll it (UDP 161; FortiGate: `allowaccess snmp` on the interface, the community's host list).
+FlowTrack polls read-only with the net-snmp tools (package `snmp`, installed by the installer); the community and
+v3 passwords are kept in `/var/lib/flowtrack/snmp.json` (readable by the service only) and are never sent back to
+the browser. Use the same `ifIndex` for SNMP and NetFlow — on Cisco IOS keep `snmp-server ifindex persist`.
 
 ## Security notes
 

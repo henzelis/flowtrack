@@ -2,7 +2,7 @@
 # FlowTrack on this server (installed by install.sh as /usr/local/bin/flowtrack):
 #   flowtrack upgrade [--force] [--license FILE|CODE]   newest version from GitHub, settings and data kept
 #   flowtrack status                                    version, services, edition
-#   flowtrack license status|request|activate FILE|deactivate
+#   flowtrack license status|request|activate FILE|renew|deactivate
 #   flowtrack reconfigure                               the installer's questions again (ports, device, password …)
 #   flowtrack uninstall                                 remove FlowTrack (asks whether to keep the data)
 # FT_INSTALL_URL overrides where the installer comes from (testing).
@@ -18,7 +18,7 @@ usage() {
 FlowTrack на цьому сервері:
   sudo flowtrack upgrade [--force] [--license ФАЙЛ|КОД]   найновіша версія з GitHub; налаштування й дані зберігаються
   flowtrack status                                        версія, сервіси, редакція
-  sudo flowtrack license status|request|activate ФАЙЛ|deactivate
+  sudo flowtrack license status|request|activate ФАЙЛ|renew|deactivate
   sudo flowtrack reconfigure                              питання інсталятора ще раз (порти, пристрій, пароль …)
   sudo flowtrack uninstall                                видалити FlowTrack (спитає, чи зберегти дані)
 TXT
@@ -26,7 +26,7 @@ TXT
 FlowTrack on this server:
   sudo flowtrack upgrade [--force] [--license FILE|CODE]  newest version from GitHub; settings and data are kept
   flowtrack status                                        version, services, edition
-  sudo flowtrack license status|request|activate FILE|deactivate
+  sudo flowtrack license status|request|activate FILE|renew|deactivate
   sudo flowtrack reconfigure                              the installer's questions again (ports, device, password …)
   sudo flowtrack uninstall                                remove FlowTrack (asks whether to keep the data)
 TXT

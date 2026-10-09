@@ -417,6 +417,28 @@ def license_checkin():
     return edition()
 
 
+def license_refresh():
+    """Settings → License "Check for renewal": ask the license server about the installed license now. An online one
+    renews its lease as on the daily check-in; an offline or expired one is replaced when the vendor renewed its key
+    (an offline license is never dropped here: it stays valid until its own end date). -> (edition(), renewed)."""
+    import licensing
+    text = read_license()
+    ed = edition()
+    if not text or not ed['license']:
+        raise ValueError('no license is installed')
+    same = lambda a, b: ''.join(a.split()).upper() == ''.join(b.split()).upper()
+    if ed['license'].get('online'):
+        ed = license_checkin()
+        return ed, not same(read_license(), text)
+    renewed = licensing.renewal(text)
+    if not renewed or same(renewed, text):
+        return ed, False
+    licensing.check(renewed)
+    _write_license(renewed)
+    _edition['value'] = None
+    return edition(), True
+
+
 def deactivate_license(with_code=False):
     """Deactivate the installed license to move it to another server. An online license is given back to the
     license server (the key is free at once); otherwise -> the return code for the vendor. This installation

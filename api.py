@@ -22,8 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
+import snmp  # noqa: E402
 import topology  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, license_refresh, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
 
 # pre-aggregated 5-minute totals for long periods (rollups.py); FT_ROLLUPS=0 reads only the records (for comparisons)
@@ -96,8 +97,9 @@ class Names:
 
     def reload(self):
         self.manual = load_json('hosts.json', {})
-        self.exporters = load_exporters()
-        self.mtime = exporters_mtime()
+        self.raw = load_exporters()                 # as configured (the settings forms edit this)
+        self.exporters = snmp.merge(self.raw)       # + interface names / addresses from SNMP where none were entered
+        self.mtime = (exporters_mtime(), snmp.data_mtime())
         self.self_ips = {}
         for ip, e in self.exporters.items():
             for pub in e.get('public_ips', []) + [ip]:
@@ -248,10 +250,11 @@ def host_obj(ip):
     return {'ip': ip, 'name': NAMES.get(ip), 'private': is_private(ip)}
 
 
-def exporters_cfg():
-    if exporters_mtime() != NAMES.mtime:
+def exporters_cfg(raw=False):
+    """The devices; with SNMP names and addresses filled in, or raw=True: only what was configured."""
+    if (exporters_mtime(), snmp.data_mtime()) != NAMES.mtime:
         NAMES.reload()
-    return NAMES.exporters
+    return NAMES.raw if raw else NAMES.exporters
 
 
 _listen_cache = [0, None]
@@ -372,11 +375,17 @@ def post_license_deactivate():
 
 
 def post_license_checkin():
+    """Check for renewal now (any installed license; the daily check-in covers online ones by itself)."""
     try:
-        license_checkin()
+        _, renewed = license_refresh()
     except ValueError as ex:
         raise BadRequest(license_message(getattr(ex, 'code', 'error'), str(ex))) from None
-    return edition_info(admin=True)
+    out = edition_info(admin=True)
+    lic = out.get('license') or {}
+    until = time.strftime('%Y-%m-%d', time.gmtime(lic['expires'])) if lic.get('expires') else ''
+    out['checked'] = {'renewed': renewed, 'note': tr(f'Renewed: the license is valid until {until}', f'Оновлено: ліцензія діє до {until}') if renewed
+                      else tr('The license server has no renewal for this license', 'На сервері ліцензій немає оновлення для цієї ліцензії')}
+    return out
 
 
 # Distinct addresses are counted by their 64-bit hash: the same result (a collision among a million addresses has a
@@ -698,10 +707,26 @@ def network_topology(q):
     known = {a.split('/')[0] for c in cfg.values() for v in c.get('if_addrs', {}).values() for a in v} | set(cfg) | \
         {a for c in cfg.values() for a in c.get('public_ips', [])}
     topo = topology.build(cfg, *topology.query(ch, where, p, known))
+    hints = iface_hints()
     for lk in topo['links']:
+        seen = {}
         for e in ('a', 'b'):
             i = lk[e + '_if']
             lk[e + '_name'] = (cfg.get(lk[e], {}).get('if_names', {}).get(str(i)) or f'if {i}') if i is not None else ''
+            seen[e] = hints.get(lk[e], {}).get(i, []) if i is not None else []
+        # the address of each end: from the settings or SNMP, else (like Through device) what the records show on
+        # that interface — a network both ends share first (the link's own subnet)
+        common = [x for x in seen['a'] if x in seen['b']]
+        for e in ('a', 'b'):
+            i = lk[e + '_if']
+            lk[e + '_seen'] = False
+            if lk[e + '_addr'] or i is None:
+                continue
+            own = cfg.get(lk[e], {}).get('if_addrs', {}).get(str(i)) or []
+            if own:
+                lk[e + '_addr'] = own[0]
+            elif common or seen[e]:
+                lk[e + '_addr'], lk[e + '_seen'] = (common or seen[e])[0], True
     return topo, cfg, where, p, live, rng
 
 
@@ -776,25 +801,29 @@ def api_geo(q):
     return {'rows': rows, 'live': live, 'window': p.get('win', 0), 'window_end': p.get('wend', 0)}
 
 
-def iface(c, idx, nbytes, ext, seen=()):
+def iface(c, idx, nbytes, ext, seen=(), sn=None):
+    """c: the configured device (raw); sn: what SNMP found on it (or None)"""
     names = c.get('if_names', {})
     role = 'wan' if idx in c.get('wan_ifs', []) else 'local' if c.get('local_if') == idx and c.get('local_if') is not None else 'lan'
     custom = names.get(str(idx), '')
-    return {'index': idx, 'name': custom or ('local' if role == 'local' else f'if {idx}'), 'custom_name': custom,
+    si = (sn or {}).get('ifs', {}).get(str(idx), {})
+    return {'index': idx, 'name': custom or si.get('name') or ('local' if role == 'local' else f'if {idx}'), 'custom_name': custom,
             'role': role, 'wan': role == 'wan', 'bytes': nbytes, 'ext_share': round(ext / nbytes, 3) if nbytes else 0,
-            'addrs': c.get('if_addrs', {}).get(str(idx), []), 'seen_addrs': list(seen)}
+            'addrs': c.get('if_addrs', {}).get(str(idx), []), 'seen_addrs': list(seen),
+            'snmp_name': si.get('name', ''), 'snmp_alias': si.get('alias', ''), 'snmp_up': si.get('oper') == 1 if si else None,
+            'snmp_speed': si.get('speed') or 0, 'snmp_addrs': (sn or {}).get('addrs', {}).get(str(idx), [])}
 
 
-def interfaces_of(c, rows, seen_addrs):
+def interfaces_of(c, rows, seen_addrs, sn=None):
     """Interfaces seen in the data, plus those only mentioned in the settings (so a WAN index that never
     shows up in the data is visible and can be corrected)."""
-    out = [iface(c, int(r['i']), int(r['bytes']), int(r['ext']), seen_addrs.get(int(r['i']), ())) for r in rows]
+    out = [iface(c, int(r['i']), int(r['bytes']), int(r['ext']), seen_addrs.get(int(r['i']), ()), sn) for r in rows]
     seen = {i['index'] for i in out}
     configured = set(c.get('wan_ifs', [])) | {int(k) for key in ('if_names', 'if_addrs') for k in c.get(key, {}) if str(k).isdigit()}
     if c.get('local_if') is not None:
         configured.add(int(c['local_if']))
     for idx in sorted(configured - seen):
-        out.append({**iface(c, idx, 0, 0), 'unseen': True})
+        out.append({**iface(c, idx, 0, 0, (), sn), 'unseen': True})
     return sorted(out, key=lambda i: i['index'])
 
 
@@ -815,8 +844,68 @@ def collector_health(minutes=15):
     return out
 
 
+_hints = [0, {}]
+
+
+def iface_hints():
+    """exporter -> interface -> addresses the records of 24 h show on it (kept 5 minutes)."""
+    if time.time() - _hints[0] < 300:
+        return _hints[1]
+    # NetFlow does not carry interface addresses; show what the data reveals so the user can recognise ports:
+    # the source NAT address used when leaving an interface (the uplink's public IP) and the private /24
+    # networks that send traffic into it (LAN segments). Only addresses with at least 10 % of the interface's flows.
+    rows = ch("""SELECT exporter, i, a FROM (
+            SELECT exporter, i, a, c, sum(c) OVER (PARTITION BY exporter, i) AS t FROM (
+                SELECT exporter, out_if AS i, nat_ip AS a, count() AS c FROM flows
+                WHERE ts >= now() - INTERVAL 1 DAY AND dir = 'up' AND nat_ip != '' AND nat_ip != int_ip GROUP BY exporter, i, a
+                UNION ALL
+                SELECT exporter, in_if AS i, concat(IPv4NumToString(bitAnd(IPv4StringToNumOrDefault(int_ip), 4294967040)), '/24') AS a, count() AS c FROM flows
+                WHERE ts >= now() - INTERVAL 1 DAY AND dir IN ('up', 'internal') AND int_ip != exporter AND isIPv4String(int_ip)
+                  AND (isIPAddressInRange(int_ip, '10.0.0.0/8') OR isIPAddressInRange(int_ip, '172.16.0.0/12') OR isIPAddressInRange(int_ip, '192.168.0.0/16'))
+                GROUP BY exporter, i, a))
+        WHERE c >= 0.1 * t ORDER BY exporter, i, c DESC LIMIT 3 BY exporter, i""", fmt='JSON')
+    seen = {}
+    for h in rows:
+        seen.setdefault(h['exporter'], {}).setdefault(int(h['i']), []).append(h['a'])
+    _hints[:] = [time.time(), seen]
+    return seen
+
+
+def snmp_status(ip, settings, data):
+    """The device's SNMP settings (no secrets) and how the last poll went."""
+    e = settings.get(ip)
+    if not e:
+        return {'enabled': False}
+    out = snmp.public(e)
+    d = data.get(ip) if e.get('enabled') else None
+    if d:
+        out.update({'polled': d.get('t', 0), 'ok': d.get('ok', False), 'last_ok': d.get('t_ok', 0), 'sys': d.get('sys', {}),
+                    'interfaces': len(d.get('ifs', {})), 'addresses': sum(len(v) for v in d.get('addrs', {}).values())})
+        if not d.get('ok'):
+            out.update({'error': d.get('error'), 'error_text': snmp_error_text(d.get('error'), e, ip), 'detail': d.get('detail', '')})
+    return out
+
+
+def snmp_error_text(code, e, ip):
+    where = f"{e.get('host') or ip}:{e.get('port', 161)}"
+    v3 = e.get('version') == '3'
+    return {
+        'timeout': tr(f"No answer from {where}. Check that SNMP is on, that the device lets this server in (trusted hosts / allowed addresses, SNMP access on the interface), UDP {e.get('port', 161)} on the way, and "
+                      + ("the privacy password and protocol — with wrong ones the device does not answer." if v3 else "the community — with a wrong one the device does not answer."),
+                      f"Немає відповіді від {where}. Перевірте, що SNMP увімкнено, пристрій пускає цей сервер (довірені хости / дозволені адреси, доступ SNMP на інтерфейсі), UDP {e.get('port', 161)} по дорозі, і "
+                      + ("пароль і протокол шифрування — з неправильними пристрій не відповідає." if v3 else "community — з неправильним пристрій не відповідає.")),
+        'user': tr(f"The device does not know the SNMPv3 user «{e.get('user', '')}».", f"Пристрій не знає користувача SNMPv3 «{e.get('user', '')}»."),
+        'auth': tr('Wrong authentication password or protocol.', 'Неправильний пароль або протокол автентифікації.'),
+        'priv': tr('Wrong privacy (encryption) password or protocol.', 'Неправильний пароль або протокол шифрування.'),
+        'level': tr('The device does not allow this security level for the user.', 'Пристрій не дозволяє цей рівень безпеки для користувача.'),
+        'host': tr(f"Unknown host {e.get('host')}.", f"Невідомий хост {e.get('host')}."),
+        'tool': tr('The net-snmp tools are not installed on the server (package snmp): run sudo flowtrack upgrade.', 'На сервері немає утиліт net-snmp (пакет snmp): виконайте sudo flowtrack upgrade.'),
+    }.get(code, tr('The device answered with an error.', 'Пристрій відповів помилкою.'))
+
+
 def api_devices(q):
-    exp = exporters_cfg()
+    exp = exporters_cfg(raw=True)
+    sset, sdata = snmp.load_settings(), snmp.load_data()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
             sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, argMax(sampling, ts) AS sampling_n,
             sum(dup_dropped) AS dup_dropped, sum(dup_packets) AS dup_packets,
@@ -835,22 +924,7 @@ def api_devices(q):
             SELECT exporter, in_if AS i, bytes AS b, if({pub.format(x=src)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY
             UNION ALL SELECT exporter, out_if AS i, bytes AS b, if({pub.format(x=dst)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY)
         GROUP BY exporter, i ORDER BY exporter, i""", {'selfs': selfs}, fmt='JSON')
-    # NetFlow does not carry interface addresses; show what the data reveals so the user can recognise ports:
-    # the source NAT address used when leaving an interface (the uplink's public IP) and the private /24
-    # networks that send traffic into it (LAN segments). Only addresses with at least 10 % of the interface's flows.
-    hints = ch("""SELECT exporter, i, a FROM (
-            SELECT exporter, i, a, c, sum(c) OVER (PARTITION BY exporter, i) AS t FROM (
-                SELECT exporter, out_if AS i, nat_ip AS a, count() AS c FROM flows
-                WHERE ts >= now() - INTERVAL 1 DAY AND dir = 'up' AND nat_ip != '' AND nat_ip != int_ip GROUP BY exporter, i, a
-                UNION ALL
-                SELECT exporter, in_if AS i, concat(IPv4NumToString(bitAnd(IPv4StringToNumOrDefault(int_ip), 4294967040)), '/24') AS a, count() AS c FROM flows
-                WHERE ts >= now() - INTERVAL 1 DAY AND dir IN ('up', 'internal') AND int_ip != exporter AND isIPv4String(int_ip)
-                  AND (isIPAddressInRange(int_ip, '10.0.0.0/8') OR isIPAddressInRange(int_ip, '172.16.0.0/12') OR isIPAddressInRange(int_ip, '192.168.0.0/16'))
-                GROUP BY exporter, i, a))
-        WHERE c >= 0.1 * t ORDER BY exporter, i, c DESC LIMIT 3 BY exporter, i""", fmt='JSON')
-    seen_addrs = {}
-    for h in hints:
-        seen_addrs.setdefault(h['exporter'], {}).setdefault(int(h['i']), []).append(h['a'])
+    seen_addrs = iface_hints()
     # records reported twice although the exporter sends no direction field (both directions monitored on
     # several interfaces): identical flow, interfaces, start time and size
     dups = {r['exporter']: r for r in ch("""SELECT exporter, count() AS n, uniqExact(cityHash64(int_ip, ext_ip, int_port, ext_port, proto, in_if, out_if, ts_start, bytes)) AS u,
@@ -878,8 +952,10 @@ def api_devices(q):
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 and int(s['last']) > cfg_changed + 120 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
-                    'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}))})
-    return {'devices': out, 'collector': collector_health(), 'listen': listen_info()}
+                    'snmp': snmp_status(s['exporter'], sset, sdata),
+                    'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}),
+                                                sdata.get(s['exporter']) if sset.get(s['exporter'], {}).get('enabled') else None)})
+    return {'devices': out, 'collector': collector_health(), 'listen': listen_info(), 'snmp_tools': snmp.available()}
 
 
 def api_host(q):
@@ -1002,18 +1078,66 @@ def device_from_body(b):
         except ValueError:
             raise BadRequest(tr(f'Invalid public IP: {x}', f'Некоректна публічна IP: {x}'))
     cfg['public_ips'] = pubs
-    old = exporters_cfg().get(ip, {})
+    old = exporters_cfg(raw=True).get(ip, {})
     for k in ('if_names', 'if_addrs'):
         if old.get(k):
             cfg[k] = old[k]
     return ip, cfg
 
 
+SNMP_FIELDS = {'version': ('SNMP version', 'Версія SNMP'), 'host': ('SNMP address', 'Адреса SNMP'), 'port': ('SNMP port', 'Порт SNMP'),
+               'community': ('Community: 1–64 characters', 'Community: 1–64 символи'), 'user': ('SNMPv3 user: 1–32 characters', 'Користувач SNMPv3: 1–32 символи'),
+               'level': ('Security level', 'Рівень безпеки'), 'auth_proto': ('Authentication protocol', 'Протокол автентифікації'),
+               'auth_pass': ('Authentication password: 8–64 characters', 'Пароль автентифікації: 8–64 символи'), 'priv_proto': ('Privacy protocol', 'Протокол шифрування'),
+               'priv_pass': ('Privacy password: 8–64 characters', 'Пароль шифрування: 8–64 символи')}
+
+
+def snmp_from_body(ip, b):
+    try:
+        return snmp.settings_from(b, snmp.load_settings().get(ip))
+    except ValueError as e:
+        en, uk = SNMP_FIELDS.get(str(e), (str(e), str(e)))
+        raise BadRequest(tr(f'{en}: invalid value (no spaces at the ends, no quotes at the start, no control characters)',
+                            f'{uk}: некоректне значення (без пробілів на краях, лапок на початку і керівних символів)'))
+
+
 def post_device_save(body, user):
     ip, cfg = device_from_body(body)
+    sn = snmp_from_body(ip, body['snmp']) if isinstance(body.get('snmp'), dict) else None
     save_ui_exporter(ip, cfg)
+    if sn is not None and (sn.get('enabled') or ip in snmp.load_settings()):
+        snmp.save_settings(ip, sn)
+        if sn.get('enabled'):
+            POLLER.kick(ip)
     NAMES.reload()
     return {'ok': True, 'ip': ip}
+
+
+def device_ip(body):
+    try:
+        return str(ipaddress.ip_address(str(body.get('ip', '')).strip()))
+    except ValueError:
+        raise BadRequest(tr('Invalid device IP address', 'Некоректна IP-адреса пристрою'))
+
+
+def post_snmp_test(body, user):
+    """Poll with the settings in the form (not saved; empty secrets = the stored ones)."""
+    ip = device_ip(body)
+    e = snmp_from_body(ip, {**(body.get('snmp') or {}), 'enabled': True})
+    try:
+        return {'ok': True, **snmp.summary(snmp.poll(ip, e))}
+    except snmp.SnmpError as x:
+        return {'ok': False, 'error': x.code, 'error_text': snmp_error_text(x.code, e, ip), 'detail': x.detail[:300]}
+
+
+def post_snmp_poll(body, user):
+    """Poll a device now with its stored settings."""
+    ip = device_ip(body)
+    if not snmp.load_settings().get(ip, {}).get('enabled'):
+        raise BadRequest(tr('SNMP is off for this device', 'Для цього пристрою SNMP вимкнено'))
+    snmp.poll_and_store(ip)
+    NAMES.reload()
+    return {'ok': True, 'snmp': snmp_status(ip, snmp.load_settings(), snmp.load_data())}
 
 
 def post_device_interfaces(body, user):
@@ -1058,7 +1182,7 @@ def post_device_interfaces(body, user):
             local = idx
         elif role != 'lan':
             raise BadRequest(tr('Role: lan, wan or local', 'Роль: lan, wan або local'))
-    merged = exporters_cfg().get(ip, {})
+    merged = exporters_cfg(raw=True).get(ip, {})
     entry = load_ui_exporter(ip)
     entry.update({'if_names': names, 'if_addrs': addrs, 'wan_ifs': sorted(set(wan)), 'local_if': local})
     entry.setdefault('name', merged.get('name', ip))
@@ -1072,6 +1196,7 @@ def post_device_delete(body, user):
     if ip not in exporters_cfg():
         raise BadRequest(tr('The device is not configured', 'Пристрій не налаштований'))
     save_ui_exporter(ip, None)
+    snmp.save_settings(ip, None)
     NAMES.reload()
     return {'ok': True}
 
@@ -1131,6 +1256,7 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 
 AUTH = None
+POLLER = snmp.Poller()
 ADMIN_GET = {'/api/users'}
 COOKIE = 'ft_session'
 
@@ -1265,6 +1391,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/devices/save': lambda: post_device_save(body, user),
                 '/api/devices/delete': lambda: post_device_delete(body, user),
                 '/api/devices/interfaces': lambda: post_device_interfaces(body, user),
+                '/api/devices/snmp_test': lambda: post_snmp_test(body, user),
+                '/api/devices/snmp_poll': lambda: post_snmp_poll(body, user),
                 '/api/license': lambda: post_license(body),
                 '/api/license/deactivate': post_license_deactivate,
                 '/api/license/checkin': post_license_checkin,
@@ -1392,6 +1520,7 @@ if __name__ == '__main__':
                 os._exit(3)
     if any(dev for _, dev in LISTENERS):
         threading.Thread(target=watch_addresses, daemon=True).start()
+    POLLER.start()
     for srv in servers[1:]:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
     servers[0].serve_forever()

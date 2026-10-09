@@ -55,6 +55,7 @@ async function apiFetch(url){
   return body;
 }
 async function apiPost(path, body){
+  API_SHARED.clear();                    // a change: answers shared before it are stale (the server clears its cache too)
   const r = await fetch(`api/${path}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body || {})});
   const data = await r.json().catch(() => ({}));
   if (r.status === 401 && path !== 'login') { showLogin(T('Session ended — sign in again', 'Сесія завершилась — увійдіть знову')); throw new Error(T('login required', 'потрібен вхід')); }
@@ -831,8 +832,8 @@ function vPaths(){
       color.set(idx, ROLE_COLOR[r] || IFPAL[(pos >= 0 ? pos : plain.length + color.size) % IFPAL.length]); } return color.get(idx); };
     const ifName = idx => { const i = ifs.get(idx); return i ? (i.custom_name || i.name) : (idx === 0 ? 'local' : `if ${idx}`); };
     // an address or network that identifies the interface: entered by hand, else what the flows show
-    const ifAddr = idx => { const i = ifs.get(idx); return i ? ([...(i.addrs || []), ...(i.seen_addrs || [])][0] || '') : ''; };
-    const ifNamed = idx => { const i = ifs.get(idx); return !!(i && i.custom_name) || idx === 0; };
+    const ifAddr = idx => { const i = ifs.get(idx); return i ? ([...(i.addrs || []), ...(i.snmp_addrs || []), ...(i.seen_addrs || [])][0] || '') : ''; };
+    const ifNamed = idx => { const i = ifs.get(idx); return !!(i && (i.custom_name || i.snmp_name)) || idx === 0; };
     const ifRole = idx => { const r = (ifs.get(idx) || {}).role || 'lan'; return r === 'wan' ? 'WAN' : r === 'local' ? T('device itself', 'сам пристрій') : 'LAN'; };
     const unit = state.metric === 'bytes' ? fmtB : fmtN;
     const draw = d => {
@@ -1106,11 +1107,11 @@ function vNetwork(){
     fill('nKpi', kc('dev', T('Point of View', 'Точка огляду'), esc(pv ? pv.name : '—'), pv ? T(`${pv.neighbours} L3 neighbour(s)`, `${pv.neighbours} L3-сусід(ів)`) : '')
       + kc('nodes', T('Links shown', 'Зв’язків показано'), ls.length, `${cnt('observed')} ${T('observed', 'видно')}`)
       + kc('shield', T('Gaps · not observed', 'Розриви · не видно'), `${cnt('gap')} · ${cnt('unobserved')}`, T('links to check', 'зв’язки, які варто перевірити'), cnt('gap') + cnt('unobserved') ? RED : ''));
-    const row = (d, name, addr) => `<b>${esc(nm(d))}</b> <span class="mono">${esc(name)}</span>${addr ? ` <span class="nat mono">${esc(addr)}</span>` : ''}`;
+    const row = (d, name, addr, seen) => `<b>${esc(nm(d))}</b> <span class="mono">${esc(name)}</span>${addr ? ` <span class="nat mono"${seen ? ` title="${T('seen in the records of 24 h (the interface has no address from the settings or SNMP)', 'видно із записів за 24 год (адреси з налаштувань чи SNMP в інтерфейсу немає)')}"` : ''}>${esc(addr)}</span>` : ''}`;
     const sr = (sent, got, inet) => inet ? `<b class="mono">${fmtB(sent)}</b>` : `<b class="mono">${fmtB(sent)}</b> <span class="nat">/ ${fmtB(got)}</span>`;
     const tb = fill('nLinks', ls.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('End A', 'Кінець A')}</th><th></th><th>${T('End B', 'Кінець B')}</th><th>${T('State', 'Стан')}</th><th class="num">${T('A → B sent / received', 'A → B відправлено / отримано')}</th><th class="num">${T('B → A sent / received', 'B → A відправлено / отримано')}</th><th>${T('Found by', 'Знайдено за')}</th></tr></thead><tbody>
       ${ls.map(l => { const inet = l.b === 'internet', bad = l.state === 'gap' || l.state === 'unobserved';
-        return `<tr><td>${row(l.a, l.a_name, l.a_addr)}</td><td class="nat">↔</td><td>${inet ? `<b>${T('Internet', 'Інтернет')}</b>` : row(l.b, l.b_name, l.b_addr)}</td>
+        return `<tr><td>${row(l.a, l.a_name, l.a_addr, l.a_seen)}</td><td class="nat">↔</td><td>${inet ? `<b>${T('Internet', 'Інтернет')}</b>` : row(l.b, l.b_name, l.b_addr, l.b_seen)}</td>
           <td><span class="tag" title="${esc(LINK_STATE[l.state][1])}"${bad ? ` style="color:${RED};border-color:${hexA(RED, .5)}"` : ''}>${LINK_STATE[l.state][0]}</span></td>
           <td class="num">${sr(l.a_out, l.b_in, inet)}</td><td class="num">${inet ? `<b class="mono">${fmtB(l.a_in)}</b>` : sr(l.b_out, l.a_in)}</td>
           <td class="nat">${l.evidence === 'subnet' ? T('subnet', 'підмережа') + ' ' + esc(l.net) : l.evidence === 'wan' ? T('WAN interface', 'WAN-інтерфейс') : T('addresses in the records', 'адреси в записах')}</td></tr>`; }).join('')}</tbody></table></div>`
@@ -1338,10 +1339,43 @@ function vThreats(){
 const VENDORS = {
   Fortinet:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)', 'WAN + внутрішні інтерфейси (крім Wi-Fi SSID)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`,
   Cisco:(ip, port) => `flow record FT-REC\n match ipv4 source address\n match ipv4 destination address\n match ipv4 protocol\n match transport source-port\n match transport destination-port\n match interface input\n match flow direction\n collect interface output\n collect counter bytes long\n collect counter packets long\n collect timestamp sys-uptime first\n collect timestamp sys-uptime last\nflow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record FT-REC\n cache timeout active 60\n! ${T('on every interface to watch (WAN and LAN)', 'на кожному інтерфейсі для спостереження (WAN і LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON input\n ip flow monitor FT-MON output`,
-  MikroTik:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=ipfix`,
+  MikroTik:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=9`,
   Juniper:(ip, port) => `set services flow-monitoring version-ipfix template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} version-ipfix template FT`,
   'Linux / pmacct':(ip, port) => `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: 10\npcap_interface: eth0`,
 };
+// SNMP on the device, from the values in the form (stored secrets are not sent to the browser: placeholders then)
+const SNMP_AUTH = ['MD5', 'SHA', 'SHA-224', 'SHA-256', 'SHA-384', 'SHA-512'], SNMP_PRIV = ['DES', 'AES', 'AES-192', 'AES-256'];
+const SNMP_LEVELS = {noAuthNoPriv:T('no authentication, no privacy', 'без автентифікації та шифрування'), authNoPriv:T('authentication only', 'лише автентифікація'), authPriv:T('authentication + privacy', 'автентифікація + шифрування')};
+const snmpVal = (s, k, ph) => s[k] || `<${ph}>`;
+// the protocols each vendor's SNMP agent accepts: the form offers only these (FlowTrack itself takes all)
+const SNMP_SUPPORT = {MikroTik:{auth:['MD5', 'SHA'], priv:['DES', 'AES']}, Cisco:{auth:['MD5', 'SHA', 'SHA-256', 'SHA-384', 'SHA-512'], priv:['DES', 'AES']},
+  Fortinet:{priv:['DES', 'AES', 'AES-256']}, Juniper:{priv:['DES', 'AES']}};
+const snmpChoices = (vendor, k) => ((SNMP_SUPPORT[vendor] || {})[k]) || (k === 'auth' ? SNMP_AUTH : SNMP_PRIV);
+const SNMP_LABEL = {SHA:'SHA1', AES:'AES-128'};
+// the strongest pair each vendor takes (used until the user picks a protocol)
+const snmpDefaults = vendor => ({Fortinet:['SHA-256', 'AES-256'], MikroTik:['SHA', 'AES']}[vendor] || ['SHA-256', 'AES']);
+// a protocol the vendor does not take moves to its strongest one
+const snmpFit = (vendor, s) => { for (const [k, f] of [['auth', 'auth_proto'], ['priv', 'priv_proto']]) { const c = snmpChoices(vendor, k); if (!c.includes(s[f])) s[f] = c[c.length - 1]; } };
+const SNMP_VENDORS = {
+  Fortinet:(ip, s) => (s.version === '3'
+    ? `config system snmp sysinfo\n    set status enable\nend\nconfig system snmp user\n    edit "${snmpVal(s, 'user', 'user')}"\n        set trap-status disable\n        # ${T('FortiOS answers SNMPv3 queries only from these hosts', 'FortiOS відповідає на запити SNMPv3 лише цим хостам')}\n        set notify-hosts ${ip}\n        set queries enable\n        set query-port ${s.port || 161}\n        set security-level ${{noAuthNoPriv:'no-auth-no-priv', authNoPriv:'auth-no-priv', authPriv:'auth-priv'}[s.level]}${s.level !== 'noAuthNoPriv' ? `\n        set auth-proto ${{MD5:'md5', SHA:'sha', 'SHA-224':'sha224', 'SHA-256':'sha256', 'SHA-384':'sha384', 'SHA-512':'sha512'}[s.auth_proto]}\n        set auth-pwd ${snmpVal(s, 'auth_pass', 'auth-password')}` : ''}${s.level === 'authPriv' ? `\n        set priv-proto ${{DES:'des', AES:'aes', 'AES-192':'aes', 'AES-256':'aes256'}[s.priv_proto]}\n        set priv-pwd ${snmpVal(s, 'priv_pass', 'priv-password')}` : ''}\n    next\nend\n# ${T('SNMP access on the interface FlowTrack reaches the device through', 'доступ SNMP на інтерфейсі, через який FlowTrack звертається до пристрою')}\nconfig system interface\n    edit "internal"\n        append allowaccess snmp\n    next\nend\n# ${T('No answer after this? Restart the SNMP agent once', 'Немає відповіді після цього? Один раз перезапустіть агент SNMP')}:\n# diagnose test application snmpd 99`
+    : `config system snmp sysinfo\n    set status enable\nend\nconfig system snmp community\n    edit 1\n        set name "${snmpVal(s, 'community', 'community')}"\n        config hosts\n            edit 1\n                set ip ${ip} 255.255.255.255\n            next\n        end\n        set query-v1-status disable\n        set query-v2c-port ${s.port || 161}\n        set trap-v1-status disable\n        set trap-v2c-status disable\n    next\nend\n# ${T('SNMP access on the interface FlowTrack reaches the device through', 'доступ SNMP на інтерфейсі, через який FlowTrack звертається до пристрою')}\nconfig system interface\n    edit "internal"\n        append allowaccess snmp\n    next\nend\n# ${T('No answer after this? Restart the SNMP agent once', 'Немає відповіді після цього? Один раз перезапустіть агент SNMP')}:\n# diagnose test application snmpd 99`),
+  Cisco:(ip, s) => `ip access-list standard FLOWTRACK-SNMP\n permit ${ip}\nsnmp-server ifindex persist\n` + (s.version === '3'
+    ? `snmp-server group FLOWTRACK v3 ${{noAuthNoPriv:'noauth', authNoPriv:'auth', authPriv:'priv'}[s.level]} access FLOWTRACK-SNMP\nsnmp-server user ${snmpVal(s, 'user', 'user')} FLOWTRACK v3${s.level !== 'noAuthNoPriv' ? ` auth ${s.auth_proto === 'MD5' ? 'md5' : s.auth_proto === 'SHA' ? 'sha' : 'sha-2 ' + s.auth_proto.slice(4)} ${snmpVal(s, 'auth_pass', 'auth-password')}` : ''}${s.level === 'authPriv' ? ` priv ${s.priv_proto === 'DES' ? 'des' : 'aes 128'} ${snmpVal(s, 'priv_pass', 'priv-password')}` : ''}`
+    : `snmp-server community ${snmpVal(s, 'community', 'community')} RO FLOWTRACK-SNMP`),
+  MikroTik:(ip, s) => (s.version === '3'
+    ? `/snmp community add name=${snmpVal(s, 'user', 'user')} addresses=${ip}/32 read-access=yes security=${{noAuthNoPriv:'none', authNoPriv:'authorized', authPriv:'private'}[s.level]}${s.level !== 'noAuthNoPriv' ? ` authentication-protocol=${s.auth_proto === 'SHA' ? 'SHA1' : s.auth_proto} authentication-password="${snmpVal(s, 'auth_pass', 'auth-password')}"` : ''}${s.level === 'authPriv' ? ` encryption-protocol=${s.priv_proto} encryption-password="${snmpVal(s, 'priv_pass', 'priv-password')}"` : ''}`
+    : `/snmp community add name="${snmpVal(s, 'community', 'community')}" addresses=${ip}/32 read-access=yes`) + `\n/snmp set enabled=yes\n# ${T('The default firewall drops input from interfaces outside the LAN list (tunnels, WAN): let FlowTrack in', 'Стандартний фаєрвол відкидає вхідні з інтерфейсів поза списком LAN (тунелі, WAN): пропустіть FlowTrack')}\n/ip firewall filter add chain=input protocol=udp dst-port=161 src-address=${ip} action=accept place-before=0 comment=FlowTrack-SNMP`,
+  Juniper:(ip, s) => (s.version === '3'
+    ? `set snmp v3 usm local-engine user ${snmpVal(s, 'user', 'user')} ${s.level === 'noAuthNoPriv' ? 'authentication-none' : `authentication-${s.auth_proto.toLowerCase().replace('-', '')} authentication-password "${snmpVal(s, 'auth_pass', 'auth-password')}"`}${s.level === 'authPriv' ? `\nset snmp v3 usm local-engine user ${snmpVal(s, 'user', 'user')} privacy-${s.priv_proto === 'DES' ? 'des' : 'aes128'} privacy-password "${snmpVal(s, 'priv_pass', 'priv-password')}"` : ''}\nset snmp v3 vacm security-to-group security-model usm security-name ${snmpVal(s, 'user', 'user')} group flowtrack\nset snmp v3 vacm access group flowtrack default-context-prefix security-model usm security-level ${{noAuthNoPriv:'none', authNoPriv:'authentication', authPriv:'privacy'}[s.level]} read-view all\nset snmp view all oid .1 include`
+    : `set snmp community "${snmpVal(s, 'community', 'community')}" authorization read-only\nset snmp community "${snmpVal(s, 'community', 'community')}" clients ${ip}/32`),
+  'Linux / pmacct':(ip, s) => s.version === '3'
+    ? `# /etc/snmp/snmpd.conf\nagentAddress udp:${s.port || 161}\nrouser ${snmpVal(s, 'user', 'user')} ${{noAuthNoPriv:'noauth', authNoPriv:'auth', authPriv:'priv'}[s.level]}\n# ${T('stop snmpd, add the user, start snmpd', 'зупиніть snmpd, додайте користувача, запустіть snmpd')}:\n# net-snmp-create-v3-user -ro${s.level !== 'noAuthNoPriv' ? ` -a ${s.auth_proto} -A '${snmpVal(s, 'auth_pass', 'auth-password')}'` : ''}${s.level === 'authPriv' ? ` -x ${s.priv_proto} -X '${snmpVal(s, 'priv_pass', 'priv-password')}'` : ''} ${snmpVal(s, 'user', 'user')}`
+    : `# /etc/snmp/snmpd.conf\nagentAddress udp:${s.port || 161}\nrocommunity ${snmpVal(s, 'community', 'community')} ${ip}`,
+};
+const snmpTag = x => !x.snmp || !x.snmp.enabled ? '' : x.snmp.ok === false
+  ? ` <span class="pill warn" title="${esc(x.snmp.error_text || '')}">${T('SNMP error', 'помилка SNMP')}</span>`
+  : ` <span class="tag" title="${x.snmp.polled ? esc(T(`SNMP: ${x.snmp.interfaces} interfaces, ${x.snmp.addresses} addresses`, `SNMP: інтерфейсів ${x.snmp.interfaces}, адрес ${x.snmp.addresses}`)) : T('SNMP: waiting for the first poll', 'SNMP: чекаю на перше опитування')}">SNMP</span>`;
 // ---- edition: limits in effect and the license key (admin)
 const fmtInt = n => (+n || 0).toLocaleString(LOC);
 const LIC_BAD = ['invalid', 'other_instance', 'returned', 'clock', 'expired'];
@@ -1371,7 +1405,11 @@ async function editionPanel(returned){
     ed.lease_until ? T(`Online license · confirmed by the license server until ${fmtDay(ed.lease_until)}`, `Онлайн-ліцензія · підтверджена сервером ліцензій до ${fmtDay(ed.lease_until)}`)
                    : T('Online license · not confirmed by the license server', 'Онлайн-ліцензія · не підтверджена сервером ліцензій')}${
     chk ? ' · ' + (chk.ok ? T('last check ', 'остання перевірка ') + new Date(chk.ts * 1000).toLocaleString(LOC) : T('last check failed: ', 'остання перевірка не вдалась: ') + esc(chk.error)) : ''}</span>${
-    isAdmin() ? `<button class="btn" id="licCheck">${T('Check now', 'Перевірити зараз')}</button>` : ''}</div>` : '';
+    isAdmin() ? `<button class="btn" id="licCheck">${T('Check now', 'Перевірити зараз')}</button>` : ''}</div>`
+    // an offline (or expired) license never contacts the server by itself: ask on request whether the vendor renewed it
+    : lic.customer && isAdmin() ? `<div class="lic-online"><span class="nat">${T('Offline license · FlowTrack does not contact the license server by itself', 'Офлайн-ліцензія · FlowTrack сам не звертається до сервера ліцензій')}</span><button class="btn" id="licCheck">${T('Check for renewal', 'Перевірити оновлення')}</button></div>` : '';
+  const note = window.__licNote; window.__licNote = null;
+  const noteHtml = note ? `<p class="note" role="status" style="color:${note.renewed ? 'var(--ok)' : note.error ? 'var(--crit)' : 'inherit'}">${esc(note.note)}</p>` : '';
   const soon = pro && lic.days_left != null && lic.days_left < 30;
   const until = lic.expires ? new Date(lic.expires * 1000).toLocaleDateString(LOC, {day:'numeric', month:'long', year:'numeric', timeZone:'UTC'}) : '';   // licenses end at 23:59 UTC of their last day
   box.innerHTML = `<div class="edition">
@@ -1381,11 +1419,12 @@ async function editionPanel(returned){
       <div title="${T(`New records are kept this long. Records already stored keep their own term and are never shortened; without a license only the last ${ed.community_days || 30} days are shown, older records show again with a license.`, `Нові записи зберігаються стільки днів. Уже збережені записи мають свій строк, і він ніколи не скорочується; без ліцензії видно лише останні ${ed.community_days || 30} днів, старіші записи знову видно з ліцензією.`)}"><span>${T('Flow details kept', 'Деталі потоків зберігаються')}</span><b>${ed.retention_days} ${T('days', 'днів')}${ed.view_days > ed.retention_days ? ` <small>${T(`(earlier records: the last ${ed.view_days} days shown)`, `(видно записи за останні ${ed.view_days} днів)`)}</small>` : ''}</b></div>
       <div><span>${T('Not stored over the limit, 24 h', 'Не збережено понад ліміт, 24 год')}</span><b class="${ed.license_drops_24h ? 'warnc' : ''}">${fmtInt(ed.license_drops_24h)}</b></div>
       ${lic.customer ? `<div><span>${T('Licensed to', 'Ліцензіат')}</span><b>${esc(lic.customer)}</b></div><div><span>${pro ? T('Valid until', 'Діє до') : ed.status === 'expired' ? T('Expired on', 'Закінчилась') : T('Term', 'Термін')}</span><b class="${soon || !pro ? 'warnc' : ''}">${until}</b></div>` : ''}
-    </div>${online}
+    </div>${online}${noteHtml}
   </div>`;
   box.classList.remove('loading');
   const lc = document.getElementById('licCheck'); if (lc) lc.onclick = async () => { lc.disabled = true; lc.textContent = T('Checking…', 'Перевіряю…');
-    try { await apiPost('license/checkin', {}); } catch (e) { alert(e.message); } META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(); };
+    try { window.__licNote = (await apiPost('license/checkin', {})).checked; } catch (e) { window.__licNote = {error:true, note:e.message}; }
+    META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(); };
   const act = document.getElementById('actBox'); if (!act || !isAdmin()) return;
   // activation: this server's identity and request on the left, the license from the vendor on the right
   act.innerHTML = `<div class="lic-grid">
@@ -1488,7 +1527,7 @@ function vDevices(){
     <section class="glass panel s12">${ph('ip', T('Interfaces', 'Інтерфейси'), T('indexes the collector saw in 24 h · the WAN role defines what is upload and download', 'індекси, які колектор бачив за 24 год · роль WAN визначає, що таке upload і download'))}<div id="ifBox" class="loading"></div></section>
 </div>`;
   if (isAdmin()) document.getElementById('addDev').onclick = () => openDevice(null);
-  section('dBox', async () => { const res = await api('devices'), d = res.devices; window.__devs = d;
+  section('dBox', async () => { const res = await api('devices'), d = res.devices; window.__devs = d; window.__snmpTools = res.snmp_tools;
     // the interfaces panel shows one device: the one picked in the table, else the global device filter, else the first
     const df = state.filters.find(f => f.k === 'device' && !f.neg);
     if (!d.some(x => x.ip === state.ifDev)) state.ifDev = (d.find(x => df && x.ip === df.v) || d.find(x => x.interfaces.length) || d[0] || {}).ip;
@@ -1499,7 +1538,7 @@ function vDevices(){
     });
     return `<div class="tw"><table><thead><tr><th>${T('Status', 'Стан')}</th><th>${T('Device', 'Пристрій')}</th><th>${T('Vendor / model', 'Виробник / модель')}</th><th>${T('Protocol', 'Протокол')}</th><th>${T('Site', 'Майданчик')}</th><th>${T('Export IP', 'IP експорту')}</th><th class="num">${T('Records/s', 'Записів/с')}</th><th class="num">${T('Templates', 'Шаблони')}</th><th>${T('Sampling', 'Вибірка')}</th><th class="num">${T('Loss', 'Втрати')}</th><th class="num">${T('No template', 'Без шаблону')}</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
       ${d.map(x => { const never = !x.last, stale = Date.now() / 1000 - x.last > 180, st = never ? 'warn' : stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
-        return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? T('has not sent data yet', 'ще не надсилав даних') : stale ? T('no data for over 3 min', 'немає даних понад 3 хв') : T('online', 'онлайн')}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ` <span class="tag">${T('not described', 'не описаний')}</span>`}${dupPill(x)}${repeatPill(x)}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? T('waiting', 'очікую') : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
+        return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? T('has not sent data yet', 'ще не надсилав даних') : stale ? T('no data for over 3 min', 'немає даних понад 3 хв') : T('online', 'онлайн')}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ` <span class="tag">${T('not described', 'не описаний')}</span>`}${snmpTag(x)}${dupPill(x)}${repeatPill(x)}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? T('waiting', 'очікую') : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
           <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td>
           ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">${T('Edit', 'Змінити')}</button></td>` : ''}</tr>`; }).join('') || `<tr><td colspan="12"><div class="empty">${T('No device has sent data yet', 'Ще жоден пристрій не надіслав дані')}</div></td></tr>`}</tbody></table></div>${collectorBar(res.collector, res.listen)}<p class="note">${T('Click a row to see the device’s interfaces below. To filter by device, use the device list at the top.', 'Клік по рядку показує інтерфейси пристрою нижче. Фільтр за пристроєм — у списку пристроїв угорі.')}${isAdmin() ? T(' The collector picks up description changes within a minute.', ' Зміни опису колектор підхоплює протягом хвилини.') : ''}</p>`; });
 }
@@ -1543,7 +1582,9 @@ function showIfaces(devices){
   wireIfaces(box, x, devices);
 }
 const addrHtml = i => {
-  const own = i.addrs.map(a => `<b class="mono">${esc(a)}</b>`), seen = i.seen_addrs.filter(a => !i.addrs.some(o => o === a || o.split('/')[0] === a));
+  const sa = i.addrs.length ? [] : (i.snmp_addrs || []), known = [...i.addrs, ...sa];
+  const own = [...i.addrs.map(a => `<b class="mono">${esc(a)}</b>`), ...sa.map(a => `<span class="mono" title="SNMP">${esc(a)}</span>`)];
+  const seen = known.length ? [] : i.seen_addrs;
   const auto = seen.map(a => `<span class="mono nat" title="${a.includes('/') ? T('network that sends traffic into this interface (24 h)', 'мережа, з якої приходить трафік у цей інтерфейс (за 24 год)') : T('NAT address traffic leaves this interface with (24 h)', 'адреса NAT, з якою трафік виходить через цей інтерфейс (за 24 год)')}">${esc(a)}</span>`);
   return [...own, ...auto].join('<br>') || '<span class="nat">—</span>';
 };
@@ -1554,25 +1595,34 @@ function ifaceTable(x, edit){
   const best = ranked[0] && ranked[0].ext_share >= 0.3 && ranked[0].ext_share >= 3 * ((ranked[1] || {}).ext_share || 0) ? ranked[0].index : null;
   const rows = x.interfaces.map(i => {
     const hint = i.index === best && i.role !== 'wan' ? `<span class="pill info" title="${T(`${Math.round(i.ext_share * 100)}% of this interface’s traffic is from/to public addresses; much less on the others`, `${Math.round(i.ext_share * 100)}% трафіку цього інтерфейсу — з/до публічних адрес; у решти значно менше`)}">${T('looks like WAN', 'схоже на WAN')}</span>` : '';
-    const name = edit ? `<input class="ifname" data-idx="${i.index}" value="${esc(i.custom_name)}" placeholder="${esc(i.role === 'local' ? 'local' : 'if ' + i.index)}" maxlength="32" aria-label="${T(`Interface ${i.index} name`, `Назва інтерфейсу ${i.index}`)}">`
-                      : `<b class="ipl">${esc(i.name)}</b>`;
+    const name = edit ? `<input class="ifname" data-idx="${i.index}" value="${esc(i.custom_name)}" placeholder="${esc(i.snmp_name || (i.role === 'local' ? 'local' : 'if ' + i.index))}" maxlength="32" aria-label="${T(`Interface ${i.index} name`, `Назва інтерфейсу ${i.index}`)}">`
+                      : `<b class="ipl"${i.snmp_alias ? ` title="${esc(i.snmp_alias)}"` : ''}>${esc(i.name)}</b>${i.snmp_up === false ? ` <span class="tag" title="ifOperStatus">${T('down', 'вимкнено')}</span>` : ''}${i.snmp_alias && i.snmp_alias !== i.name ? `<div class="nat">${esc(i.snmp_alias)}</div>` : ''}`;
     const role = edit ? `<select class="ifrole" data-idx="${i.index}" aria-label="${T(`Interface ${i.index} role`, `Роль інтерфейсу ${i.index}`)}">${Object.entries(ROLE_UI).map(([k, l]) => `<option value="${k}"${k === i.role ? ' selected' : ''}>${l}</option>`).join('')}</select>`
                       : (i.role === 'wan' ? '<span class="pill warn">WAN</span>' : i.role === 'local' ? `<span class="tag">${T('the device itself', 'сам пристрій')}</span>` : '<span class="tag">LAN</span>');
-    const addrs = edit ? `<input class="ifaddr" data-idx="${i.index}" value="${esc(i.addrs.join(', '))}" placeholder="${T('IP or IP/mask, comma-separated', 'IP або IP/маска, через кому')}" aria-label="${T(`Interface ${i.index} IP addresses`, `IP-адреси інтерфейсу ${i.index}`)}">${i.seen_addrs.length ? `<div class="nat ifseen">${T('in the data', 'у даних')}: ${i.seen_addrs.map(esc).join(', ')}</div>` : ''}`
+    const addrs = edit ? `<input class="ifaddr" data-idx="${i.index}" value="${esc(i.addrs.join(', '))}" placeholder="${esc((i.snmp_addrs || []).join(', ') || T('IP or IP/mask, comma-separated', 'IP або IP/маска, через кому'))}" aria-label="${T(`Interface ${i.index} IP addresses`, `IP-адреси інтерфейсу ${i.index}`)}">${i.seen_addrs.length ? `<div class="nat ifseen">${T('in the data', 'у даних')}: ${i.seen_addrs.map(esc).join(', ')}</div>` : ''}`
                        : addrHtml(i);
     const unseen = i.unseen ? ` <span class="pill warn" title="${T('The index is in the settings but did not appear in the data for 24 h — it may be wrong', 'Індекс є в налаштуваннях, але в даних за 24 год не траплявся — можливо, його вказано помилково')}">${T('not seen in 24 h', 'не бачили за 24 год')}</span>` : '';
     return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td></tr>`;
   }).join('');
+  const sn = x.snmp || {}, when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
+  const snmpLine = !sn.enabled ? '' : `<div class="ifsnmp">${sn.polled ? (sn.ok ? `<span class="pill ok">SNMP</span> <span class="nat">${esc(sn.sys && sn.sys.name || '')}${sn.sys && sn.sys.name ? ' · ' : ''}${T(`${sn.interfaces} interfaces, ${sn.addresses} addresses · polled ${when(sn.polled)}`, `інтерфейсів ${sn.interfaces}, адрес ${sn.addresses} · опитано ${when(sn.polled)}`)}</span>`
+      : `<span class="pill warn" title="${esc(sn.detail || '')}">${T('SNMP error', 'помилка SNMP')}</span> <span class="nat">${esc(sn.error_text || '')}${sn.last_ok ? ' · ' + T(`last good poll ${when(sn.last_ok)}`, `останнє вдале опитування ${when(sn.last_ok)}`) : ''}</span>`)
+      : `<span class="pill info">SNMP</span> <span class="nat">${T('waiting for the first poll', 'чекаю на перше опитування')}</span>`}${admin && !edit ? ` <button class="btn snmppoll">${T('Poll now', 'Оновити зараз')}</button>` : ''}</div>`;
   const btns = !admin || !x.interfaces.length ? '' : edit ? `<span class="nat ifmsg"></span><button class="btn ifcancel">${T('Cancel', 'Скасувати')}</button><button class="btn primary ifsave" disabled>${T('Save', 'Зберегти')}</button>`
                                                            : `<span class="nat ifmsg"></span><button class="btn ifedit">${T('Edit', 'Змінити')}</button>`;
-  return `<div class="ifdev${edit ? ' editing' : ''}" data-dev="${esc(x.ip)}"><div class="ifdev-h"><h4 class="mono">${esc(x.name)} <span class="nat">${esc(x.ip)}${x.vendor ? ' · ' + esc(x.vendor) : ''}</span></h4>${btns}</div>
+  return `<div class="ifdev${edit ? ' editing' : ''}" data-dev="${esc(x.ip)}"><div class="ifdev-h"><h4 class="mono">${esc(x.name)} <span class="nat">${esc(x.ip)}${x.vendor ? ' · ' + esc(x.vendor) : ''}</span></h4>${btns}</div>${snmpLine}
     ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">${T('Index', 'Індекс')}</th><th>${T('Name', 'Назва')}</th><th>${T('IP addresses', 'IP-адреси')}</th><th>${T('Role', 'Роль')}</th><th class="num">${T('Traffic, 24 h', 'Трафік за 24 год')}</th><th class="num" title="${T('Share of traffic with outside addresses', 'Частка трафіку із зовнішніми адресами')}">${T('Ext.', 'Зовн.')}</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <p class="note">${T('Bold: addresses entered by hand; grey: what the flows of the last 24 h show — the NAT address traffic leaves to the internet with (this is how a WAN usually looks) and the networks that send traffic into the interface.', 'Жирним — адреси, вказані вручну; сірим — те, що видно з потоків за 24 год: адреса NAT, з якою трафік виходить в інтернет (так зазвичай виглядає WAN), і мережі, з яких трафік приходить в інтерфейс.')}</p>`
+    <p class="note">${T('Bold: addresses entered by hand; plain: read over SNMP; grey (when neither is known): what the flows of the last 24 h show — the NAT address traffic leaves to the internet with (this is how a WAN usually looks) and the networks that send traffic into the interface. Names and addresses entered by hand take priority over SNMP.', 'Жирним — адреси, вказані вручну; звичайним — отримані по SNMP; сірим (коли інших немає) — те, що видно з потоків за 24 год: адреса NAT, з якою трафік виходить в інтернет (так зазвичай виглядає WAN), і мережі, з яких трафік приходить в інтерфейс. Назви й адреси, вписані вручну, мають перевагу над SNMP.')}</p>`
       : `<div class="empty">${T('The collector has not seen interfaces of this device yet (24 h)', 'Колектор ще не бачив інтерфейсів цього пристрою (за 24 год)')}</div>`}</div>`;
 }
 function wireIfaces(box, x, devices){
   const card = box.querySelector('.ifdev'), msg = card.querySelector('.ifmsg');
   const say = (t, color) => { if (msg) { msg.textContent = t; msg.style.color = color || ''; } };
+  const poll = card.querySelector('.snmppoll');
+  if (poll) poll.onclick = async () => { poll.disabled = true; poll.textContent = T('Polling…', 'Опитую…');
+    try { await apiPost('devices/snmp_poll', {ip:x.ip}); const fresh = (await api('devices')).devices, i = devices.findIndex(d => d.ip === x.ip), nx = fresh.find(d => d.ip === x.ip);
+      if (i >= 0 && nx) devices[i] = nx; META = await fetch('api/meta').then(r => r.json()); showIfaces(devices);
+    } catch (e) { poll.disabled = false; poll.textContent = T('Poll now', 'Оновити зараз'); say(e.message, 'var(--crit)'); } };
   const edit = card.querySelector('.ifedit'); if (edit) edit.onclick = () => { state.ifEdit = x.ip; showIfaces(devices); const f = box.querySelector('.ifname'); if (f) f.focus(); };
   const cancel = card.querySelector('.ifcancel'); if (cancel) cancel.onclick = () => { state.ifEdit = null; showIfaces(devices); };
   const save = card.querySelector('.ifsave'); if (!save) return;
@@ -1605,39 +1655,81 @@ function openModal(title, sub, body, wide){
 }
 const formErr = (id, msg) => { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.hidden = !msg; } };
 function openDevice(dev){
-  const c = dev ? dev.config || {} : {}, editing = !!dev;
+  const c = dev ? dev.config || {} : {}, editing = !!dev, st = (dev && dev.snmp) || {};
   let vendor = c.vendor && VENDORS[c.vendor] ? c.vendor : (c.vendor || 'Fortinet');
   const [me, nfPort] = collectorTarget();
+  // SNMP in the form; the secrets the server keeps never come back (has_* says one is stored: empty = keep it)
+  const sn = {enabled:!!st.enabled, version:st.version || '2c', host:st.host || '', port:st.port || 161, community:'', user:st.user || '', level:st.level || 'authPriv',
+              auth_proto:st.auth_proto || snmpDefaults(vendor)[0], auth_pass:'', priv_proto:st.priv_proto || snmpDefaults(vendor)[1], priv_pass:''};
+  let picked = !!st.auth_proto;           // stored or chosen by hand: a vendor tab no longer resets the protocols
+  const SN_IDS = {sHost:'host', sPort:'port', sComm:'community', sUser:'user', sAuthP:'auth_pass', sPrivP:'priv_pass', sVer:'version', sLevel:'level', sAuth:'auth_proto', sPriv:'priv_proto'};
+  const syncSn = () => { const on = document.getElementById('sOn'); if (!on) return; sn.enabled = on.checked;
+    Object.entries(SN_IDS).forEach(([id, k]) => { const el = document.getElementById(id); if (el) sn[k] = k.endsWith('pass') || k === 'community' ? el.value : el.value.trim(); }); };
+  const code = () => { const v = VENDORS[vendor] ? vendor : 'Fortinet', rem = v === 'Cisco' ? '!' : '#';
+    return VENDORS[v](me, nfPort) + (sn.enabled ? `\n\n${rem} ---- SNMP ${sn.version === '3' ? 'v3' : 'v2c'} ----\n` + SNMP_VENDORS[v](me, sn) : ''); };
+  const opt = (list, cur) => list.map(([k, l]) => `<option value="${esc(k)}"${k === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
+  const kept = T('stored — leave empty to keep', 'збережено — залиште порожнім, щоб не змінювати');
+  const pw = (id, k, label) => `<label>${label}<input id="${id}" type="password" autocomplete="new-password" value="${esc(sn[k])}" placeholder="${st['has_' + k] ? kept : ''}"></label>`;
+  const snmpBox = () => `
+      <div class="two"><label>${T('Version', 'Версія')}<select id="sVer">${opt([['2c', 'v2c'], ['3', 'v3']], sn.version)}</select></label><label>${T('UDP port', 'UDP-порт')}<input id="sPort" value="${esc(String(sn.port))}" inputmode="numeric"></label></div>
+      <label>${T('Address to poll (empty = the export IP)', 'Адреса для опитування (порожньо = IP експорту)')}<input id="sHost" value="${esc(sn.host)}" placeholder="${esc(editing ? dev.ip : T('the export IP', 'IP експорту'))}"></label>
+      ${sn.version === '3' ? `<div class="two"><label>${T('User', 'Користувач')}<input id="sUser" value="${esc(sn.user)}" autocomplete="off"></label><label>${T('Security level', 'Рівень безпеки')}<select id="sLevel">${opt(Object.entries(SNMP_LEVELS), sn.level)}</select></label></div>
+        ${sn.level !== 'noAuthNoPriv' ? `<div class="two"><label>${T('Authentication', 'Автентифікація')}<select id="sAuth">${opt(snmpChoices(vendor, 'auth').map(x => [x, SNMP_LABEL[x] || x]), sn.auth_proto)}</select></label>${pw('sAuthP', 'auth_pass', T('Authentication password', 'Пароль автентифікації'))}</div>` : ''}
+        ${sn.level === 'authPriv' ? `<div class="two"><label>${T('Privacy', 'Шифрування')}<select id="sPriv">${opt(snmpChoices(vendor, 'priv').map(x => [x, SNMP_LABEL[x] || x]), sn.priv_proto)}</select></label>${pw('sPrivP', 'priv_pass', T('Privacy password', 'Пароль шифрування'))}</div>` : ''}`
+        : pw('sComm', 'community', 'Community')}
+      <div class="snmptest"><button class="btn" type="button" id="sTest">${T('Test SNMP', 'Перевірити SNMP')}</button><span class="nat" id="sMsg" role="status"></span></div>
+      ${window.__snmpTools === false ? `<p class="err">${T('The server has no net-snmp tools (package snmp) yet: run sudo flowtrack upgrade.', 'На сервері ще немає утиліт net-snmp (пакет snmp): виконайте sudo flowtrack upgrade.')}</p>` : ''}
+      <p class="note">${T('FlowTrack polls the device when you save and then every hour. Names and addresses entered by hand under Interfaces take priority.', 'FlowTrack опитує пристрій під час збереження і далі щогодини. Назви й адреси, вписані вручну в «Інтерфейсах», мають перевагу.')}</p>`;
   const draw = () => {
+    if (!picked) [sn.auth_proto, sn.priv_proto] = snmpDefaults(VENDORS[vendor] ? vendor : 'Fortinet');
+    snmpFit(VENDORS[vendor] ? vendor : 'Fortinet', sn);
     const m = openModal(editing ? T(`Device ${dev.name}`, `Пристрій ${dev.name}`) : T('Connect a device', 'Підключити пристрій'), editing ? esc(dev.ip) : T('Set up export on the device and describe it here', 'Налаштуйте експорт на пристрої та опишіть його тут'), `
       <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
-      <div class="cols"><div><h4>${T('1. Configuration on the device', '1. Конфігурація на пристрої')}</h4><pre class="codebox">${esc((VENDORS[vendor] || VENDORS.Fortinet)(me, nfPort))}</pre></div>
-      <form class="form" id="devForm"><h4 style="margin:0">${T('2. Description for FlowTrack', '2. Опис для FlowTrack')}</h4>
+      <div class="cols"><div><h4>${T('1. Configuration on the device', '1. Конфігурація на пристрої')}</h4><pre class="codebox" id="devCode">${esc(code())}</pre></div>
+      <form class="form" id="devForm" autocomplete="off"><h4 style="margin:0">${T('2. Description for FlowTrack', '2. Опис для FlowTrack')}</h4>
         <div class="two"><label>${T('IP the export comes from', 'IP, з якого йде експорт')}<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>${T('Name', 'Назва')}<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
         <div class="two"><label>${T('Model', 'Модель')}<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>${T('Sampling', 'Вибірка (sampling)')}<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
         <div class="two"><label>${T('snmp-index of WAN interfaces (comma-separated)', 'snmp-index WAN-інтерфейсів (через кому)')}<input id="fWan" value="${esc((c.wan_ifs || []).join(', '))}" placeholder="1"></label><label>${T('Index of «the device itself» (FortiOS: 0)', 'Індекс «сам пристрій» (FortiOS: 0)')}<input id="fLocal" value="${c.local_if ?? ''}" placeholder="0"></label></div>
         <label>${T('Public IPs of the device (comma-separated)', 'Публічні IP пристрою (через кому)')}<input id="fPub" value="${esc((c.public_ips || []).join(', '))}" placeholder="198.51.100.10"></label>
         <div class="two"><label>${T('City', 'Місто')}<input id="fCity" value="${esc(c.city || '')}" placeholder="Amsterdam"></label><label>${T('Country code', 'Код країни')}<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="NL"></label></div>
         <div class="two"><label>${T('Latitude', 'Широта')}<input id="fLat" value="${c.lat ?? ''}" placeholder="52.37"></label><label>${T('Longitude', 'Довгота')}<input id="fLon" value="${c.lon ?? ''}" placeholder="4.90"></label></div>
+        <label class="chk"><input type="checkbox" id="sOn"${sn.enabled ? ' checked' : ''}> ${T('Read interface names and IP addresses over SNMP', 'Отримувати назви та IP-адреси інтерфейсів по SNMP')}</label>
+        <div class="snmpbox" id="sBox"${sn.enabled ? '' : ' hidden'}>${snmpBox()}</div>
         <p class="err" id="fErr" hidden></p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? T('Save', 'Зберегти') : T('Add device', 'Додати пристрій')}</button>${editing && dev.configured ? `<button class="btn" type="button" id="fDel">${T('Delete description', 'Видалити опис')}</button>` : ''}<span class="nat" id="fDelAsk" hidden>${T('Really delete?', 'Точно видалити?')} <button class="btn" type="button" id="fDelYes">${T('Yes, delete', 'Так, видалити')}</button></span></div></form></div>`, true);
     m.root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; keep(); draw(); restore(); });
     const list = id => document.getElementById(id).value.split(',').map(x => x.trim()).filter(Boolean);
-    document.getElementById('devForm').addEventListener('submit', async e => { e.preventDefault(); formErr('fErr');
+    // SNMP: the version, level and checkbox change the fields; every change updates the device configuration
+    const box = document.getElementById('sBox'), redraw = () => { document.getElementById('devCode').textContent = code(); };
+    const wireSnmp = () => {
+      box.querySelectorAll('select').forEach(el => el.onchange = () => { if (el.id === 'sAuth' || el.id === 'sPriv') picked = true; syncSn(); box.innerHTML = snmpBox(); wireSnmp(); redraw(); });
+      box.querySelectorAll('input').forEach(el => el.oninput = () => { syncSn(); redraw(); });
+      document.getElementById('sTest').onclick = async () => { syncSn(); const msg = document.getElementById('sMsg'), ip = document.getElementById('fIp').value.trim();
+        if (!ip) { msg.textContent = T('Enter the export IP first', 'Спершу вкажіть IP експорту'); msg.style.color = 'var(--crit)'; return; }
+        msg.textContent = T('Polling…', 'Опитую…'); msg.style.color = '';
+        try { const r = await apiPost('devices/snmp_test', {ip, snmp:sn});
+          if (r.ok) { msg.textContent = `✓ ${r.sys.name || ''} · ${T(`${r.interfaces} interfaces, ${r.addresses} addresses`, `інтерфейсів ${r.interfaces}, адрес ${r.addresses}`)}`; msg.style.color = 'var(--ok)'; msg.title = r.sys.descr || ''; }
+          else { msg.textContent = r.error_text; msg.style.color = 'var(--crit)'; msg.title = r.detail || ''; }
+        } catch (err) { msg.textContent = err.message; msg.style.color = 'var(--crit)'; } };
+    };
+    wireSnmp();
+    document.getElementById('sOn').onchange = e => { syncSn(); box.hidden = !e.target.checked; redraw(); };
+    document.getElementById('devForm').addEventListener('submit', async e => { e.preventDefault(); formErr('fErr'); syncSn();
       try {
         await apiPost('devices/save', {ip:document.getElementById('fIp').value.trim(), name:document.getElementById('fName').value, vendor, model:document.getElementById('fModel').value,
           sampling:document.getElementById('fSamp').value, wan_ifs:list('fWan'), local_if:document.getElementById('fLocal').value.trim(), public_ips:list('fPub'),
-          city:document.getElementById('fCity').value, country:document.getElementById('fCc').value, lat:document.getElementById('fLat').value.trim(), lon:document.getElementById('fLon').value.trim()});
+          city:document.getElementById('fCity').value, country:document.getElementById('fCc').value, lat:document.getElementById('fLat').value.trim(), lon:document.getElementById('fLon').value.trim(),
+          snmp:sn});
         m.close(); META = await fetch('api/meta').then(r => r.json()); render();
       } catch (err) { formErr('fErr', err.message); } });
     const del = document.getElementById('fDel');
     if (del) { del.onclick = () => { document.getElementById('fDelAsk').hidden = false; del.hidden = true; };
       document.getElementById('fDelYes').onclick = async () => { try { await apiPost('devices/delete', {ip:dev.ip}); m.close(); render(); } catch (err) { formErr('fErr', err.message); } }; }
   };
-  // keep typed values when switching vendor tabs
+  // keep typed values when switching vendor tabs (the SNMP fields live in `sn`)
   let saved = null;
   const ids = ['fIp', 'fName', 'fModel', 'fSamp', 'fWan', 'fLocal', 'fPub', 'fCity', 'fCc', 'fLat', 'fLon'];
-  const keep = () => { saved = Object.fromEntries(ids.map(id => [id, (document.getElementById(id) || {}).value])); };
+  const keep = () => { syncSn(); saved = Object.fromEntries(ids.map(id => [id, (document.getElementById(id) || {}).value])); };
   const restore = () => { if (saved) ids.forEach(id => { const el = document.getElementById(id); if (el && saved[id] != null) el.value = saved[id]; }); };
   draw();
 }
