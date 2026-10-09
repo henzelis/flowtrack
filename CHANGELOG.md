@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.5.1 — 2026-10-09
+
+- *Through device* shows the interfaces' addresses read over SNMP (on the device box, its tooltips and the interfaces
+  table); without SNMP or a hand-entered address the networks seen in the records stay, as before.
+- *Path analysis* labels each link end the same way as *Through device*: the interface name, and its address under
+  it (also beside the internet chip of a neighbour's WAN).
+
 ## 1.5.0 — 2026-10-09
 
 - **SNMP v2c and v3.** A device can now be polled over SNMP (Settings → Devices → the device → *Read interface

@@ -37,6 +37,8 @@ let renderSeq = 0;
 // widgets of one page often ask the same thing (Overview: the trend and the KPI sparklines, the map overlay and the
 // top lists): an identical request still running or answered in the last 3 s is shared, not sent again
 const API_SHARED = new Map();
+// an interface's addresses: entered by hand, else read over SNMP, else what the records show (networks, NAT address)
+const ifAddrs = i => (i.addrs || []).length ? i.addrs : (i.snmp_addrs || []).length ? i.snmp_addrs : (i.seen_addrs || []);
 function api(path, params = {}, extraFilters = []){
   const qs = new URLSearchParams({...periodParams(), t:state.traffic, f:JSON.stringify([...state.filters, ...extraFilters]), ...params});
   const url = `api/${path}?${qs}`, now = Date.now();
@@ -648,7 +650,7 @@ function createDevMap(host, opts){
   const {ifs, dev} = opts;
   const roleOf = i => (ifs.get(i) || {}).role || (i === dev.config.local_if ? 'local' : 'lan');
   const nameOf = i => { const x = ifs.get(i); return x ? (x.custom_name || x.name) : (i === 0 ? 'local' : `if ${i}`); };
-  const addrOf = i => { const x = ifs.get(i); return x ? ([...(x.addrs || []), ...(x.seen_addrs || [])][0] || '') : ''; };
+  const addrOf = i => { const x = ifs.get(i); return x ? (ifAddrs(x)[0] || '') : ''; };
   const fmtV = v => state.metric === 'bytes' ? fmtB(v) : fmtN(v);
   async function load(){ try { data = await opts.fetchData(); if (opts.onData) opts.onData(data); draw(); } catch (e) { host.innerHTML = errBox(e); } }
   function size(){ const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; draw(); }
@@ -832,7 +834,7 @@ function vPaths(){
       color.set(idx, ROLE_COLOR[r] || IFPAL[(pos >= 0 ? pos : plain.length + color.size) % IFPAL.length]); } return color.get(idx); };
     const ifName = idx => { const i = ifs.get(idx); return i ? (i.custom_name || i.name) : (idx === 0 ? 'local' : `if ${idx}`); };
     // an address or network that identifies the interface: entered by hand, else what the flows show
-    const ifAddr = idx => { const i = ifs.get(idx); return i ? ([...(i.addrs || []), ...(i.snmp_addrs || []), ...(i.seen_addrs || [])][0] || '') : ''; };
+    const ifAddr = idx => { const i = ifs.get(idx); return i ? (ifAddrs(i)[0] || '') : ''; };
     const ifNamed = idx => { const i = ifs.get(idx); return !!(i && (i.custom_name || i.snmp_name)) || idx === 0; };
     const ifRole = idx => { const r = (ifs.get(idx) || {}).role || 'lan'; return r === 'wan' ? 'WAN' : r === 'local' ? T('device itself', 'сам пристрій') : 'LAN'; };
     const unit = state.metric === 'bytes' ? fmtB : fmtN;
@@ -867,7 +869,7 @@ function vPaths(){
       const allIf = [...new Set([...ins.keys(), ...outs.keys()])].sort((a, b) => (outs.get(b) || 0) + (ins.get(b) || 0) - (outs.get(a) || 0) - (ins.get(a) || 0));
       const ib = fill('pIfs', `<div class="tw"><table class="compact"><thead><tr><th>${T('Interface', 'Інтерфейс')}</th><th>${T('Role', 'Роль')}</th><th class="num">${T('Entering', 'Входить')}</th><th class="num">${T('Leaving', 'Виходить')}</th><th>${T('Addresses', 'Адреси')}</th></tr></thead><tbody>
         ${allIf.map(i => { const x = ifs.get(i) || {addrs:[], seen_addrs:[]};
-          return `<tr><td>${pill(i)}</td><td><span class="tag">${ifRole(i)}</span></td><td class="num mono">${unit(ins.get(i) || 0)}</td><td class="num mono">${unit(outs.get(i) || 0)}</td><td class="nat mono">${esc([...(x.addrs || []), ...(x.seen_addrs || [])].slice(0, 2).join(', ') || '—')}</td></tr>`; }).join('')}</tbody></table></div>`);
+          return `<tr><td>${pill(i)}</td><td><span class="tag">${ifRole(i)}</span></td><td class="num mono">${unit(ins.get(i) || 0)}</td><td class="num mono">${unit(outs.get(i) || 0)}</td><td class="nat mono">${esc(ifAddrs(x).slice(0, 2).join(', ') || '—')}</td></tr>`; }).join('')}</tbody></table></div>`);
       if (ib) ib.classList.remove('loading');
     };
     // inspector of the selected path (interface filters)
@@ -1006,7 +1008,10 @@ function createTopoMap(host, opts){
         ctx.fillStyle = 'rgba(14,26,60,.95)'; ctx.fill(chip); ctx.strokeStyle = 'rgba(46,229,157,.5)'; ctx.lineWidth = 1; ctx.stroke(chip);
         ctx.save(); ctx.translate(x - tw / 2 + 5, yt - 7); ctx.scale(.85, .85); ctx.strokeStyle = C.ext; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
         ctx.fillStyle = C.ink2; ctx.textAlign = 'left'; ctx.fillText(T('Internet', 'Інтернет'), x - tw / 2 + 24, yt + 1);
-        ctx.font = '600 10.5px JetBrains Mono, monospace'; ctx.fillStyle = C.ink3; ctx.fillText(clip(l.a_name, ctx.font, GAP / 2), x + tw / 2 + 6, yt + 1);
+        // the WAN interface beside the chip: name over address, as on the links
+        const lx = x + tw / 2 + 6, two = !!l.a_addr;
+        ctx.font = '700 11px JetBrains Mono, monospace'; ctx.fillStyle = C.ink; ctx.fillText(clip(l.a_name, ctx.font, GAP / 2), lx, two ? yt - 5 : yt + 1);
+        if (two) { ctx.font = '500 10px JetBrains Mono, monospace'; ctx.fillStyle = C.ink2; ctx.fillText(clip(l.a_addr, ctx.font, GAP / 2), lx, yt + 8); }
         ctx.globalAlpha = 1;
         const hit = new Path2D(); hit.moveTo(x, yb); hit.lineTo(x, yt); shapes.push({stroke:hit, sw:14, l, tip:tipOf(l)}, {path:chip, l, tip:tipOf(l)});
         continue;
@@ -1028,15 +1033,15 @@ function createTopoMap(host, opts){
       const hit = new Path2D(); hit.moveTo(xa, ya); hit.bezierCurveTo(xm, ya, xm, yb, xb, yb);
       shapes.push({stroke:hit, sw:Math.max(12, w + 6), l, tip:tipOf(l)});
     }
-    // interface · address labels over the ribbons, on a dark plate (two lines when one does not fit)
-    ctx.font = '600 10.5px JetBrains Mono, monospace';
+    // interface name over its address (as on Through device), on a dark plate
+    const NAME_F = '700 11px JetBrains Mono, monospace', ADDR_F = '500 10px JetBrains Mono, monospace';
     for (const lb of labels) {
-      const parts = lb.parts.filter(Boolean); if (!parts.length) continue;
-      const one = parts.join(' · '), lines = ctx.measureText(one).width <= lb.room || parts.length < 2 ? [one] : parts;
-      const txt = lines.map(s => clip(s, ctx.font, lb.room)), tw = Math.max(...txt.map(s => ctx.measureText(s).width)), th = 13 * txt.length;
-      const top = lb.side < 0 ? lb.y - lb.w / 2 - 5 - th : lb.y + lb.w / 2 + 5, x0 = lb.align === 'left' ? lb.x - 3 : lb.x - tw - 3;
-      ctx.globalAlpha = lb.dim ? .2 : 1; ctx.fillStyle = 'rgba(9,18,44,.78)'; ctx.fill(rr(x0, top - 1, tw + 6, th + 2, 4));
-      ctx.fillStyle = C.ink2; ctx.textAlign = lb.align; txt.forEach((s, k) => ctx.fillText(s, lb.x, top + 6.5 + 13 * k)); ctx.globalAlpha = 1;
+      const [name, addr] = lb.parts; if (!name && !addr) continue;
+      const rows = [[clip(name || '', NAME_F, lb.room), NAME_F, C.ink], [clip(addr || '', ADDR_F, lb.room), ADDR_F, C.ink2]].filter(r => r[0]);
+      const tw = Math.max(...rows.map(([t, f]) => { ctx.font = f; return ctx.measureText(t).width; })), th = 13 * rows.length;
+      const top = lb.side < 0 ? lb.y - lb.w / 2 - 6 - th : lb.y + lb.w / 2 + 6, x0 = lb.align === 'left' ? lb.x - 4 : lb.x - tw - 4;
+      ctx.globalAlpha = lb.dim ? .2 : 1; ctx.fillStyle = 'rgba(9,18,44,.82)'; ctx.fill(rr(x0, top - 2, tw + 8, th + 4, 5));
+      ctx.textAlign = lb.align; rows.forEach(([t, f, col], k) => { ctx.font = f; ctx.fillStyle = col; ctx.fillText(t, lb.x, top + 6.5 + 13 * k); }); ctx.globalAlpha = 1;
     }
     // device cards
     for (const n of data.nodes) {
