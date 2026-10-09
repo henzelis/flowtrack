@@ -7,8 +7,11 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 - *Through device* shows the interfaces' addresses read over SNMP (on the device box, its tooltips and the interfaces
   table); without SNMP or a hand-entered address the networks seen in the records stay, as before.
-- *Path analysis* labels each link end the same way as *Through device*: the interface name, and its address under
-  it (also beside the internet chip of a neighbour's WAN).
+- *Path analysis* draws the internet as one cloud above the devices: every device's WAN link goes up into it (its own
+  volume and directions, the WAN interface and address beside it) and the devices sit in a row under it — a tunnel
+  between two sites now shows below the internet it runs over. The internet card next to the Point of View and the
+  internet chips above other devices are gone. A traced path that stays inside dims the cloud and the WAN links.
+- *Path analysis* labels each link end the same way as *Through device*: the interface name, and its address under it.
 
 ## 1.5.0 — 2026-10-09
 
