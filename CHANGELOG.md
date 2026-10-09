@@ -12,8 +12,9 @@ in Settings → General, at the bottom of every page, in the collector log and b
   between two sites now shows below the internet it runs over. The internet card next to the Point of View and the
   internet chips above other devices are gone. A traced path that stays inside dims the cloud and the WAN links.
 - *Path analysis* labels each link end the same way as *Through device*: the interface name, and its address under it.
-- The 3D globe turns smoothly: the mouse wheel over it scrolls the page instead of zooming the globe (zooming stopped the
-  rotation until the next data update; Ctrl/⌘ + wheel still zooms), and it starts turning again 3 s after a drag.
+- The 3D globe turns smoothly: it no longer stops for a moment (and turns back a little) at every data update every
+  15 s; the mouse wheel over it scrolls the page instead of zooming the globe (that stopped the rotation until the next
+  update; Ctrl/⌘ + wheel still zooms); it starts turning again 3 s after a drag.
 - City names on the 3D globe no longer sink into it as it turns: they are drawn over the globe, only on its near side,
   fading towards the rim, one per site, without covering each other.
 

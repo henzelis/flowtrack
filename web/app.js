@@ -421,7 +421,7 @@ function globe(el, geo){
     const places = geo => { const m = new Map(); for (const r of geo.rows.slice(0, 10)) m.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]}); return [...m.values()]; };
     const devs = [...new Map(META.devices.filter(d => d.lat != null).map(d => [d.city || d.name, {name:d.city || d.name, lon:d.lon, lat:d.lat}])).values()];   // one label per site
     c.setOption({globe:{baseTexture:tex, shading:'lambert', environment:'none', globeRadius:100, light:{ambient:{intensity:.55}, main:{intensity:1.1, alpha:30, beta:40}},
-        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:3, distance:180, minDistance:60, maxDistance:260, alpha:45, beta:115}},
+        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:3, animation:false, distance:180, minDistance:60, maxDistance:260, alpha:45, beta:115}},
       series:[
         {id:'arcs', type:'lines3D', coordinateSystem:'globe', blendMode:'lighter', effect:{show:!reduceMotion, trailWidth:2.5, trailLength:.22, trailOpacity:1, constantSpeed:28}, lineStyle:{width:1.2, opacity:.35}, data:arcs(geo)},
         {type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:10, itemStyle:{color:C.int}, label:{show:false}, data:devs.map(d => ({name:d.name, value:[d.lon, d.lat, 0]}))},
