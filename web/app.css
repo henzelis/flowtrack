@@ -456,3 +456,7 @@ tr.unseen td{opacity:.75}
 .about a{color:var(--blue-hi);font-weight:600;text-decoration:none;word-break:break-all}
 @media (max-width:600px){.about>div{grid-template-columns:1fr auto}.about>div>span{grid-column:1/-1}}
 .grid.top{align-items:start}
+/* 3D globe: city names over the canvas (placed from the globe's camera) */
+.globe-labels{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
+.gl-lbl{position:absolute;left:0;top:0;font:500 12px Manrope,sans-serif;color:#DDFBEF;background:rgba(4,10,28,.6);padding:2px 5px;border-radius:4px;white-space:nowrap;opacity:0;will-change:transform,opacity}
+.gl-lbl.dev{font-weight:700;font-size:13px;color:#F2F6FF;background:rgba(4,10,28,.7);padding:3px 6px}

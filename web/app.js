@@ -419,15 +419,49 @@ function globe(el, geo){
     const c = mkChart(el); onCleanup(() => tex.dispose());
     const arcs = geo => geo.rows.slice(0, 80).map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean);
     const places = geo => { const m = new Map(); for (const r of geo.rows.slice(0, 10)) m.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]}); return [...m.values()]; };
+    const devs = [...new Map(META.devices.filter(d => d.lat != null).map(d => [d.city || d.name, {name:d.city || d.name, lon:d.lon, lat:d.lat}])).values()];   // one label per site
     c.setOption({globe:{baseTexture:tex, shading:'lambert', environment:'none', globeRadius:100, light:{ambient:{intensity:.55}, main:{intensity:1.1, alpha:30, beta:40}},
-        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:20, distance:180, minDistance:60, maxDistance:260, alpha:45, beta:115}},
+        atmosphere:{show:true, color:'#2F7BFF', glowPower:5, innerGlowPower:2}, viewControl:{autoRotate:!reduceMotion, autoRotateSpeed:4, autoRotateAfterStill:3, distance:180, minDistance:60, maxDistance:260, alpha:45, beta:115}},
       series:[
         {id:'arcs', type:'lines3D', coordinateSystem:'globe', blendMode:'lighter', effect:{show:!reduceMotion, trailWidth:2.5, trailLength:.22, trailOpacity:1, constantSpeed:28}, lineStyle:{width:1.2, opacity:.35}, data:arcs(geo)},
-        {type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:10, itemStyle:{color:C.int}, label:{show:true, formatter:'{b}', textStyle:{color:'#F2F6FF', fontSize:13, fontWeight:'bold', fontFamily:'Manrope', backgroundColor:'rgba(4,10,28,.7)', padding:[3, 6], borderRadius:4}},
-          data:META.devices.filter(d => d.lat != null).map(d => ({name:d.city || d.name, value:[d.lon, d.lat, 0]}))},
-        {id:'places', type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:7, itemStyle:{color:C.ext}, label:{show:true, formatter:'{b}', textStyle:{color:'#DDFBEF', fontSize:12, fontFamily:'Manrope', backgroundColor:'rgba(4,10,28,.6)', padding:[2, 5], borderRadius:4}}, data:places(geo)},
+        {type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:10, itemStyle:{color:C.int}, label:{show:false}, data:devs.map(d => ({name:d.name, value:[d.lon, d.lat, 0]}))},
+        {id:'places', type:'scatter3D', coordinateSystem:'globe', blendMode:'lighter', symbolSize:7, itemStyle:{color:C.ext}, label:{show:false}, data:places(geo)},
       ]});
-    return geo => { if (!c.isDisposed()) c.setOption({series:[{id:'arcs', data:arcs(geo)}, {id:'places', data:places(geo)}]}); };
+    // the wheel scrolls the page, not the globe (zooming it stopped the rotation); Ctrl/⌘ + wheel still zooms
+    el.addEventListener('wheel', e => { if (!e.ctrlKey && !e.metaKey) e.stopPropagation(); }, {capture:true});
+    // city names: an HTML layer placed from the globe's camera every frame — only on the near side, fading towards the
+    // rim, never cut by the globe's surface (labels drawn inside the 3D scene sank into it as it turned)
+    if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+    const lay = el.appendChild(Object.assign(document.createElement('div'), {className:'globe-labels'}));
+    let marks = [];
+    const setMarks = list => { lay.innerHTML = list.map(m => `<span class="gl-lbl${m.dev ? ' dev' : ''}">${esc(m.name)}</span>`).join('');
+      marks = list.map((m, k) => ({...m, el:lay.children[k], w:lay.children[k].offsetWidth, h:lay.children[k].offsetHeight})); };
+    const markList = geo => [...devs.map(d => ({...d, dev:true})), ...places(geo).filter(p => !devs.some(d => d.name === p.name)).map(p => ({name:p.name, lon:p.value[0], lat:p.value[1]}))];
+    setMarks(markList(geo));
+    let raf = 0;
+    const frame = () => {
+      raf = requestAnimationFrame(frame);
+      const g = !c.isDisposed() && c.getModel().getComponent('globe'), cs = g && g.coordinateSystem;
+      if (!cs || !cs.viewGL || !cs.viewGL.camera) return;
+      const cam = cs.viewGL.camera, vp = cs.viewGL.viewport, V = cam.viewMatrix.array, P = cam.projectionMatrix.array, w = cam.worldTransform.array;
+      const R = cs.radius, cd = Math.hypot(w[12], w[13], w[14]) || 1, taken = [];
+      // devices first, then places by traffic: a label that would cover one already placed waits until it is clear
+      for (const m of marks) {
+        const q = cs.dataToPoint([m.lon, m.lat, 0]);
+        const face = (q[0] * w[12] + q[1] * w[13] + q[2] * w[14]) / (R * cd) - R / cd;     // > 0: in front of the horizon
+        if (face <= 0) { m.el.style.opacity = '0'; continue; }
+        const v = k => V[k] * q[0] + V[k + 4] * q[1] + V[k + 8] * q[2] + V[k + 12], vx = v(0), vy = v(1), vz = v(2), vw = v(3);
+        const p = k => P[k] * vx + P[k + 4] * vy + P[k + 8] * vz + P[k + 12] * vw, cw = p(3);
+        const sx = vp.x + (p(0) / cw * .5 + .5) * vp.width, sy = vp.y + (.5 - p(1) / cw * .5) * vp.height;
+        const x0 = sx - m.w / 2, y0 = sy - 7 - m.h;
+        if (taken.some(t => x0 < t[2] && x0 + m.w > t[0] && y0 < t[3] && y0 + m.h > t[1])) { m.el.style.opacity = '0'; continue; }
+        taken.push([x0 - 2, y0 - 2, x0 + m.w + 2, y0 + m.h + 2]);
+        m.el.style.opacity = String(Math.min(1, face / .15));
+        m.el.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px) translate(-50%, calc(-100% - 7px))`;
+      }
+    };
+    raf = requestAnimationFrame(frame); onCleanup(() => cancelAnimationFrame(raf));
+    return geo => { if (c.isDisposed()) return; c.setOption({series:[{id:'arcs', data:arcs(geo)}, {id:'places', data:places(geo)}]}); setMarks(markList(geo)); };
   } catch (e) { el.innerHTML = '<div class="empty">' + T('3D mode is not available: ', '3D-режим недоступний: ') + esc(e.message) + '</div>'; }
 }
 
