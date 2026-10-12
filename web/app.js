@@ -1419,9 +1419,12 @@ function evRange(a, b){
   if (!/^\d{4}-/.test(String(a)) || d(a).toDateString() !== d(b).toDateString()) return `${evTime(a)} – ${evTime(b)}`;
   return `${evTime(a)} – ${d(b).toLocaleTimeString(LOC, {hour:'2-digit', minute:'2-digit'})}`;
 }
+// the filter an event's button sets: the server names it for stored events (an outside attacker is an outside
+// address), the anomalies computed from flows are about an inside host or a device
+const evFilter = x => x.fk && x.fv ? [x.fk, x.fv] : x.ip ? ['ip', x.ip] : x.device ? ['device', x.device] : null;
 function vThreats(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies', 'Події та аномалії'), T('the last 24 hours · scans, password guessing and floods are checked every 10 minutes', 'останні 24 години · сканування, перебір паролів і флуд перевіряються кожні 10 хвилин'))}<div id="alBox" class="loading"></div></section>
+  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies', 'Події та аномалії'), T('in the chosen period and filters · scans, password guessing and floods are checked every 10 minutes', 'за вибраний період і фільтри · сканування, перебір паролів і флуд перевіряються кожні 10 хвилин'))}<div id="alBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('search', T('What is watched', 'Що відстежується'), '', isAdmin() ? `<button class="btn" id="evCfg">${T('Configure', 'Налаштувати')}</button>` : '')}<div id="watchBox" class="loading"></div></section></div>`;
   if (isAdmin()) document.getElementById('evCfg').onclick = () => { state.view = 'settings'; state.setTab = 'events'; render(); };
   const sevs = SEV(), kinds = EV_KINDS();
@@ -1430,7 +1433,8 @@ function vThreats(){
     if (W) { W.classList.remove('loading'); W.innerHTML = `<div class="watch">${Object.entries(kinds).map(([k, [name, desc]]) => { const c = (res.watch || {})[k] || {};
       return `<div class="${c.on === false ? 'off' : ''}"><b>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off', 'вимк.') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
       <div><b>${T('Export and collector health', 'Стан експорту і колектора')}</b><span class="pill warn">${sevs.warn}</span><p>${T('lost packets, a collector falling behind, the edition limit, the license', 'втрачені пакети, колектор не встигає, ліміт редакції, ліцензія')}</p></div></div>`; }
-    if (!all.length) return `<div class="empty">${T('No events — all quiet', 'Подій немає — усе спокійно')}</div>`;
+    const skip = (res.unfiltered || []).map(k => FILTER_LABEL[k] || k), note = skip.length ? `<p class="note evskip">${T('Not applied to events', 'До подій не застосовуються')}: ${esc(skip.join(', '))}</p>` : '';
+    if (!all.length) return note + `<div class="empty">${state.filters.length ? T('No events for these filters in this period', 'Подій за цими фільтрами в цьому періоді немає') : T('No events — all quiet', 'Подій немає — усе спокійно')}</div>`;
     const n = s => all.filter(x => x.sev === s).length, a = cur === 'all' ? all : all.filter(x => x.sev === cur);
     setTimeout(() => {
       document.querySelectorAll('#evSeg button').forEach(b => b.onclick = () => { state.evSev = b.dataset.v; vThreats(); });
@@ -1439,10 +1443,10 @@ function vThreats(){
         try { await apiPost('events/ignore', {value:b.dataset.ign}); vThreats(); } catch (e) { alert(e.message); } });
     });
     return `<div class="seg evseg" id="evSeg" role="group">${[['all', T('All', 'Усі'), all.length], ['crit', sevs.crit, n('crit')], ['warn', sevs.warn, n('warn')], ['info', sevs.info, n('info')]].map(([k, l, c]) =>
-      `<button data-v="${k}" aria-pressed="${cur === k}">${l} <span class="mono">${c}</span></button>`).join('')}</div>` +
+      `<button data-v="${k}" aria-pressed="${cur === k}">${l} <span class="mono">${c}</span></button>`).join('')}</div>` + note +
       (a.length ? '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
       <div class="meta"><span class="pill ${x.sev}">${sevs[x.sev] || x.sev}</span><span class="mono">${x.stored && x.first !== x.last ? esc(evRange(x.first, x.last)) : esc(evTime(x.when))}</span>
-        <span class="acts">${x.ip ? `<button class="btn" data-f="ip" data-v="${esc(x.ip)}">${T('Filter', 'Фільтр')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address', 'Не записувати й не показувати події цієї адреси')}">${T('Ignore', 'Ігнорувати')}</button>` : ''}</span></div></div>`).join('') + '</div>'
+        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter', 'Фільтр')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address', 'Не записувати й не показувати події цієї адреси')}">${T('Ignore', 'Ігнорувати')}</button>` : ''}</span></div></div>`).join('') + '</div>'
         : `<div class="empty">${T('No events of this priority', 'Подій із таким пріоритетом немає')}</div>`); });
 }
 // Settings → Events (administrators): detections on/off, priority, thresholds; roles of our services; exceptions

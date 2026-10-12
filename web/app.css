@@ -486,3 +486,4 @@ table.evk td.thr label{display:flex;align-items:center;gap:6px;font-weight:600;c
   .alert .meta{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;text-align:left;margin-top:8px}
   .alert .meta .acts{justify-content:flex-start}
 }
+.evskip{margin:-4px 0 10px}

@@ -26,7 +26,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **Settings → Events** (administrators): every kind on or off, its priority (info / warning / critical) and
   thresholds; the learned services with their role (public, sensitive, ordinary); addresses, networks and ASNs to
   ignore; the sensitive and public ports. *Ignore* on an event adds its source to the list.
-- The *Events* page filters by priority and lists what is watched with each kind's priority.
+- The *Events* page follows the period and the filters like every other page: a host, an outside address, a
+  device, a country, an ASN or a port shows only the events about it (an address also matches the events that list
+  it — a probe summary with it among the sources); filters that do not apply to events (service, protocol,
+  interfaces) are named on the page. An event's *Filter* sets an outside attacker as *ext. IP* (it used to set
+  *host*, which matches inside addresses only, so the other pages showed nothing). It also filters by priority and
+  lists what is watched with each kind's priority.
 - Firewalls export only the traffic they let through: scans of closed ports are not seen there, calls to open
   services and published ports are.
 - *Geolocation → Live connections*: a very long destination no longer pushes the bytes of every row out of the

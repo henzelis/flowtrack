@@ -598,7 +598,7 @@ def recent(cfg, since, until=None):
     ign = Ignore(cfg['ignore'])
     out = []
     for r in ch("""SELECT kind, key, first_seen, last_seen, hits, exporter, src, dst, port, proto, value, info FROM events FINAL
-            WHERE last_seen >= {since:DateTime} AND first_seen <= {until:DateTime} ORDER BY last_seen DESC LIMIT 500""",
+            WHERE last_seen >= {since:DateTime} AND first_seen <= {until:DateTime} ORDER BY last_seen DESC LIMIT 5000""",
                 {'since': int(since), 'until': int(until or time.time())}, fmt='JSON'):
         k = cfg['kinds'].get(r['kind'])
         if not k or not k['on']:
@@ -611,8 +611,22 @@ def recent(cfg, since, until=None):
         out.append({'sev': k['sev'], 'kind': r['kind'], 'title': title, 'text': text, 'when': r['last_seen'],
                     'first': r['first_seen'], 'last': r['last_seen'], 'hits': int(r['hits']), 'src': r['src'], 'dst': r['dst'],
                     'ip': r['src'] or r['dst'], 'port': int(r['port']), 'country': info.get('country', ''), 'org': info.get('org', ''),
-                    'asn': info.get('asn', 0), 'stored': True})
+                    'asn': info.get('asn', 0), 'exporter': r['exporter'], 'stored': True,
+                    'addrs': list(info.get('targets', [])) + list(info.get('sources', [])), 'ports': [int(x) for x in info.get('ports', [])],
+                    'fk': _filter_of(r)[0], 'fv': _filter_of(r)[1]})
     return out
+
+
+def _filter_of(r):
+    """The filter the event's Filter button sets on the other pages: an outside source is an outside address there
+    (`dst`), an inside one or our attacked service an inside host (`ip`), a device-wide flood the device."""
+    if r['kind'] in ('port_scan', 'brute_force', 'heavy_client'):
+        return 'dst', r['src']
+    if r['kind'] in ('inside_scan', 'lateral_scan'):
+        return 'ip', r['src']
+    if r['dst']:
+        return 'ip', r['dst']
+    return 'device', r['exporter']
 
 
 PROTO = {6: 'TCP', 17: 'UDP'}

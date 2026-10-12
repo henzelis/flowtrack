@@ -972,11 +972,9 @@ def api_host(q):
             'ports': api_top({**q, 'dim': ['l7'], 'limit': ['6']})}
 
 
-def api_alerts(q):
-    """Events of the last day: detections stored by the collector (detect.py), anomalies computed here from the
-    flows, the health of export, collector and license. Kinds switched off in Settings -> Events are left out."""
-    cfg = detect.load_config()
-    kinds, ign = cfg['kinds'], detect.Ignore(cfg['ignore'])
+def _alerts_now(kinds):
+    """Anomalies computed from the latest flows (sustained upload, bursts, new countries) and the health of export,
+    collector and license — all about now."""
     out = []
     for r in ch("""SELECT int_ip, ext_ip, any(service) AS service, any(ext_port) AS port, count() AS mins, sum(b) * 8 / (count() * 60) AS bps, min(m) AS since
             FROM (SELECT int_ip, ext_ip, service, ext_port, toStartOfMinute(ts) AS m, sum(bytes) AS b FROM flows
@@ -1043,15 +1041,60 @@ def api_alerts(q):
         out.append({'sev': kinds['burst']['sev'], 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('Traffic burst', 'Сплеск трафіку'),
                     'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB in 5 min — {float(r['peak']) / max(1.0, float(r['med'])):.0f}× the daily median.",
                                f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB за 5 хв — у {float(r['peak']) / max(1.0, float(r['med'])):.0f}× вище медіани за добу."), 'when': r['at']})
+    return out
+
+
+# filter keys the events answer to; the others (service, protocol, interfaces ...) do not apply to them
+EVENT_FILTERS = ('ip', 'dst', 'host', 'device', 'country', 'asn', 'port')
+
+
+def _event_match(a, f):
+    """Does the event `a` answer to the filter {k, v} (the negation is the caller's)? Addresses: the source, the
+    target and the addresses an event lists (ports scanned on, probing sources) — `ip` and `dst` alike, because an
+    event's source may be inside or outside."""
+    k, v = f.get('k'), str(f.get('v', ''))
+    if k in ('ip', 'dst', 'host'):
+        return v in {a.get('ip'), a.get('src'), a.get('dst')} | set(a.get('addrs') or ())
+    if k == 'device':
+        return v == (a.get('exporter') or a.get('device'))
+    if k == 'country':
+        return v == a.get('country')
+    if k == 'asn':
+        w = v[2:] if v.upper().startswith('AS') else v
+        return (w.isdigit() and int(w) == int(a.get('asn') or 0)) or (not w.isdigit() and w.lower() in str(a.get('org', '')).lower())
+    if k == 'port':
+        return v.isdigit() and (int(v) == int(a.get('port') or 0) or int(v) in (a.get('ports') or ()))
+    return True
+
+
+def api_alerts(q):
+    """Events of the chosen period that answer to the filters: detections stored by the collector (detect.py) and,
+    when the period reaches now, the anomalies and health computed here. Kinds switched off in Settings -> Events
+    and ignored sources are left out."""
+    cfg = detect.load_config()
+    kinds, ign = cfg['kinds'], detect.Ignore(cfg['ignore'])
+    t0, t1, custom = period(q)
+    try:
+        flt = [f for f in json.loads(q.get('f', ['[]'])[0]) if isinstance(f, dict)]
+    except (ValueError, TypeError):
+        raise BadRequest('bad filter JSON')
+    out = _alerts_now(kinds) if t1 >= time.time() - 600 else []
     out = [a for a in out if not a.get('ip') or (a['ip'], 0) not in ign]
     try:
-        out += detect.recent(cfg, time.time() - 86400)
+        out += detect.recent(cfg, t0, t1)
     except CHError as e:           # before the collector of 1.6 created the table
         if 'UNKNOWN_TABLE' not in str(e):
             raise
+    for f in flt:
+        if f.get('k') in EVENT_FILTERS:
+            out = [a for a in out if _event_match(a, f) != bool(f.get('neg'))]
     rank = {'crit': 0, 'warn': 1, 'info': 2}
     out.sort(key=lambda a: rank.get(a['sev'], 3))       # stable: the order within a priority stays
-    return {'alerts': out, 'watch': {k: v for k, v in kinds.items()}}
+    for a in out:
+        a.pop('addrs', None)
+        a.pop('ports', None)
+    return {'alerts': out, 'watch': {k: v for k, v in kinds.items()},
+            'unfiltered': sorted({f.get('k') for f in flt if f.get('k') not in EVENT_FILTERS})}
 
 
 def get_events_config():
