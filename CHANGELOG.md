@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.6.2 — 2026-10-12
 
 - **Telegram notifications.** Settings → Events → *Telegram notifications*: your own bot (token from @BotFather) and
   chat; *Find chat* lists the chats that wrote to the bot, *Send a test* checks the way. A new event is sent once —
