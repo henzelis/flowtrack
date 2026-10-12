@@ -3,6 +3,19 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Telegram notifications.** Settings → Events → *Telegram notifications*: your own bot (token from @BotFather) and
+  chat; *Find chat* lists the chats that wrote to the bot, *Send a test* checks the way. A new event is sent once —
+  what goes on is not sent again, and looking back over the past at the first start sends nothing. The events of one
+  10-minute check go as one message, critical first, in Ukrainian or English, with a link to the Events page.
+  What goes out: a minimum priority (warning by default, so the daily summaries stay quiet), a tick per kind in the
+  detections table, and at most 20 messages an hour (the rest are counted in the next one).
+- The bot token is kept in /var/lib/flowtrack/notify.json (readable by the service only), never sent to the browser
+  (the field shows "saved") and never written to the log. Sending runs in its own thread with retries: an
+  unreachable Telegram never holds up the detections.
+- Settings → Events: the thresholds column of the detections table no longer breaks the table's row lines.
+
 ## 1.6.1 — 2026-10-12
 
 - **IP reputation.** Eight free public lists of malicious addresses — abuse.ch Feodo Tracker and ThreatFox (botnet

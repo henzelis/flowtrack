@@ -1456,19 +1456,43 @@ function vThreats(){
 function vEventsCfg(){
   const v = document.getElementById('setBody');
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Detections', 'Детекції'), T('on or off, the priority each event gets, and when it triggers', 'увімкнення, пріоритет події і коли вона спрацьовує'))}<div id="evkBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('M2 9l14-6-5 14-2-6zM9 11l7-8', T('Telegram notifications', 'Сповіщення в Telegram'), T('a new event goes to your chat once · what continues is not sent again', 'нова подія надходить у ваш чат один раз · те, що триває, повторно не надсилається'))}<div id="evtBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('globe', T('IP reputation', 'Репутація IP'), T('public lists of malicious addresses · downloaded once a day by this server from their publishers · checked every 10 minutes, not per record', 'публічні списки шкідливих адрес · цей сервер завантажує їх раз на добу напряму від авторів · перевірка кожні 10 хвилин, а не для кожного запису'))}<div id="evrBox" class="loading"></div></section>
     <section class="glass panel s7">${ph('dev', T('Services on our side', 'Сервіси на нашому боці'), T('learned from the last day: what outside addresses call', 'визначені за останню добу: до чого звертаються ззовні'))}<div id="evsBox" class="loading"></div></section>
     <section class="glass panel s5">${ph('list', T('Exceptions and ports', 'Винятки і порти'))}<div id="evxBox" class="loading"></div></section>
     <section class="glass panel s12 evsave"><div><button class="btn primary" id="evSave">${T('Save', 'Зберегти')}</button> <button class="btn" id="evDef">${T('Restore defaults', 'Відновити типові')}</button></div><p class="err" id="evErr"></p><p class="note" id="evOk" hidden>${T('Saved. The next 10-minute check uses the new settings.', 'Збережено. Наступна 10-хвилинна перевірка вже з новими налаштуваннями.')}</p></section></div>`;
-  const load = async () => { const r = await fetch('api/events/config'); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
+  const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
+  const load = async () => { const [ev, nt] = await Promise.all([get('api/events/config'), get('api/notify')]); return {...ev, notify:nt}; };
   const show = res => {
     const cfg = res.config, kinds = EV_KINDS(), sevs = SEV();
     const box = (id, html) => { const el = document.getElementById(id); el.classList.remove('loading'); el.innerHTML = html; };
-    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On', 'Увімк.')}</th><th>${T('Event', 'Подія')}</th><th>${T('Priority', 'Пріоритет')}</th><th>${T('Triggers at', 'Спрацьовує від')}</th></tr></thead><tbody>
+    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On', 'Увімк.')}</th><th>${T('Event', 'Подія')}</th><th>${T('Priority', 'Пріоритет')}</th><th title="${T('Send this kind to Telegram', 'Надсилати цей тип у Telegram')}">Telegram</th><th>${T('Triggers at', 'Спрацьовує від')}</th></tr></thead><tbody>
       ${Object.entries(kinds).map(([k, [name, desc, thr]]) => { const c = cfg.kinds[k] || {};
         return `<tr data-k="${k}"><td><label class="chk"><input type="checkbox" data-x="on" ${c.on ? 'checked' : ''} aria-label="${esc(name)}"></label></td><td class="wrap"><b>${name}</b><p class="note">${desc}</p></td>
         <td><select data-x="sev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${c.sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></td>
-        <td class="thr">${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</td></tr>`; }).join('')}</tbody></table></div>`);
+        <td><label class="chk"><input type="checkbox" data-n="${k}" ${res.notify.kinds[k] !== false ? 'checked' : ''} aria-label="Telegram: ${esc(name)}"></label></td>
+        <td class="thr"><div>${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</div></td></tr>`; }).join('')}</tbody></table></div>`);
+    const tg = res.notify.telegram;
+    box('evtBox', `<div class="form tgform">
+      <p class="note" style="margin:0">${T('1) In Telegram open <b>@BotFather</b>, send /newbot and copy the token. 2) Write any message to your new bot (or add it to a group). 3) Paste the token, press <b>Find chat</b>, pick the chat, Save, and Send a test.', '1) У Telegram відкрийте <b>@BotFather</b>, надішліть /newbot і скопіюйте токен. 2) Напишіть будь-що своєму новому боту (або додайте його в групу). 3) Вставте токен, натисніть <b>Знайти чат</b>, виберіть чат, збережіть і надішліть тест.')}</p>
+      <label class="chk"><input type="checkbox" id="tgOn" ${tg.on ? 'checked' : ''}>${T('Send new events to Telegram', 'Надсилати нові події в Telegram')}</label>
+      <div class="two"><label>${T('Bot token', 'Токен бота')}<input id="tgTok" type="password" autocomplete="off" placeholder="${tg.token_set ? T('saved — leave empty to keep', 'збережено — залиште порожнім, щоб не змінювати') : '123456789:AA…'}"></label>
+        <label>${T('Chat ID', 'ID чату')}<span class="tgchat"><input id="tgChat" value="${esc(tg.chat)}" placeholder="123456789 / -100… / @channel"><button class="btn" type="button" id="tgFind">${T('Find chat', 'Знайти чат')}</button></span></label></div>
+      <div id="tgChats" class="tgchats"></div>
+      <div class="two"><label>${T('Send from priority', 'Надсилати від пріоритету')}<select id="tgSev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${tg.min_sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></label>
+        <label>${T('Language of the messages', 'Мова повідомлень')}<select id="tgLang"><option value="uk" ${tg.lang === 'uk' ? 'selected' : ''}>Українська</option><option value="en" ${tg.lang === 'en' ? 'selected' : ''}>English</option></select></label></div>
+      <div class="two"><label>${T('FlowTrack address for the link in messages (optional)', 'Адреса FlowTrack для посилання в повідомленнях (необов’язково)')}<input id="tgLink" value="${esc(tg.link)}" placeholder="${esc(location.origin)}"></label>
+        <label>${T('At most messages an hour', 'Не більше повідомлень на годину')}<input id="tgHour" type="number" min="1" max="600" value="${esc(res.notify.per_hour)}"></label></div>
+      <div><button class="btn" type="button" id="tgTest">${T('Send a test', 'Надіслати тест')}</button> <span class="note" id="tgSay"></span></div></div>`);
+    const say = (m, bad) => { const e = document.getElementById('tgSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
+    document.getElementById('tgFind').onclick = async () => { say(T('Asking Telegram…', 'Питаю Telegram…'));
+      try { const r = await apiPost('notify/chats', collectNotify()); const box2 = document.getElementById('tgChats');
+        if (!r.chats.length) { box2.innerHTML = ''; say(T('No chats yet: write any message to the bot (or add it to a group) and press again.', 'Чатів ще немає: напишіть боту будь-що (або додайте його в групу) і натисніть ще раз.'), true); return; }
+        say(''); box2.innerHTML = r.chats.map(c => `<button class="btn" type="button" data-chat="${esc(c.id)}">${esc(c.name || c.id)} <span class="mono">${esc(c.id)}</span> · ${esc(c.type)}</button>`).join(' ');
+        box2.querySelectorAll('[data-chat]').forEach(b => b.onclick = () => { document.getElementById('tgChat').value = b.dataset.chat; box2.innerHTML = ''; });
+      } catch (e) { say(e.message, true); } };
+    document.getElementById('tgTest').onclick = async () => { say(T('Sending…', 'Надсилаю…'));
+      try { await apiPost('notify/test', collectNotify()); say(T('Sent — check the chat.', 'Надіслано — перевірте чат.')); } catch (e) { say(e.message, true); } };
     const cats = {malware:T('malware: botnet controllers, malware hosts', 'шкідливе ПЗ: контролери ботнетів, хости шкідливого ПЗ'), drop:T('criminal netblocks', 'мережі зловмисників'), attack:T('hosts seen attacking', 'хости, помічені в атаках'), anon:T('Tor exit relays', 'вихідні вузли Tor')};
     const when = t => t ? new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
     box('evrBox', `<div class="tw form"><table class="evr"><thead><tr><th>${T('On', 'Увімк.')}</th><th>${T('List', 'Список')}</th><th>${T('What it holds', 'Що містить')}</th><th class="num">${T('Entries', 'Записів')}</th><th>${T('Updated', 'Оновлено')}</th></tr></thead><tbody>
@@ -1498,13 +1522,17 @@ function vEventsCfg(){
     return {kinds, roles, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
       sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value};
   };
+  const collectNotify = () => { const kinds = {}; document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
+    return {telegram:{on:document.getElementById('tgOn').checked, token:document.getElementById('tgTok').value.trim(), chat:document.getElementById('tgChat').value.trim(),
+      min_sev:document.getElementById('tgSev').value, lang:document.getElementById('tgLang').value, link:document.getElementById('tgLink').value.trim()},
+      kinds, per_hour:Number(document.getElementById('tgHour').value)}; };
   const err = document.getElementById('evErr'), ok = document.getElementById('evOk');
   load().then(show).catch(e => { err.textContent = e.message; });
   document.getElementById('evSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
-    try { show(await apiPost('events/config', collect())); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
+    try { const nt = await apiPost('notify', collectNotify()); show({...await apiPost('events/config', collect()), notify:nt}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
   document.getElementById('evDef').onclick = async () => { if (!confirm(T('Restore the default settings of all events? Exceptions and service roles are cleared too.', 'Відновити типові налаштування всіх подій? Винятки і ролі сервісів теж буде очищено.'))) return;
     err.textContent = ''; ok.hidden = true;
-    try { show(await apiPost('events/config', {})); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
+    try { show({...await apiPost('events/config', {}), notify:await get('api/notify')}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
 }
 const VENDORS = {
   Fortinet:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)', 'WAN + внутрішні інтерфейси (крім Wi-Fi SSID)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`,

@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import detect  # noqa: E402
+import notify  # noqa: E402
 import reputation  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
@@ -1119,6 +1120,39 @@ def post_events_config(body):
     return get_events_config()
 
 
+def post_notify(body):
+    try:
+        cfg = notify.validate(body, notify.load())
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    notify.save(cfg)
+    return notify.public(cfg)
+
+
+def _notify_form(body):
+    """The typed settings (not saved) over the stored ones: for Test and Find chat before saving."""
+    t = dict(body.get('telegram') or {}, on=False)
+    try:
+        return notify.validate(dict(body, telegram=t), notify.load())
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+
+
+def post_notify_test(body):
+    try:
+        notify.test(_notify_form(body))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return {'ok': True}
+
+
+def post_notify_chats(body):
+    try:
+        return {'chats': notify.chats(_notify_form(body))}
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+
+
 def post_events_ignore(body):
     try:
         detect.add_ignore(body.get('value', ''))
@@ -1342,7 +1376,7 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users', '/api/events/config'}
+ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify'}
 COOKIE = 'ft_session'
 
 
@@ -1412,6 +1446,8 @@ class H(BaseHTTPRequestHandler):
                     return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
                 if u.path == '/api/events/config':
                     return self.json(200, get_events_config())
+                if u.path == '/api/notify':
+                    return self.json(200, notify.public(notify.load()))
                 return self.json(200, {'users': AUTH.list_users()})
         fn = ROUTES.get(u.path)
         if fn:
@@ -1485,6 +1521,9 @@ class H(BaseHTTPRequestHandler):
                 '/api/license/checkin': post_license_checkin,
                 '/api/events/config': lambda: post_events_config(body),
                 '/api/events/ignore': lambda: post_events_ignore(body),
+                '/api/notify': lambda: post_notify(body),
+                '/api/notify/test': lambda: post_notify_test(body),
+                '/api/notify/chats': lambda: post_notify_chats(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})

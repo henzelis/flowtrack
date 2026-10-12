@@ -74,7 +74,7 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   sustained upload, bursts, new countries and export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
   goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
-  ignored (Settings → Events).
+  ignored (Settings → Events). New events can go to Telegram through your own bot — once each, by priority and kind.
 - *Settings* — tabs for language and version, devices (exporters and interfaces), users, events, and the edition /
   license.
 - Any period within the kept flow details (30 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
@@ -382,7 +382,7 @@ Overview request for 24 hours or 7 days is answered in under 0.1 s.
 - Automated tests and CI (GitHub Actions), API tokens for scripts and monitoring
 
 **Features**
-- Notifications: Telegram, e-mail, webhook
+- Notifications: e-mail, webhook
 - Host names from DHCP leases (FortiGate API) and SNMP interface names / counter cross-checks
 - sFlow v5
 - FortiGate application names from `APPLICATION_TAG`

@@ -473,7 +473,8 @@ tr.unseen td{opacity:.75}
 table.evk td,table.evs td{vertical-align:top;white-space:normal}
 table.evk td.wrap{min-width:260px}
 table.evk td.wrap .note{margin:2px 0 0;max-width:62ch;line-height:1.4}
-table.evk td.thr{display:flex;flex-wrap:wrap;gap:6px 14px;min-width:220px}
+table.evk td.thr{min-width:220px}
+table.evk td.thr>div{display:flex;flex-wrap:wrap;gap:6px 14px}
 table.evk td.thr label{display:flex;align-items:center;gap:6px;font-weight:600;color:var(--ink2);white-space:nowrap}
 .form table.evk td.thr input{width:88px}
 .form table select{min-width:150px}
@@ -490,3 +491,8 @@ table.evk td.thr label{display:flex;align-items:center;gap:6px;font-weight:600;c
 table.evr td{vertical-align:middle;white-space:normal}
 table.evr a{color:var(--blue-hi);font-weight:700;text-decoration:none}
 .evown{margin-top:14px}
+.tgform{gap:12px}
+.tgchat{display:flex;gap:8px}
+.tgchat input{flex:1}
+.tgchats{display:flex;flex-wrap:wrap;gap:8px}
+.tgchats:empty{display:none}

@@ -23,6 +23,7 @@ import os
 import threading
 import time
 
+import notify
 import reputation
 from common import STATE_DIR, CHError, ch, tr
 
@@ -578,8 +579,9 @@ def merge_info(old, new):
     return out
 
 
-def store(hits, t0, t1):
-    """Merge the window's hits into open events (same kind and key, activity within the gap) or start new ones."""
+def store(hits, t0, t1, new=None):
+    """Merge the window's hits into open events (same kind and key, activity within the gap) or start new ones.
+    new: a list that gets the rows of the events that start here (for the notifications)."""
     if not hits:
         return 0
     by = {}
@@ -617,6 +619,8 @@ def store(hits, t0, t1):
                      'hits': n, 'exporter': h['exporter'], 'src': h['src'], 'dst': h['dst'], 'port': h['port'], 'proto': h['proto'],
                      'value': value, 'info': json.dumps(info, ensure_ascii=False), 'ver': ver})
     ch('INSERT INTO events FORMAT JSONEachRow', data='\n'.join(json.dumps(r) for r in rows).encode())
+    if new is not None:
+        new += [dict(r, info=json.loads(r['info'])) for r in rows if r['hits'] == 1 and r['first_seen'] == t0]
     return len(rows)
 
 
@@ -632,6 +636,7 @@ class Detector:
     def __init__(self, log=print):
         self.log, self.base, self.learned = log, {'svc': {}, 'wan': {}, 'refl': {}}, 0
         self.rep = reputation.Index()
+        self.notifier = notify.Notifier(log)
 
     def state(self):
         try:
@@ -659,7 +664,10 @@ class Detector:
             if self.rep.build(lists, cfg['own_list']):      # a list downloaded meanwhile (only file times are compared)
                 self.log(f'reputation: {self.rep.size:,} networks from {len(lists)} list{"s" if len(lists) != 1 else ""}'
                          + (f" + {len(cfg['own_list']):,} own" if cfg['own_list'] else ''))
-            found += store(rules(cfg, self.base, done, done + WINDOW, self.rep), done, done + WINDOW)
+            new = []
+            found += store(rules(cfg, self.base, done, done + WINDOW, self.rep), done, done + WINDOW, new)
+            on = [r for r in new if cfg['kinds'].get(r['kind'], {}).get('on') and (r['src'], r['info'].get('asn')) not in Ignore(cfg['ignore'])]
+            self.notifier.push([{'kind': r['kind'], 'row': r} for r in on], cfg['kinds'], done + WINDOW)
             done += WINDOW
             self.save_state(done)
         return found
