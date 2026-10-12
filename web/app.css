@@ -460,3 +460,28 @@ tr.unseen td{opacity:.75}
 .globe-labels{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1}
 .gl-lbl{position:absolute;left:0;top:0;font:500 12px Manrope,sans-serif;color:#DDFBEF;background:rgba(4,10,28,.6);padding:2px 5px;border-radius:4px;white-space:nowrap;opacity:0;will-change:transform,opacity}
 .gl-lbl.dev{font-weight:700;font-size:13px;color:#F2F6FF;background:rgba(4,10,28,.7);padding:3px 6px}
+/* Events (1.6.0): priority filter, actions, what is watched, Settings → Events */
+.evseg{margin:0 0 12px;flex-wrap:wrap}
+.evseg .mono{opacity:.7;margin-left:4px}
+.alert .meta .acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.watch{display:grid;gap:12px}
+.watch b{font-size:13px;font-weight:700}
+.watch .pill{margin-left:8px;vertical-align:1px}
+.watch p{margin:2px 0 0;font-size:12px;color:var(--ink3);line-height:1.4}
+.watch .off{opacity:.5}
+table.evk td,table.evs td{vertical-align:top;white-space:normal}
+table.evk td.wrap{min-width:260px}
+table.evk td.wrap .note{margin:2px 0 0;max-width:62ch;line-height:1.4}
+table.evk td.thr{display:flex;flex-wrap:wrap;gap:6px 14px;min-width:220px}
+table.evk td.thr label{display:flex;align-items:center;gap:6px;font-weight:600;color:var(--ink2);white-space:nowrap}
+.form table.evk td.thr input{width:88px}
+.form table select{min-width:150px}
+.form textarea{border:1px solid var(--edge);border-radius:10px;padding:8px 12px;background:rgba(0,0,0,.3);font:13px var(--f-mono);color:var(--ink);outline:none;resize:vertical;min-width:0;width:100%;box-sizing:border-box}
+.form textarea:focus{border-color:var(--blue-hi)}
+.evsave{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.evsave .err,.evsave .note{margin:0;padding:0}
+@media (max-width:640px){
+  .alert{grid-template-columns:auto 1fr}
+  .alert .meta{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;text-align:left;margin-top:8px}
+  .alert .meta .acts{justify-content:flex-start}
+}

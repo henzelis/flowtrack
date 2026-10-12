@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ftcore  # noqa: E402
+import detect  # noqa: E402
 import rollups  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, service_name)
@@ -613,6 +614,7 @@ class Receiver:
         threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()
         threading.Thread(target=self.license_checkins, name='license-checkin', daemon=True).start()
         threading.Thread(target=self.rollups, name='rollups', daemon=True).start()
+        threading.Thread(target=detect.Detector(log).run, name='detect', daemon=True).start()   # scans, floods ... (detect.py)
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:

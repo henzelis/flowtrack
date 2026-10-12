@@ -66,9 +66,16 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
   included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
   missing, and the hops of any source → destination path across the devices, with NAT and gaps.
-- *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs), *Events*
-  (sustained upload, bursts, new countries, export loss), *Settings* — tabs for language and version, devices
-  (exporters and interfaces), users, and the edition / license.
+- *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs).
+- *Events*: port scans, password guessing on SSH / RDP / management ports, a daily summary of who probes them,
+  aggressive web clients, DDoS (floods of a service, inbound volume, UDP reflection — against the network's own
+  usual peak), inside hosts that scan the internet or the LAN; plus sustained upload, bursts, new countries and
+  export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
+  services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
+  goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
+  ignored (Settings → Events).
+- *Settings* — tabs for language and version, devices (exporters and interfaces), users, events, and the edition /
+  license.
 - Any period within the kept flow details (30 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
   drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
   incident view can be bookmarked or shared.
@@ -379,7 +386,7 @@ Overview request for 24 hours or 7 days is answered in under 0.1 s.
 - sFlow v5
 - FortiGate application names from `APPLICATION_TAG`
 - DSCP / traffic class: breakdown and colouring by QoS marking
-- Detections: port scans, IP reputation lists
+- Detections: IP reputation lists
 - Scheduled reports; configurable retention; ClickHouse backups
 
 ## Repository layout

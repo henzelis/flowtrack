@@ -109,3 +109,40 @@ ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_dropped UInt64 DEFAULT 0
 ALTER TABLE exporter_stats ADD COLUMN IF NOT EXISTS dup_packets UInt64 DEFAULT 0;
 -- records not stored because the edition's records/s limit was exceeded
 ALTER TABLE collector_stats ADD COLUMN IF NOT EXISTS license_drops UInt64 DEFAULT 0;
+
+-- Detections (1.6.0, detect.py). Services learned hourly: L = our address:port that outside addresses call,
+-- R = an outside address:port that we call; one row per endpoint, refreshed by every learning run.
+CREATE TABLE IF NOT EXISTS ev_services
+(
+    kind    Enum8('L' = 1, 'R' = 2),
+    ip      String,
+    port    UInt16,
+    proto   UInt8,
+    peers   UInt32,
+    updated DateTime
+)
+ENGINE = ReplacingMergeTree(updated)
+ORDER BY (kind, ip, port, proto)
+TTL updated + INTERVAL 2 DAY;
+
+-- One row per event (kind + key: the source, or the service); a window that sees it again writes a newer version
+-- (ver) with last_seen, hits and info updated. Read with FINAL.
+CREATE TABLE IF NOT EXISTS events
+(
+    kind       LowCardinality(String),
+    key        String,
+    first_seen DateTime,
+    last_seen  DateTime,
+    hits       UInt32,                   -- 10-minute windows it was seen in
+    exporter   LowCardinality(String),
+    src        String,
+    dst        String,
+    port       UInt16,
+    proto      UInt8,
+    value      Float64,                  -- the rule's measure at its peak (ports, sessions, addresses, bits/s)
+    info       String,                   -- JSON: ports, targets, sources, country, org, asn ...
+    ver        UInt64
+)
+ENGINE = ReplacingMergeTree(ver)
+ORDER BY (kind, key, first_seen)
+TTL last_seen + INTERVAL 90 DAY;

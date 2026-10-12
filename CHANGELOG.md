@@ -3,6 +3,33 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased (1.6.0)
+
+- **Port scans, password guessing and DDoS on the *Events* page.** The collector checks every 10 minutes (and the
+  last day at its first start) and keeps what it finds: one event per source or service that grows while the
+  activity goes on (first and last time, how often), not one line per flow.
+  - *Port scan*: one outside address calls 10+ ports of yours, 3+ of your management services, or one port on 10+
+    of your addresses within 10 minutes.
+  - *Password guessing*: 30+ sessions from one address to a sensitive service (SSH, RDP, management, VPN portals …)
+    in 10 minutes. The single knocks of internet-wide scanners are summed up instead: one *Probes of …* event a day
+    per service, with the number of addresses and their countries.
+  - *Aggressive client*: 200+ sessions in 10 minutes from one address to a public service (a web site).
+  - *DDoS / flood*: new sessions to a service, inbound traffic of a device, or UDP from amplifier ports (DNS, NTP,
+    SSDP, memcached …) at 10× its own usual peak (99th percentile of the last week) and above a floor, in 3 of 10
+    minutes.
+  - *Inside host scans the internet* / *Scan inside the network*: a host of yours calls many addresses or ports and
+    gets no answers — a sign of malware.
+- Who opened a connection is worked out from the records (NetFlow has no such field; FortiGate sends no TCP flags):
+  the two records of a session and both halves of a NAT translation are joined, and the services on your side are
+  learned hourly from what outside addresses call. Your web sites are recognised as public and only floods and
+  aggressive clients count there; the firewall's own lookups (FortiGuard, DNS) are not mistaken for scans.
+- **Settings → Events** (administrators): every kind on or off, its priority (info / warning / critical) and
+  thresholds; the learned services with their role (public, sensitive, ordinary); addresses, networks and ASNs to
+  ignore; the sensitive and public ports. *Ignore* on an event adds its source to the list.
+- The *Events* page filters by priority and lists what is watched with each kind's priority.
+- Firewalls export only the traffic they let through: scans of closed ports are not seen there, calls to open
+  services and published ports are.
+
 ## 1.5.1 — 2026-10-09
 
 - *Through device* shows the interfaces' addresses read over SNMP (on the device box, its tooltips and the interfaces

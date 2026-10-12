@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
+import detect  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
 import snmp  # noqa: E402
@@ -972,13 +973,16 @@ def api_host(q):
 
 
 def api_alerts(q):
-    """Detections computed on the fly from the last day of flows."""
+    """Events of the last day: detections stored by the collector (detect.py), anomalies computed here from the
+    flows, the health of export, collector and license. Kinds switched off in Settings -> Events are left out."""
+    cfg = detect.load_config()
+    kinds, ign = cfg['kinds'], detect.Ignore(cfg['ignore'])
     out = []
     for r in ch("""SELECT int_ip, ext_ip, any(service) AS service, any(ext_port) AS port, count() AS mins, sum(b) * 8 / (count() * 60) AS bps, min(m) AS since
             FROM (SELECT int_ip, ext_ip, service, ext_port, toStartOfMinute(ts) AS m, sum(bytes) AS b FROM flows
                   WHERE ts >= now() - INTERVAL 3 HOUR AND dir = 'up' GROUP BY int_ip, ext_ip, service, ext_port, m HAVING b * 8 / 60 > 5000000)
-            GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON'):
-        out.append({'sev': 'warn', 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
+            GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON') if kinds['sustained_upload']['on'] else []:
+        out.append({'sev': kinds['sustained_upload']['sev'], 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
                     'title': tr('Sustained upload', 'Тривале вивантаження'),
                     'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Mbit/s for {r['mins']} min in the last 3 h.",
                                f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Мбіт/с протягом {r['mins']} хв за останні 3 год."),
@@ -1029,17 +1033,50 @@ def api_alerts(q):
     for r in ch("""SELECT int_ip, country, min(ts) AS first FROM flows WHERE ts >= now() - INTERVAL 1 DAY AND country != '' GROUP BY int_ip, country
             HAVING (int_ip, country) NOT IN (SELECT int_ip, country FROM flows WHERE ts < now() - INTERVAL 1 DAY AND ts >= now() - INTERVAL 7 DAY GROUP BY int_ip, country)
                AND (SELECT min(ts) FROM flows) < now() - INTERVAL 2 DAY
-            ORDER BY first DESC LIMIT 5""", fmt='JSON'):
-        out.append({'sev': 'info', 'kind': 'new_country', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('New destination', 'Новий напрямок'),
+            ORDER BY first DESC LIMIT 5""", fmt='JSON') if kinds['new_country']['on'] else []:
+        out.append({'sev': kinds['new_country']['sev'], 'kind': 'new_country', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('New destination', 'Новий напрямок'),
                     'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']} contacted {r['country']} for the first time this week.",
                                f"{NAMES.get(r['int_ip']) or r['int_ip']} вперше за тиждень звернувся до країни {r['country']}."), 'when': r['first']})
     for r in ch("""WITH per AS (SELECT int_ip, toStartOfFiveMinutes(ts) AS m, sum(bytes) AS b FROM flows WHERE ts >= now() - INTERVAL 1 DAY GROUP BY int_ip, m)
             SELECT int_ip, max(b) AS peak, quantile(0.5)(b) AS med, argMax(m, b) AS at FROM per GROUP BY int_ip
-            HAVING count() > 24 AND peak > 100000000 AND peak > 8 * med AND at >= now() - INTERVAL 3 HOUR ORDER BY peak DESC LIMIT 5""", fmt='JSON'):
-        out.append({'sev': 'info', 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('Traffic burst', 'Сплеск трафіку'),
+            HAVING count() > 24 AND peak > 100000000 AND peak > 8 * med AND at >= now() - INTERVAL 3 HOUR ORDER BY peak DESC LIMIT 5""", fmt='JSON') if kinds['burst']['on'] else []:
+        out.append({'sev': kinds['burst']['sev'], 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('Traffic burst', 'Сплеск трафіку'),
                     'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB in 5 min — {float(r['peak']) / max(1.0, float(r['med'])):.0f}× the daily median.",
                                f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB за 5 хв — у {float(r['peak']) / max(1.0, float(r['med'])):.0f}× вище медіани за добу."), 'when': r['at']})
-    return {'alerts': out}
+    out = [a for a in out if not a.get('ip') or (a['ip'], 0) not in ign]
+    try:
+        out += detect.recent(cfg, time.time() - 86400)
+    except CHError as e:           # before the collector of 1.6 created the table
+        if 'UNKNOWN_TABLE' not in str(e):
+            raise
+    rank = {'crit': 0, 'warn': 1, 'info': 2}
+    out.sort(key=lambda a: rank.get(a['sev'], 3))       # stable: the order within a priority stays
+    return {'alerts': out, 'watch': {k: v for k, v in kinds.items()}}
+
+
+def get_events_config():
+    cfg = detect.load_config()
+    try:
+        svcs = detect.services(cfg)
+    except CHError:
+        svcs = []
+    return {'config': cfg, 'defaults': detect.defaults(), 'services': svcs}
+
+
+def post_events_config(body):
+    try:
+        detect.save_config(detect.validate(body))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return get_events_config()
+
+
+def post_events_ignore(body):
+    try:
+        detect.add_ignore(body.get('value', ''))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return {'ok': True}
 
 
 def _str(v, n, field):
@@ -1257,7 +1294,7 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users'}
+ADMIN_GET = {'/api/users', '/api/events/config'}
 COOKIE = 'ft_session'
 
 
@@ -1325,6 +1362,8 @@ class H(BaseHTTPRequestHandler):
             if u.path in ADMIN_GET:
                 if AUTH.users[user]['role'] != 'admin':
                     return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
+                if u.path == '/api/events/config':
+                    return self.json(200, get_events_config())
                 return self.json(200, {'users': AUTH.list_users()})
         fn = ROUTES.get(u.path)
         if fn:
@@ -1396,6 +1435,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/license': lambda: post_license(body),
                 '/api/license/deactivate': post_license_deactivate,
                 '/api/license/checkin': post_license_checkin,
+                '/api/events/config': lambda: post_events_config(body),
+                '/api/events/ignore': lambda: post_events_ignore(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})

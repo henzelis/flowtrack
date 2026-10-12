@@ -1390,16 +1390,105 @@ function vGeo(){
     return `<div class="tw"><table><thead><tr><th>ASN</th><th>${T('Country', 'Країна')}</th><th class="num">↓</th><th class="num">↑</th><th class="num">${T('Total', 'Разом')}</th><th class="num">%</th></tr></thead><tbody>
       ${t.rows.map(r => `<tr><td>${r.k !== '0' ? `<button class="link" data-f="asn" data-v="${esc(r.k)}">AS${esc(r.k)} ${esc(r.as_org)}</button>` : T('local addresses', 'локальні адреси')}</td><td><span class="tag mono">${esc(r.country || '—')}</span></td><td class="num d mono">${fmtB(r.dn)}</td><td class="num u mono">${fmtB(r.up)}</td><td class="num mono"><b>${fmtB(tot(r))}</b></td><td class="num mono">${pct(tot(r), t.total)}</td></tr>`).join('')}</tbody></table></div>`; });
 }
+// detections and anomalies: name, what triggers it, its thresholds (keys as in detect.KINDS)
+const EV_KINDS = () => ({
+  port_scan:[T('Port scan', 'Сканування портів'), T('one outside address calls many ports of ours, several of our management services, or one port on many of our addresses — within 10 min', 'одна зовнішня адреса звертається до багатьох наших портів, кількох сервісів керування або до одного порту на багатьох наших адресах — за 10 хв'),
+    {ports:T('ports', 'портів'), services:T('services', 'сервісів'), hosts:T('addresses', 'адрес')}],
+  brute_force:[T('Password guessing', 'Перебір паролів'), T('one address opens many sessions to a sensitive service (SSH, RDP, management) within 10 min', 'одна адреса відкриває багато сесій до чутливого сервісу (SSH, RDP, керування) за 10 хв'), {sessions:T('sessions / 10 min', 'сесій / 10 хв')}],
+  probes:[T('Probes of management services', 'Зондування сервісів керування'), T('one summary a day per sensitive service: how many outside addresses called it', 'один підсумок на добу для кожного чутливого сервісу: скільки зовнішніх адрес до нього зверталось'), {}],
+  heavy_client:[T('Aggressive client', 'Агресивний клієнт'), T('one address opens very many sessions to a public service (web) within 10 min', 'одна адреса відкриває дуже багато сесій до публічного сервісу (веб) за 10 хв'), {sessions:T('sessions / 10 min', 'сесій / 10 хв')}],
+  ddos:[T('DDoS / flood', 'DDoS / флуд'), T('minutes far above the usual peak (99th percentile of the week) and above a floor: new sessions to a service, inbound traffic, UDP reflection', 'хвилини, набагато вищі за звичайний пік (99-й перцентиль тижня) і за мінімум: нові сесії до сервісу, вхідний трафік, UDP-відбиття'),
+    {factor:T('× usual peak', '× звичайного піку'), min_sessions:T('sessions/min at least', 'сесій/хв щонайменше'), min_mbps:T('Mbit/s at least', 'Мбіт/с щонайменше'), refl_mbps:T('reflection, Mbit/s', 'відбиття, Мбіт/с'), minutes:T('minutes of 10', 'хвилин із 10')}],
+  inside_scan:[T('Inside host scans the internet', 'Внутрішній хост сканує інтернет'), T('a host of ours calls many addresses on one port, or many ports of one address, mostly without answer — a sign of malware', 'наш хост звертається до багатьох адрес на один порт або до багатьох портів однієї адреси, здебільшого без відповіді — ознака шкідливого ПЗ'),
+    {hosts:T('addresses', 'адрес'), hosts_busy:T('on web / DNS / NTP', 'для веб / DNS / NTP'), ports:T('ports', 'портів')}],
+  lateral_scan:[T('Scan inside the network', 'Сканування всередині мережі'), T('a host calls many hosts or ports of the local network without answer', 'хост звертається до багатьох хостів або портів локальної мережі без відповіді'), {hosts:T('hosts', 'хостів'), ports:T('ports', 'портів')}],
+  sustained_upload:[T('Sustained upload', 'Тривале вивантаження'), T('more than 5 Mbit/s to one address for 45 min out of 3 h', 'понад 5 Мбіт/с до однієї адреси 45 хв із 3 год'), {}],
+  burst:[T('Traffic burst', 'Сплеск трафіку'), T('5 minutes ×8 above the host’s daily median', '5 хвилин у ×8 вище за медіану хоста за добу'), {}],
+  new_country:[T('New destination', 'Новий напрямок'), T('a host contacts a country for the first time this week', 'хост уперше за тиждень звертається до країни'), {}],
+});
+const SEV = () => ({crit:T('critical', 'критично'), warn:T('warning', 'увага'), info:T('info', 'інфо')});
+// stored times are UTC 'YYYY-MM-DD hh:mm:ss': local time, with the day when not today
+function evTime(s){
+  if (!/^\d{4}-\d\d-\d\d \d\d:\d\d/.test(String(s))) return String(s);
+  const d = new Date(String(s).replace(' ', 'T') + 'Z'), today = new Date().toDateString() === d.toDateString();
+  return d.toLocaleString(LOC, today ? {hour:'2-digit', minute:'2-digit'} : {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
+}
+// a stored event's span: the day once when both ends are on it
+function evRange(a, b){
+  const d = s => new Date(String(s).replace(' ', 'T') + 'Z');
+  if (!/^\d{4}-/.test(String(a)) || d(a).toDateString() !== d(b).toDateString()) return `${evTime(a)} – ${evTime(b)}`;
+  return `${evTime(a)} – ${d(b).toLocaleTimeString(LOC, {hour:'2-digit', minute:'2-digit'})}`;
+}
 function vThreats(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies', 'Події та аномалії'), T('computed from the flows of the last day', 'обчислюються з потоків за останню добу'))}<div id="alBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('search', T('What is watched', 'Що відстежується'))}<div class="kv">
-      <div><span>${T('Sustained upload', 'Тривале вивантаження')}</span><b>${T('&gt;5 Mbit/s · 45 min out of 3 h', '&gt;5 Мбіт/с · 45 хв із 3 год')}</b></div><div><span>${T('Bursts', 'Сплески')}</span><b>${T('×8 the host median', '×8 від медіани хоста')}</b></div><div><span>${T('New countries', 'Нові країни')}</span><b>${T('first contact this week', 'перший контакт за тиждень')}</b></div>
-      <div><span>${T('Export health', 'Здоров’я експорту')}</span><b>${T('sequence gaps', 'пропуски sequence')}</b></div></div><p class="note">${T('Port scans, IP reputation and Telegram notifications are next.', 'Сканування портів, репутація IP і сповіщення в Telegram — наступні кроки.')}</p></section></div>`;
-  section('alBox', async () => { const a = (await api('alerts')).alerts;
-    if (!a.length) return `<div class="empty">${T('No events — all quiet', 'Подій немає — усе спокійно')}</div>`;
-    return '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
-      <div class="meta"><span class="pill ${x.sev}">${{warn:T('warning', 'увага'), crit:T('anomaly', 'аномалія'), info:T('info', 'інфо')}[x.sev]}</span><span class="mono">${esc(String(x.when).slice(11, 16) || x.when)}</span>${x.ip ? `<button class="btn" data-f="ip" data-v="${esc(x.ip)}">${T('Filter', 'Фільтр')}</button>` : ''}</div></div>`).join('') + '</div>'; });
+  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies', 'Події та аномалії'), T('the last 24 hours · scans, password guessing and floods are checked every 10 minutes', 'останні 24 години · сканування, перебір паролів і флуд перевіряються кожні 10 хвилин'))}<div id="alBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('search', T('What is watched', 'Що відстежується'), '', isAdmin() ? `<button class="btn" id="evCfg">${T('Configure', 'Налаштувати')}</button>` : '')}<div id="watchBox" class="loading"></div></section></div>`;
+  if (isAdmin()) document.getElementById('evCfg').onclick = () => { state.view = 'settings'; state.setTab = 'events'; render(); };
+  const sevs = SEV(), kinds = EV_KINDS();
+  section('alBox', async () => { const res = await api('alerts'), all = res.alerts, cur = state.evSev || 'all';
+    const W = document.getElementById('watchBox');
+    if (W) { W.classList.remove('loading'); W.innerHTML = `<div class="watch">${Object.entries(kinds).map(([k, [name, desc]]) => { const c = (res.watch || {})[k] || {};
+      return `<div class="${c.on === false ? 'off' : ''}"><b>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off', 'вимк.') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
+      <div><b>${T('Export and collector health', 'Стан експорту і колектора')}</b><span class="pill warn">${sevs.warn}</span><p>${T('lost packets, a collector falling behind, the edition limit, the license', 'втрачені пакети, колектор не встигає, ліміт редакції, ліцензія')}</p></div></div>`; }
+    if (!all.length) return `<div class="empty">${T('No events — all quiet', 'Подій немає — усе спокійно')}</div>`;
+    const n = s => all.filter(x => x.sev === s).length, a = cur === 'all' ? all : all.filter(x => x.sev === cur);
+    setTimeout(() => {
+      document.querySelectorAll('#evSeg button').forEach(b => b.onclick = () => { state.evSev = b.dataset.v; vThreats(); });
+      document.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => {
+        if (!confirm(T(`Ignore ${b.dataset.ign}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.`, `Ігнорувати ${b.dataset.ign}? Її події більше не записуватимуться і не показуватимуться. Скасувати можна в «Налаштування → Події».`))) return;
+        try { await apiPost('events/ignore', {value:b.dataset.ign}); vThreats(); } catch (e) { alert(e.message); } });
+    });
+    return `<div class="seg evseg" id="evSeg" role="group">${[['all', T('All', 'Усі'), all.length], ['crit', sevs.crit, n('crit')], ['warn', sevs.warn, n('warn')], ['info', sevs.info, n('info')]].map(([k, l, c]) =>
+      `<button data-v="${k}" aria-pressed="${cur === k}">${l} <span class="mono">${c}</span></button>`).join('')}</div>` +
+      (a.length ? '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
+      <div class="meta"><span class="pill ${x.sev}">${sevs[x.sev] || x.sev}</span><span class="mono">${x.stored && x.first !== x.last ? esc(evRange(x.first, x.last)) : esc(evTime(x.when))}</span>
+        <span class="acts">${x.ip ? `<button class="btn" data-f="ip" data-v="${esc(x.ip)}">${T('Filter', 'Фільтр')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address', 'Не записувати й не показувати події цієї адреси')}">${T('Ignore', 'Ігнорувати')}</button>` : ''}</span></div></div>`).join('') + '</div>'
+        : `<div class="empty">${T('No events of this priority', 'Подій із таким пріоритетом немає')}</div>`); });
+}
+// Settings → Events (administrators): detections on/off, priority, thresholds; roles of our services; exceptions
+function vEventsCfg(){
+  const v = document.getElementById('setBody');
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Detections', 'Детекції'), T('on or off, the priority each event gets, and when it triggers', 'увімкнення, пріоритет події і коли вона спрацьовує'))}<div id="evkBox" class="loading"></div></section>
+    <section class="glass panel s7">${ph('dev', T('Services on our side', 'Сервіси на нашому боці'), T('learned from the last day: what outside addresses call', 'визначені за останню добу: до чого звертаються ззовні'))}<div id="evsBox" class="loading"></div></section>
+    <section class="glass panel s5">${ph('list', T('Exceptions and ports', 'Винятки і порти'))}<div id="evxBox" class="loading"></div></section>
+    <section class="glass panel s12 evsave"><div><button class="btn primary" id="evSave">${T('Save', 'Зберегти')}</button> <button class="btn" id="evDef">${T('Restore defaults', 'Відновити типові')}</button></div><p class="err" id="evErr"></p><p class="note" id="evOk" hidden>${T('Saved. The next 10-minute check uses the new settings.', 'Збережено. Наступна 10-хвилинна перевірка вже з новими налаштуваннями.')}</p></section></div>`;
+  const load = async () => { const r = await fetch('api/events/config'); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
+  const show = res => {
+    const cfg = res.config, kinds = EV_KINDS(), sevs = SEV();
+    const box = (id, html) => { const el = document.getElementById(id); el.classList.remove('loading'); el.innerHTML = html; };
+    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On', 'Увімк.')}</th><th>${T('Event', 'Подія')}</th><th>${T('Priority', 'Пріоритет')}</th><th>${T('Triggers at', 'Спрацьовує від')}</th></tr></thead><tbody>
+      ${Object.entries(kinds).map(([k, [name, desc, thr]]) => { const c = cfg.kinds[k] || {};
+        return `<tr data-k="${k}"><td><label class="chk"><input type="checkbox" data-x="on" ${c.on ? 'checked' : ''} aria-label="${esc(name)}"></label></td><td class="wrap"><b>${name}</b><p class="note">${desc}</p></td>
+        <td><select data-x="sev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${c.sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></td>
+        <td class="thr">${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</td></tr>`; }).join('')}</tbody></table></div>`);
+    const roles = {'':T('auto', 'авто'), public:T('public — floods only', 'публічний — лише флуд'), sensitive:T('sensitive — guessing, probes', 'чутливий — перебір, зондування'), normal:T('ordinary — scans only', 'звичайний — лише сканування')};
+    box('evsBox', res.services.length ? `<div class="tw form"><table class="evs"><thead><tr><th>${T('Service', 'Сервіс')}</th><th class="num">${T('Callers / day', 'Адрес / добу')}</th><th>${T('Role', 'Роль')}</th></tr></thead><tbody>
+      ${res.services.map(s => `<tr><td class="mono">${esc(s.ep.replace('/6', ' TCP').replace('/17', ' UDP'))}</td><td class="num mono">${s.peers.toLocaleString(LOC)}</td>
+        <td><select data-ep="${esc(s.ep)}">${Object.entries(roles).map(([r, l]) => `<option value="${r}" ${(s.set ? s.role : '') === r ? 'selected' : ''}>${r ? l : `${l}: ${roles[s.role].split(' — ')[0]}`}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>
+      <p class="note">${T('Public services (web sites) get many visitors: only floods and aggressive clients count there. Sensitive ones (SSH, management, VPN) also get password guessing and the daily probe summary.', 'До публічних сервісів (сайти) ходить багато відвідувачів: там рахуються лише флуд і агресивні клієнти. Для чутливих (SSH, керування, VPN) — ще перебір паролів і добовий підсумок зондувань.')}</p>`
+      : `<div class="empty">${T('Nothing learned yet — services show up within an hour of traffic.', 'Ще нічого не визначено — сервіси з’являються протягом години трафіку.')}</div>`);
+    box('evxBox', `<div class="form">
+      <label>${T('Ignore — addresses, networks, ASNs (one per line)', 'Ігнорувати — адреси, мережі, ASN (по одному в рядку)')}<textarea id="evIgn" rows="6" placeholder="203.0.113.7&#10;198.51.100.0/24&#10;AS40934">${esc(cfg.ignore.join('\n'))}</textarea></label>
+      <label>${T('Sensitive ports', 'Чутливі порти')}<input id="evSens" value="${esc(cfg.sensitive.join(', '))}"></label>
+      <label>${T('Public ports', 'Публічні порти')}<input id="evPub" value="${esc(cfg.public.join(', '))}"></label>
+      <p class="note">${T('The role of a service listed on the left wins over these ports.', 'Роль сервісу зі списку ліворуч має перевагу над цими портами.')}</p></div>`);
+  };
+  const collect = () => {
+    const kinds = {};
+    document.querySelectorAll('table.evk tr[data-k]').forEach(tr => { const k = {};
+      tr.querySelectorAll('[data-x]').forEach(i => { k[i.dataset.x] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) : i.value; });
+      kinds[tr.dataset.k] = k; });
+    const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
+    return {kinds, roles, ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
+      sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value};
+  };
+  const err = document.getElementById('evErr'), ok = document.getElementById('evOk');
+  load().then(show).catch(e => { err.textContent = e.message; });
+  document.getElementById('evSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
+    try { show(await apiPost('events/config', collect())); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
+  document.getElementById('evDef').onclick = async () => { if (!confirm(T('Restore the default settings of all events? Exceptions and service roles are cleared too.', 'Відновити типові налаштування всіх подій? Винятки і ролі сервісів теж буде очищено.'))) return;
+    err.textContent = ''; ok.hidden = true;
+    try { show(await apiPost('events/config', {})); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
 }
 const VENDORS = {
   Fortinet:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)', 'WAN + внутрішні інтерфейси (крім Wi-Fi SSID)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`,
@@ -1551,7 +1640,7 @@ function editionBadge(){
 }
 // ===================== settings: one page, tabs on top =====================
 const SET_TABS = () => [['general', T('General', 'Загальні'), ICO.grid], ['devices', T('Devices', 'Пристрої'), DEV_ICON],
-  ...(isAdmin() ? [['users', T('Users', 'Користувачі'), USER_ICON]] : []), ['license', T('License', 'Ліцензія'), ICO.shield]];
+  ...(isAdmin() ? [['users', T('Users', 'Користувачі'), USER_ICON], ['events', T('Events', 'Події'), ICO.pulse]] : []), ['license', T('License', 'Ліцензія'), ICO.shield]];
 function vSettings(){
   const tabs = SET_TABS(); if (!tabs.some(t => t[0] === state.setTab)) state.setTab = 'general';
   document.getElementById('view').innerHTML = `<nav class="settabs glass" role="tablist" aria-label="${T('Settings', 'Налаштування')}">${tabs.map(([k, l, ic]) =>
@@ -1563,7 +1652,7 @@ function vSettings(){
   bar.addEventListener('keydown', e => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;   // arrow keys move between tabs
     const i = tabs.findIndex(t => t[0] === state.setTab), n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length][0];
     state.setTab = n; render(); setTimeout(() => { const b = document.querySelector(`.settabs [data-tab="${n}"]`); if (b) b.focus(); }); });
-  ({general:vGeneral, devices:vDevices, users:vUsers, license:vLicense})[state.setTab]();
+  ({general:vGeneral, devices:vDevices, users:vUsers, events:vEventsCfg, license:vLicense})[state.setTab]();
 }
 function vGeneral(){
   const ed = META.edition || {};
