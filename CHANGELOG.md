@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased (1.6.0)
+## 1.6.0 — 2026-10-12
 
 - **Port scans, password guessing and DDoS on the *Events* page.** The collector checks every 10 minutes (and the
   last day at its first start) and keeps what it finds: one event per source or service that grows while the
