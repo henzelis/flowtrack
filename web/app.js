@@ -1402,6 +1402,9 @@ const EV_KINDS = () => ({
   inside_scan:[T('Inside host scans the internet', 'Внутрішній хост сканує інтернет'), T('a host of ours calls many addresses on one port, or many ports of one address, mostly without answer — a sign of malware', 'наш хост звертається до багатьох адрес на один порт або до багатьох портів однієї адреси, здебільшого без відповіді — ознака шкідливого ПЗ'),
     {hosts:T('addresses', 'адрес'), hosts_busy:T('on web / DNS / NTP', 'для веб / DNS / NTP'), ports:T('ports', 'портів')}],
   lateral_scan:[T('Scan inside the network', 'Сканування всередині мережі'), T('a host calls many hosts or ports of the local network without answer', 'хост звертається до багатьох хостів або портів локальної мережі без відповіді'), {hosts:T('hosts', 'хостів'), ports:T('ports', 'портів')}],
+  malware_contact:[T('Contact with malware infrastructure', 'Зв’язок з інфраструктурою шкідливого ПЗ'), T('a host of ours opens a connection to a botnet controller or a malware host (abuse.ch lists)', 'наш хост відкриває з’єднання з контролером ботнету або хостом шкідливого ПЗ (списки abuse.ch)'), {}],
+  listed_contact:[T('Contact with a listed address', 'Зв’язок з адресою зі списку'), T('a host of ours opens a connection to an address on another enabled reputation list', 'наш хост відкриває з’єднання з адресою з іншого увімкненого списку репутації'), {}],
+  listed_inbound:[T('Listed addresses calling us', 'Звернення адрес зі списків'), T('one summary a day: how many listed addresses called our services, by list', 'один підсумок на добу: скільки адрес зі списків зверталося до наших сервісів, за списками'), {}],
   sustained_upload:[T('Sustained upload', 'Тривале вивантаження'), T('more than 5 Mbit/s to one address for 45 min out of 3 h', 'понад 5 Мбіт/с до однієї адреси 45 хв із 3 год'), {}],
   burst:[T('Traffic burst', 'Сплеск трафіку'), T('5 minutes ×8 above the host’s daily median', '5 хвилин у ×8 вище за медіану хоста за добу'), {}],
   new_country:[T('New destination', 'Новий напрямок'), T('a host contacts a country for the first time this week', 'хост уперше за тиждень звертається до країни'), {}],
@@ -1453,6 +1456,7 @@ function vThreats(){
 function vEventsCfg(){
   const v = document.getElementById('setBody');
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Detections', 'Детекції'), T('on or off, the priority each event gets, and when it triggers', 'увімкнення, пріоритет події і коли вона спрацьовує'))}<div id="evkBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('globe', T('IP reputation', 'Репутація IP'), T('public lists of malicious addresses · downloaded once a day by this server from their publishers · checked every 10 minutes, not per record', 'публічні списки шкідливих адрес · цей сервер завантажує їх раз на добу напряму від авторів · перевірка кожні 10 хвилин, а не для кожного запису'))}<div id="evrBox" class="loading"></div></section>
     <section class="glass panel s7">${ph('dev', T('Services on our side', 'Сервіси на нашому боці'), T('learned from the last day: what outside addresses call', 'визначені за останню добу: до чого звертаються ззовні'))}<div id="evsBox" class="loading"></div></section>
     <section class="glass panel s5">${ph('list', T('Exceptions and ports', 'Винятки і порти'))}<div id="evxBox" class="loading"></div></section>
     <section class="glass panel s12 evsave"><div><button class="btn primary" id="evSave">${T('Save', 'Зберегти')}</button> <button class="btn" id="evDef">${T('Restore defaults', 'Відновити типові')}</button></div><p class="err" id="evErr"></p><p class="note" id="evOk" hidden>${T('Saved. The next 10-minute check uses the new settings.', 'Збережено. Наступна 10-хвилинна перевірка вже з новими налаштуваннями.')}</p></section></div>`;
@@ -1465,6 +1469,13 @@ function vEventsCfg(){
         return `<tr data-k="${k}"><td><label class="chk"><input type="checkbox" data-x="on" ${c.on ? 'checked' : ''} aria-label="${esc(name)}"></label></td><td class="wrap"><b>${name}</b><p class="note">${desc}</p></td>
         <td><select data-x="sev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${c.sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></td>
         <td class="thr">${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</td></tr>`; }).join('')}</tbody></table></div>`);
+    const cats = {malware:T('malware: botnet controllers, malware hosts', 'шкідливе ПЗ: контролери ботнетів, хости шкідливого ПЗ'), drop:T('criminal netblocks', 'мережі зловмисників'), attack:T('hosts seen attacking', 'хости, помічені в атаках'), anon:T('Tor exit relays', 'вихідні вузли Tor')};
+    const when = t => t ? new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
+    box('evrBox', `<div class="tw form"><table class="evr"><thead><tr><th>${T('On', 'Увімк.')}</th><th>${T('List', 'Список')}</th><th>${T('What it holds', 'Що містить')}</th><th class="num">${T('Entries', 'Записів')}</th><th>${T('Updated', 'Оновлено')}</th></tr></thead><tbody>
+      ${res.lists.map(l => `<tr><td><label class="chk"><input type="checkbox" data-list="${esc(l.name)}" ${l.on ? 'checked' : ''} aria-label="${esc(l.title)}"></label></td>
+        <td><a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.title)}</a></td><td class="note">${cats[l.category] || ''}</td><td class="num mono">${l.count ? l.count.toLocaleString(LOC) : '—'}</td>
+        <td>${l.error ? `<span class="pill crit" title="${esc(l.error)}">${T('failed', 'помилка')}</span> ` : ''}<span class="note">${l.updated ? when(l.updated) : l.on ? T('not yet — within 10 min', 'ще ні — протягом 10 хв') : ''}</span></td></tr>`).join('')}</tbody></table></div>
+      <div class="form evown"><label>${T('Own list — addresses and networks you consider malicious (one per line)', 'Власний список — адреси та мережі, які ви вважаєте шкідливими (по одному в рядку)')}<textarea id="evOwn" rows="3" placeholder="203.0.113.66&#10;198.51.100.0/24">${esc((cfg.own_list || []).join('\n'))}</textarea></label></div>`);
     const roles = {'':T('auto', 'авто'), public:T('public — floods only', 'публічний — лише флуд'), sensitive:T('sensitive — guessing, probes', 'чутливий — перебір, зондування'), normal:T('ordinary — scans only', 'звичайний — лише сканування')};
     box('evsBox', res.services.length ? `<div class="tw form"><table class="evs"><thead><tr><th>${T('Service', 'Сервіс')}</th><th class="num">${T('Callers / day', 'Адрес / добу')}</th><th>${T('Role', 'Роль')}</th></tr></thead><tbody>
       ${res.services.map(s => `<tr><td class="mono">${esc(s.ep.replace('/6', ' TCP').replace('/17', ' UDP'))}</td><td class="num mono">${s.peers.toLocaleString(LOC)}</td>
@@ -1483,7 +1494,8 @@ function vEventsCfg(){
       tr.querySelectorAll('[data-x]').forEach(i => { k[i.dataset.x] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) : i.value; });
       kinds[tr.dataset.k] = k; });
     const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
-    return {kinds, roles, ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
+    const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
+    return {kinds, roles, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
       sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value};
   };
   const err = document.getElementById('evErr'), ok = document.getElementById('evOk');

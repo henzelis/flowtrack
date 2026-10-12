@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import detect  # noqa: E402
+import reputation  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
 import snmp  # noqa: E402
@@ -1103,7 +1104,11 @@ def get_events_config():
         svcs = detect.services(cfg)
     except CHError:
         svcs = []
-    return {'config': cfg, 'defaults': detect.defaults(), 'services': svcs}
+    m = reputation.meta()
+    lists = [{'name': n, 'title': reputation.TITLES[n], 'category': c, 'link': link, 'on': cfg['lists'].get(n, True),
+              'count': m.get(n, {}).get('count', 0), 'updated': m.get(n, {}).get('updated', 0), 'error': m.get(n, {}).get('error', '')}
+             for n, (c, _, _, _, link) in reputation.LISTS.items()]
+    return {'config': cfg, 'defaults': detect.defaults(), 'services': svcs, 'lists': lists}
 
 
 def post_events_config(body):

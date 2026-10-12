@@ -3,6 +3,22 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.6.1 — 2026-10-12
+
+- **IP reputation.** Eight free public lists of malicious addresses — abuse.ch Feodo Tracker and ThreatFox (botnet
+  controllers, malware hosts), Spamhaus DROP (criminal netblocks), ET compromised, CINS Army, blocklist.de, DShield
+  (hosts seen attacking), Tor exits — plus an own list in the settings. The collector downloads each once a day
+  (ThreatFox every 6 hours) straight from its publisher; a failed download keeps the previous copy.
+- Three new events: *Contact with malware infrastructure* (critical: a host of yours opened a connection to a botnet
+  controller or malware host), *Contact with a listed address* (warning, the other lists), and *Listed addresses
+  calling us* (info: one summary a day, by list). Scans, password guessing and aggressive clients say when their
+  source is on a list.
+- No cost on the receiving path: the detector looks the window's outside addresses up every 10 minutes, one binary
+  search each in a merged table of all lists (0.3 s per window on 40 M records a day, 0.03 s on a small network).
+  Lists can never flag private ranges or the whole internet (networks wider than /8, or overlapping special ranges,
+  are dropped).
+- Settings → Events: the lists with their entries and last update, each on or off; the own list.
+
 ## 1.6.0 — 2026-10-12
 
 - **Port scans, password guessing and DDoS on the *Events* page.** The collector checks every 10 minutes (and the

@@ -20,8 +20,10 @@ import calendar
 import ipaddress
 import json
 import os
+import threading
 import time
 
+import reputation
 from common import STATE_DIR, CHError, ch, tr
 
 CONFIG = os.path.join(STATE_DIR, 'events.json')
@@ -58,6 +60,10 @@ KINDS = {
     'ddos':         {'on': True, 'sev': 'crit', 'factor': 10, 'min_sessions': 2000, 'min_mbps': 200, 'refl_mbps': 20, 'minutes': 3},
     'inside_scan':  {'on': True, 'sev': 'crit', 'hosts': 50, 'hosts_busy': 200, 'ports': 10},
     'lateral_scan': {'on': True, 'sev': 'crit', 'hosts': 10, 'ports': 10},
+    # IP reputation (reputation.py)
+    'malware_contact': {'on': True, 'sev': 'crit'},
+    'listed_contact': {'on': True, 'sev': 'warn'},
+    'listed_inbound': {'on': True, 'sev': 'info'},
     # computed by the API from the last day of flows (api_alerts)
     'sustained_upload': {'on': True, 'sev': 'warn'},
     'burst':        {'on': True, 'sev': 'info'},
@@ -67,11 +73,14 @@ NAMES = {'port_scan': ('Port scan', 'Сканування портів'), 'brute
          'probes': ('Probes of management services', 'Зондування сервісів керування'), 'heavy_client': ('Aggressive client', 'Агресивний клієнт'),
          'ddos': ('DDoS / flood', 'DDoS / флуд'), 'inside_scan': ('Inside host scans the internet', 'Внутрішній хост сканує інтернет'),
          'lateral_scan': ('Scan inside the network', 'Сканування всередині мережі'), 'sustained_upload': ('Sustained upload', 'Тривале вивантаження'),
-         'burst': ('Traffic burst', 'Сплеск трафіку'), 'new_country': ('New destination', 'Новий напрямок')}
+         'burst': ('Traffic burst', 'Сплеск трафіку'), 'new_country': ('New destination', 'Новий напрямок'),
+         'malware_contact': ('Contact with malware infrastructure', 'Зв’язок з інфраструктурою шкідливого ПЗ'),
+         'listed_contact': ('Contact with a listed address', 'Зв’язок з адресою зі списку'),
+         'listed_inbound': ('Listed addresses calling us', 'Звернення адрес зі списків')}
 LIMITS = {'ports': (2, 65535), 'services': (2, 100), 'hosts': (2, 100000), 'sessions': (2, 10 ** 7), 'factor': (2, 1000),
           'min_sessions': (1, 10 ** 8), 'min_mbps': (1, 10 ** 6), 'refl_mbps': (1, 10 ** 6), 'minutes': (1, 10),
           'hosts_busy': (2, 100000)}
-GAPS = {'probes': 86400}    # an event goes on while its activity comes back within this gap (default 1 hour)
+GAPS = {'probes': 86400, 'listed_inbound': 86400}    # an event goes on while its activity comes back within this gap (default 1 hour)
 GAP = 3600
 # big groupings may spill to disk instead of failing (as the API's heavy queries)
 _MEM = int(os.environ.get('FT_CH_MEMORY_MB', '1024')) * 1024 * 1024 * 2 // 5
@@ -81,7 +90,7 @@ HEAVY = {'max_memory_usage': _MEM, 'max_bytes_before_external_group_by': _MEM * 
 # ---------------------------------------------------------------- settings
 def defaults():
     return {'kinds': {k: dict(v) for k, v in KINDS.items()}, 'ignore': [], 'sensitive': list(SENSITIVE),
-            'public': list(PUBLIC), 'roles': {}}
+            'public': list(PUBLIC), 'roles': {}, 'lists': {n: True for n in reputation.LISTS}, 'own_list': []}
 
 
 def load_config():
@@ -94,9 +103,10 @@ def load_config():
     for k, v in (saved.get('kinds') or {}).items():
         if k in cfg['kinds'] and isinstance(v, dict):
             cfg['kinds'][k].update({x: y for x, y in v.items() if x in cfg['kinds'][k]})
-    for k in ('ignore', 'sensitive', 'public', 'roles'):
+    for k in ('ignore', 'sensitive', 'public', 'roles', 'own_list'):
         if k in saved:
             cfg[k] = saved[k]
+    cfg['lists'].update({n: bool(v) for n, v in (saved.get('lists') or {}).items() if n in cfg['lists']})
     return cfg
 
 
@@ -164,6 +174,21 @@ def validate(body):
         if role not in ('public', 'sensitive', 'normal') or not _endpoint(ep):
             raise ValueError(tr(f'bad service role: {ep}', f'хибна роль сервісу: {ep}'))
     cfg['roles'] = {ep: r for ep, r in roles.items()}
+    lists = body.get('lists') or {}
+    cfg['lists'].update({n: bool(v) for n, v in (lists.items() if isinstance(lists, dict) else []) if n in cfg['lists']})
+    own = body.get('own_list', [])
+    own = own if isinstance(own, list) else str(own).replace(',', ' ').split()
+    out = set()
+    for x in (str(x).strip() for x in own):
+        if not x:
+            continue
+        try:
+            out.add(str(ipaddress.ip_network(x, strict=False)) if '/' in x else str(ipaddress.ip_address(x)))
+        except ValueError:
+            raise ValueError(tr(f'own list: not an address or network: {x}', f'власний список: не адреса чи мережа: {x}')) from None
+    if len(out) > 20000:
+        raise ValueError(tr('own list: at most 20,000 entries', 'власний список: не більше 20 000 записів'))
+    cfg['own_list'] = sorted(out)
     return cfg
 
 
@@ -312,7 +337,7 @@ def _sessions(cfg):
          argMin(int_ip, NOT {_private('int_ip')}) AS h_ip, argMin(int_port, NOT {_private('int_ip')}) AS h_port,
          groupUniqArray((int_ip, int_port)) AS eps, toStartOfMinute(min(ts)) AS m,
          any(country) AS cc, any(as_org) AS org, any(asn) AS a_asn,
-         countIf(dir = 'down') AS nd, countIf(dir = 'up') AS nu, sumIf(packets, dir = 'up') AS pu, sumIf(packets, dir = 'down') AS pd, sumIf(bytes, dir = 'down') AS bd
+         countIf(dir = 'down') AS nd, countIf(dir = 'up') AS nu, sumIf(packets, dir = 'up') AS pu, sumIf(packets, dir = 'down') AS pd, sumIf(bytes, dir = 'down') AS bd, sumIf(bytes, dir = 'up') AS bu
        FROM flows WHERE ts >= {{t0:DateTime}} AND ts < {{t1:DateTime}} AND dir IN ('up', 'down') AND proto IN (6, 17)
        GROUP BY exporter, proto, ext_ip, ext_port, ci, cp),
  X AS (SELECT *, h_ip AS int_ip, h_port AS int_port, h_ip AS tgt,
@@ -336,8 +361,9 @@ def _sarr(items):
     return "CAST([" + ','.join("'" + str(x).replace('\\', '').replace("'", '') + "'" for x in items) + "] AS Array(String))"
 
 
-def rules(cfg, base, t0, t1):
-    """Hits of every enabled rule in the window [t0, t1): dicts kind, key, exporter, src, dst, port, proto, value, info."""
+def rules(cfg, base, t0, t1, rep=None):
+    """Hits of every enabled rule in the window [t0, t1): dicts kind, key, exporter, src, dst, port, proto, value, info.
+    rep: a reputation.Index (None: no reputation checks)."""
     K, ign = cfg['kinds'], Ignore(cfg['ignore'])
     p = dict(ign.params(), t0=t0, t1=t1)
     X = _sessions(cfg)
@@ -400,6 +426,46 @@ def rules(cfg, base, t0, t1):
         hits += lateral(K['lateral_scan'], p)
     if K['ddos']['on']:
         hits += ddos(K['ddos'], base, p)
+    if rep is not None and rep.size:
+        for h in hits:                # an attacker on a list says so in its event
+            if h['kind'] in ('port_scan', 'brute_force', 'heavy_client'):
+                names = rep.lookup(h['src'])
+                if names:
+                    h['info']['lists'] = sorted(names)
+        if any(K[k]['on'] for k in ('malware_contact', 'listed_contact', 'listed_inbound')):
+            hits += reputation_hits(K, rep, X, p, t0)
+    return hits
+
+
+def reputation_hits(K, rep, X, p, t0):
+    """The window's outside addresses that are on a list: one bisection each in Python (no per-record cost). Then,
+    for those few, the sessions: opened by us -> a contact event per listed address (malware infrastructure:
+    critical); opened by them -> the day's summary of listed addresses calling us."""
+    ips = ch("SELECT DISTINCT ext_ip FROM flows WHERE ts >= {t0:DateTime} AND ts < {t1:DateTime} AND dir IN ('up', 'down')",
+             p, fmt='TSV', settings=HEAVY).split()
+    found = {ip: names for ip in ips for names in (rep.lookup(ip),) if names}
+    if not found:
+        return []
+    hits, day = [], time.strftime('%Y-%m-%d', time.gmtime(t0))
+    pr = dict(p, rep_ips=sorted(found))
+    # who opened it: us — or both ends are services and ours is not one that listens (NTP to NTP, IKE to IKE);
+    # them — or both ends look like services but ours listens (scanners send from low ports too)
+    for r in ch(X + f"""SELECT ext_ip, multiIf(init = 'in' OR (init = 'both' AND NOT listening), 'we',
+                                    init = 'out' OR (init = 'both' AND listening), 'they', 'unknown') AS who, any(exporter) AS ex, count() AS n, countIf(failed) AS nf, sum(bu) AS sent, sum(bd) AS got,
+            groupUniqArray(20)(int_ip) AS hosts, arraySlice(arraySort(groupUniqArray(ext_port)), 1, 20) AS eports,
+            arraySlice(arraySort(groupUniqArray(int_port)), 1, 20) AS iports, any(cc) AS c, any(org) AS o, any(a_asn) AS asn
+            FROM X WHERE ext_ip IN {{rep_ips:Array(String)}} AND NOT {_ignored('ext_ip', 'a_asn')}
+            GROUP BY ext_ip, who""", pr, fmt='JSON', timeout=120, settings=HEAVY):
+        names = sorted(found[r['ext_ip']])
+        if r['who'] == 'we':                     # a host of ours talks to it
+            kind = 'malware_contact' if reputation.category(names) == 'malware' else 'listed_contact'
+            if K[kind]['on']:
+                hits.append(_hit(kind, r['ext_ip'], r, src=r['hosts'][0] if r['hosts'] else '', dst=r['ext_ip'], value=int(r['n']),
+                                 info={'lists': names, 'hosts': r['hosts'], 'ports': r['eports'], 'sessions': int(r['n']),
+                                       'failed': int(r['nf']), 'sent': int(r['sent']), 'got': int(r['got'])}))
+        elif r['who'] == 'they' and K['listed_inbound']['on']:
+            hits.append(_hit('listed_inbound', f'@{day}', {'ex': r['ex']}, value=1,
+                             info={'srcmap': {r['ext_ip']: names}, 'ports': r['iports'], 'sessions': int(r['n'])}))
     return hits
 
 
@@ -491,8 +557,16 @@ def _hit(kind, key, r, src='', dst='', port=0, proto=0, value=0, info=None):
 def merge_info(old, new):
     out = dict(old)
     for k, v in new.items():
-        if k in ('ports', 'targets', 'countries'):
+        if k in ('ports', 'targets', 'countries', 'hosts', 'lists'):
             out[k] = list(dict.fromkeys(list(old.get(k, [])) + list(v)))[:50]
+        elif k == 'srcmap':
+            m = dict(old.get(k, {}))
+            for ip, names in v.items():
+                if ip in m or len(m) < KEEP_SOURCES:
+                    m[ip] = sorted(set(m.get(ip, [])) | set(names))
+            out[k] = m
+        elif k in ('failed', 'sent', 'got'):
+            out[k] = int(old.get(k, 0)) + int(v)
         elif k == 'sources':
             out[k] = list(dict.fromkeys(list(old.get(k, [])) + list(v)))[:KEEP_SOURCES]
         elif k == 'sessions':
@@ -513,8 +587,10 @@ def store(hits, t0, t1):
         k = (h['kind'], h['key'])
         if k in by:
             o = by[k]
+            sessions = max(int(o['info'].get('sessions', 0)), int(h['info'].get('sessions', 0)))
             o['info'], o['value'] = merge_info(o['info'], h['info']), max(o['value'], h['value'])
-            o['info']['sessions'] = max(int(o['info'].get('sessions', 0)), int(h['info'].get('sessions', 0)))
+            if h['kind'] != 'listed_inbound':     # the same activity seen by two variants of a rule; the summary adds up
+                o['info']['sessions'] = sessions
         else:
             by[k] = h
     kinds = sorted({k[0] for k in by})
@@ -535,6 +611,8 @@ def store(hits, t0, t1):
             first, n, value = _ts(o['first_seen']), int(o['hits']) + 1, max(float(o['value']), h['value'])
         else:
             info, first, n, value = h['info'], t0, 1, h['value']
+        if 'srcmap' in info:
+            value = len(info['srcmap'])
         rows.append({'kind': h['kind'], 'key': h['key'], 'first_seen': first, 'last_seen': max(t1, _ts(o['last_seen']) if o else 0),
                      'hits': n, 'exporter': h['exporter'], 'src': h['src'], 'dst': h['dst'], 'port': h['port'], 'proto': h['proto'],
                      'value': value, 'info': json.dumps(info, ensure_ascii=False), 'ver': ver})
@@ -553,6 +631,7 @@ class Detector:
 
     def __init__(self, log=print):
         self.log, self.base, self.learned = log, {'svc': {}, 'wan': {}, 'refl': {}}, 0
+        self.rep = reputation.Index()
 
     def state(self):
         try:
@@ -572,16 +651,39 @@ class Detector:
         if now - self.learned >= LEARN_EVERY:
             self.base, self.learned = learn(self.log), now
         cfg = load_config()
+        lists = [n for n, on in cfg['lists'].items() if on]
         done = self.state().get('done') or (now - BACKFILL) // WINDOW * WINDOW
         done = max(done, (now - BACKFILL) // WINDOW * WINDOW)     # off for days: only the last one
         found = 0
         while done + WINDOW <= now - LAG:
-            found += store(rules(cfg, self.base, done, done + WINDOW), done, done + WINDOW)
+            if self.rep.build(lists, cfg['own_list']):      # a list downloaded meanwhile (only file times are compared)
+                self.log(f'reputation: {self.rep.size:,} networks from {len(lists)} list{"s" if len(lists) != 1 else ""}'
+                         + (f" + {len(cfg['own_list']):,} own" if cfg['own_list'] else ''))
+            found += store(rules(cfg, self.base, done, done + WINDOW, self.rep), done, done + WINDOW)
             done += WINDOW
             self.save_state(done)
         return found
 
+    def update_lists(self):
+        try:
+            cfg = load_config()
+            if any(cfg['kinds'][k]['on'] for k in ('malware_contact', 'listed_contact', 'listed_inbound')):
+                done = reputation.update([n for n, on in cfg['lists'].items() if on], self.log)
+                if done:
+                    self.log(f"reputation lists updated: {', '.join(done)}")
+        except Exception as ex:
+            self.log(f'WARN reputation lists: {str(ex)[:300]}')
+
+    def updates(self):
+        """Downloads of the reputation lists, in a thread of their own: a slow site never holds up the windows."""
+        while True:
+            time.sleep(600)
+            self.update_lists()
+
     def run(self):
+        if not reputation.meta():        # the first start: the lists first, so the day looked back at is checked too
+            self.update_lists()
+        threading.Thread(target=self.updates, name='reputation', daemon=True).start()
         while True:
             try:
                 n = self.tick()
@@ -612,7 +714,8 @@ def recent(cfg, since, until=None):
                     'first': r['first_seen'], 'last': r['last_seen'], 'hits': int(r['hits']), 'src': r['src'], 'dst': r['dst'],
                     'ip': r['src'] or r['dst'], 'port': int(r['port']), 'country': info.get('country', ''), 'org': info.get('org', ''),
                     'asn': info.get('asn', 0), 'exporter': r['exporter'], 'stored': True,
-                    'addrs': list(info.get('targets', [])) + list(info.get('sources', [])), 'ports': [int(x) for x in info.get('ports', [])],
+                    'addrs': list(info.get('targets', [])) + list(info.get('sources', [])) + list(info.get('hosts', [])) + list(info.get('srcmap', {})),
+                    'ports': [int(x) for x in info.get('ports', [])],
                     'fk': _filter_of(r)[0], 'fv': _filter_of(r)[1]})
     return out
 
@@ -622,6 +725,8 @@ def _filter_of(r):
     (`dst`), an inside one or our attacked service an inside host (`ip`), a device-wide flood the device."""
     if r['kind'] in ('port_scan', 'brute_force', 'heavy_client'):
         return 'dst', r['src']
+    if r['kind'] in ('malware_contact', 'listed_contact'):       # the listed address: every host of ours that talked to it
+        return 'dst', r['dst']
     if r['kind'] in ('inside_scan', 'lateral_scan'):
         return 'ip', r['src']
     if r['dst']:
@@ -647,8 +752,29 @@ def _mbps(v):
     return f'{float(v) / 1e6:,.0f}'
 
 
+def _lists(names):
+    return ', '.join(reputation.TITLES.get(n, n) for n in names)
+
+
 def describe(r):
     """Title and text of a stored event in the language of the request."""
+    title, text = _describe(r)
+    names = r['info'].get('lists')
+    if names and r['kind'] in ('port_scan', 'brute_force', 'heavy_client'):
+        text += tr(f' On reputation lists: {_lists(names)}.', f' Є у списках репутації: {_lists(names)}.')
+    return title, text
+
+
+def _bytes(n):
+    n = float(n)
+    for u in ('B', 'KB', 'MB', 'GB'):
+        if n < 1000 or u == 'GB':
+            return f'{n:,.0f} {u}' if u == 'B' else f'{n:,.1f} {u}'
+        n /= 1000
+    return ''
+
+
+def _describe(r):
     i, kind, port = r['info'], r['kind'], int(r['port'])
     svc = f"{r['dst']}:{port}" if r['dst'] else str(port)
     if kind == 'port_scan':
@@ -688,6 +814,33 @@ def describe(r):
         return (tr('Traffic flood', 'Флуд трафіку'),
                 tr(f"Inbound up to {_mbps(i.get('bps', 0))} Mbit/s on {r['exporter']} (usual peak {_mbps(i.get('baseline', 0))} Mbit/s), {i.get('minutes', 0)} min, {i.get('srcs', 0):,} addresses.",
                    f"Вхідний трафік до {_mbps(i.get('bps', 0))} Мбіт/с на {r['exporter']} (звичайний пік {_mbps(i.get('baseline', 0))} Мбіт/с), {i.get('minutes', 0)} хв, {i.get('srcs', 0):,} адрес."))
+    if kind in ('malware_contact', 'listed_contact'):
+        hosts = i.get('hosts', [])
+        who = ', '.join(hosts[:5]) + (f' +{len(hosts) - 5}' if len(hosts) > 5 else '')
+        extra = ', '.join(x for x in (i.get('country', ''), i.get('org', '')) if x)
+        dst = f"{r['dst']} ({extra})" if extra else r['dst']
+        cat = reputation.category(i.get('lists', []))
+        what = {'malware': tr('a botnet controller or malware host', 'контролер ботнету або хост шкідливого ПЗ'),
+                'drop': tr('a netblock run by criminals (do not route)', 'мережа, яку контролюють зловмисники (не маршрутизувати)'),
+                'anon': tr('a Tor exit relay', 'вихідний вузол Tor')}.get(cat, tr('a host seen attacking others', 'хост, помічений в атаках'))
+        ok = i.get('sessions', 0) - i.get('failed', 0)
+        return (tr('Contact with malware infrastructure', 'Зв’язок з інфраструктурою шкідливого ПЗ') if kind == 'malware_contact' else tr('Contact with a listed address', 'Зв’язок з адресою зі списку'),
+                tr(f"{who} opened {i.get('sessions', 0):,} session{'s' if i.get('sessions', 0) != 1 else ''} to {dst}, ports {_plist(i.get('ports', []))} — {what} ({_lists(i.get('lists', []))}). "
+                   + (f"Sent {_bytes(i.get('sent', 0))}, received {_bytes(i.get('got', 0))}." if ok > 0 else 'No answer came back.')
+                   + (' Check the device.' if kind == 'malware_contact' else ''),
+                   f"{who} відкрив сесій до {dst}: {i.get('sessions', 0):,}, порти {_plist(i.get('ports', []))} — {what} ({_lists(i.get('lists', []))}). "
+                   + (f"Відправлено {_bytes(i.get('sent', 0))}, отримано {_bytes(i.get('got', 0))}." if ok > 0 else 'Відповіді не було.')
+                   + (' Перевірте пристрій.' if kind == 'malware_contact' else '')))
+    if kind == 'listed_inbound':
+        m = i.get('srcmap', {})
+        per = {}
+        for names in m.values():
+            for n in names:
+                per[n] = per.get(n, 0) + 1
+        top = ', '.join(f'{reputation.TITLES.get(n, n)} {c:,}' for n, c in sorted(per.items(), key=lambda x: -x[1]))
+        return (tr('Listed addresses calling us', 'Звернення адрес зі списків'),
+                tr(f"{len(m):,} address{'es' if len(m) != 1 else ''} from reputation lists called our services ({i.get('sessions', 0):,} sessions; ports {_plist(i.get('ports', []), 8)}): {top}.",
+                   f"Адреси зі списків репутації, що зверталися до наших сервісів: {len(m):,} ({i.get('sessions', 0):,} сесій; порти {_plist(i.get('ports', []), 8)}): {top}."))
     if kind in ('inside_scan', 'lateral_scan'):
         title = tr('Inside host scans the internet', 'Внутрішній хост сканує інтернет') if kind == 'inside_scan' else tr('Scan inside the network', 'Сканування всередині мережі')
         if i.get('how') == 'ports':

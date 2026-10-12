@@ -38,6 +38,17 @@ class Settings(unittest.TestCase):
         self.assertEqual(D.role_of(c, '192.0.2.10:443/6', 443), 'public')
         self.assertEqual(D.role_of(c, '192.0.2.10:5000/6', 5000), 'normal')
 
+    def test_lists_and_own_list(self):
+        c = D.validate({'lists': {'tor_exit': False, 'nonsense': True}, 'own_list': '203.0.113.9, 198.51.100.0/24'})
+        self.assertFalse(c['lists']['tor_exit'])
+        self.assertTrue(c['lists']['feodo'])
+        self.assertNotIn('nonsense', c['lists'])
+        self.assertEqual(c['own_list'], ['198.51.100.0/24', '203.0.113.9'])
+        with self.assertRaises(ValueError):
+            D.validate({'own_list': ['example.com']})
+        D.save_config(c)
+        self.assertEqual(D.load_config()['lists']['tor_exit'], False)
+
     def test_validate_refuses(self):
         for body in ({'kinds': {'brute_force': {'sessions': 1}}}, {'kinds': {'ddos': {'factor': 'x'}}},
                      {'ignore': ['example.com']}, {'sensitive': '22 70000'}, {'roles': {'nope': 'public'}},
@@ -89,13 +100,26 @@ class Events(unittest.TestCase):
     def test_every_kind_has_a_text(self):
         info = {'ports': [22, 80], 'targets': ['192.0.2.9'], 'sessions': 40, 'sources': ['198.51.100.1'], 'countries': ['CN'],
                 'how': 'ports', 'per_minute': 3000, 'srcs': 900, 'minutes': 4, 'baseline': 12.5, 'bps': 3e8, 'country': 'CN', 'org': 'X'}
-        for kind in ('port_scan', 'brute_force', 'probes', 'heavy_client', 'ddos', 'inside_scan', 'lateral_scan'):
+        info['lists'] = ['feodo', 'cins']
+        info['hosts'] = ['10.0.0.5', '10.0.0.6']
+        info['srcmap'] = {'5.6.7.8': ['cins'], '5.6.7.9': ['cins', 'spamhaus_drop']}
+        for kind in ('port_scan', 'brute_force', 'probes', 'heavy_client', 'ddos', 'inside_scan', 'lateral_scan',
+                     'malware_contact', 'listed_contact', 'listed_inbound'):
             for how in ('ports', 'hosts', 'services', 'sessions', 'volume', 'reflection'):
                 r = {'kind': kind, 'info': dict(info, how=how), 'src': '198.51.100.1', 'dst': '192.0.2.9', 'port': 22, 'hits': 2,
                      'value': 40, 'exporter': '192.0.2.254'}
                 title, text = D.describe(r)
                 self.assertTrue(title and text and '{' not in text, (kind, how, text))
         self.assertEqual(set(D.NAMES), set(D.KINDS))
+        r = {'kind': 'brute_force', 'info': {'sessions': 40, 'lists': ['cins']}, 'src': '5.6.7.8', 'dst': '192.0.2.9', 'port': 22, 'hits': 1, 'value': 40, 'exporter': ''}
+        self.assertIn('CINS Army', D.describe(r)[1])
+        r = {'kind': 'listed_inbound', 'info': info, 'src': '', 'dst': '', 'port': 0, 'hits': 3, 'value': 2, 'exporter': ''}
+        self.assertIn('CINS Army 2', D.describe(r)[1])
+
+    def test_merge_reputation_info(self):
+        m = D.merge_info({'srcmap': {'a': ['x']}, 'hosts': ['h1'], 'sent': 5}, {'srcmap': {'a': ['y'], 'b': ['x']}, 'hosts': ['h2', 'h1'], 'sent': 7})
+        self.assertEqual(m['srcmap'], {'a': ['x', 'y'], 'b': ['x']})
+        self.assertEqual((m['hosts'], m['sent']), (['h1', 'h2'], 12))
 
 
 if __name__ == '__main__':

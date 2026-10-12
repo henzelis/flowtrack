@@ -69,8 +69,9 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - *Hosts*, *Services*, *Geolocation* (live arcs as flows arrive, countries, ASNs).
 - *Events*: port scans, password guessing on SSH / RDP / management ports, a daily summary of who probes them,
   aggressive web clients, DDoS (floods of a service, inbound volume, UDP reflection — against the network's own
-  usual peak), inside hosts that scan the internet or the LAN; plus sustained upload, bursts, new countries and
-  export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
+  usual peak), inside hosts that scan the internet or the LAN, contact with addresses on IP reputation lists
+  (botnet controllers, malware hosts, criminal netblocks, attackers — eight free public lists plus your own); plus
+  sustained upload, bursts, new countries and export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
   goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
   ignored (Settings → Events).
@@ -386,7 +387,6 @@ Overview request for 24 hours or 7 days is answered in under 0.1 s.
 - sFlow v5
 - FortiGate application names from `APPLICATION_TAG`
 - DSCP / traffic class: breakdown and colouring by QoS marking
-- Detections: IP reputation lists
 - Scheduled reports; configurable retention; ClickHouse backups
 
 ## Repository layout
