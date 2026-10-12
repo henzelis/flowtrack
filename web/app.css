@@ -218,9 +218,10 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .pill.warn{background:rgba(255,195,77,.16);color:var(--warn)} .pill.crit{background:rgba(255,92,122,.16);color:var(--crit)} .pill.info{background:rgba(39,211,245,.16);color:var(--down)} .pill.ok{background:rgba(46,229,157,.16);color:var(--ok)}
 
 /* ticker */
-.ticker{display:grid;gap:5px;max-height:470px;overflow:hidden}
+.ticker{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;max-height:470px;overflow:hidden}   /* a long row must not widen the column (and push every row's bytes out) */
 .tick{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:7px 10px;border-radius:10px;font-size:12.5px;background:rgba(0,0,0,.18);border:1px solid var(--hair);animation:tin .45s ease-out}
-.tick .ipl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tick .mid{min-width:0}
+.tick .ipl{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @keyframes tin{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
 
 /* drawer + form */

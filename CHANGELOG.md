@@ -29,6 +29,8 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - The *Events* page filters by priority and lists what is watched with each kind's priority.
 - Firewalls export only the traffic they let through: scans of closed ports are not seen there, calls to open
   services and published ports are.
+- *Geolocation → Live connections*: a very long destination no longer pushes the bytes of every row out of the
+  panel until it scrolls away; long names end with “…”.
 
 ## 1.5.1 — 2026-10-09
 
