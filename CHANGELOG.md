@@ -3,6 +3,26 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.7.0 — 2026-10-13
+
+- **sFlow v5.** Switches, firewalls and Linux hosts that send sFlow are received on UDP 6343 (`FT_SFLOW_PORT`; sFlow
+  sent to the NetFlow port is recognised as well). The compiled core 1.4.0 decodes the sampled packet headers
+  (Ethernet with VLAN tags, IPv4, IPv6 with extension headers, TCP / UDP / ICMP), sums the samples per minute and
+  interfaces into flows and scales them by the sampling rate; lost datagrams are counted from their sequence numbers.
+  Tested against pmacct's sFlow probe: within 0.5 % of the bytes actually transferred at 1:20 sampling.
+- **Interface counters.** The counters an sFlow agent sends are kept (90 days). Settings → Devices → Interfaces
+  shows each port's in / out load with its share of the speed, the speed, the state, errors and discards — ports
+  without sampled traffic included.
+- Connect a device: sFlow instructions for Fortinet, Cisco Nexus, Juniper, Huawei, Arista, HPE Aruba (new),
+  VyOS / EdgeOS, Linux (hsflowd, pmacct) and Other, on the sFlow port, sampling incoming traffic.
+- Detections that count sessions (port scans, password guessing) see only the sampled part of sFlow traffic;
+  floods, bursts and IP reputation work as with NetFlow. A device should send either NetFlow / IPFIX or sFlow to
+  FlowTrack, not both (the traffic would count twice).
+- Installer: the sFlow port when free, opened in ufw / firewalld with the others, in the summary and the
+  configuration; an upgrade prints how to open it.
+- Path analysis: a device that sends data without a description no longer breaks the page (it is named by its
+  address).
+
 ## 1.6.6 — 2026-10-13
 
 - **Export protocol per vendor.** Settings → Devices → *Connect a device* offers the protocols each vendor can send
