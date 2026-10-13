@@ -3,6 +3,12 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.6.5 — 2026-10-13
+
+- Settings → Events → Notifications → Telegram: **Find chat checks an entered chat ID** with Telegram ("✓ name ·
+  private chat — the chat ID is right", or why not). Before, it only listed the chats that wrote to the bot — and
+  Telegram keeps those messages for 24 hours, so a working chat could show "no chats". The empty list now says so.
+
 ## 1.6.4 — 2026-10-13
 
 - **E-mail notifications.** Settings → Events → *Notifications* now has tabs Telegram | E-mail. Any SMTP server or
