@@ -1523,8 +1523,13 @@ function vEventsCfg(){
     const say = (m, bad) => { const e = document.getElementById('tgSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
     document.getElementById('tgFind').onclick = async () => { say(T('Asking Telegram…'));
       try { const r = await apiPost('notify/chats', collectNotify()); const box2 = document.getElementById('tgChats');
-        if (!r.chats.length) { box2.innerHTML = ''; say(T('No chats yet: write any message to the bot (or add it to a group) and press again.'), true); return; }
-        say(''); box2.innerHTML = r.chats.map(c => `<button class="btn" type="button" data-chat="${esc(c.id)}">${esc(c.name || c.id)} <span class="mono">${esc(c.id)}</span> · ${esc(c.type)}</button>`).join(' ');
+        const kind = t => ({private:T('private chat'), group:T('group'), supergroup:T('group'), channel:T('channel')})[t] || t;
+        const others = r.chats.filter(c => !r.checked || c.id !== r.checked.id);
+        if (r.checked) say(T('✓ {name} · {kind} — the chat ID is right.', {name:r.checked.name || r.checked.id, kind:kind(r.checked.type)}));
+        else if (r.check_error) say(r.check_error, true);
+        else if (!others.length) say(T('No chats in the last 24 hours (Telegram keeps the messages to a bot that long): write any message to the bot (or add it to a group) and press again.'), true);
+        else say('');
+        box2.innerHTML = others.map(c => `<button class="btn" type="button" data-chat="${esc(c.id)}">${esc(c.name || c.id)} <span class="mono">${esc(c.id)}</span> · ${esc(kind(c.type))}</button>`).join(' ');
         box2.querySelectorAll('[data-chat]').forEach(b => b.onclick = () => { document.getElementById('tgChat').value = b.dataset.chat; box2.innerHTML = ''; });
       } catch (e) { say(e.message, true); } };
     document.getElementById('tgTest').onclick = async () => { say(T('Sending…'));

@@ -302,7 +302,7 @@
  "No answer from {where}.": "Немає відповіді від {where}.",
  "No answer from {where}. Check that SNMP is on, that the device lets this server in (trusted hosts / allowed addresses, SNMP access on the interface), UDP {port} on the way, and the community — with a wrong one the device does not answer.": "Немає відповіді від {where}. Перевірте, що SNMP увімкнено, пристрій пускає цей сервер (довірені хости / дозволені адреси, доступ SNMP на інтерфейсі), UDP {port} по дорозі, і community — з неправильним пристрій не відповідає.",
  "No answer from {where}. Check that SNMP is on, that the device lets this server in (trusted hosts / allowed addresses, SNMP access on the interface), UDP {port} on the way, and the privacy password and protocol — with wrong ones the device does not answer.": "Немає відповіді від {where}. Перевірте, що SNMP увімкнено, пристрій пускає цей сервер (довірені хости / дозволені адреси, доступ SNMP на інтерфейсі), UDP {port} по дорозі, і пароль і протокол шифрування — з неправильними пристрій не відповідає.",
- "No chats yet: write any message to the bot (or add it to a group) and press again.": "Чатів ще немає: напишіть боту будь-що (або додайте його в групу) і натисніть ще раз.",
+ "No chats in the last 24 hours (Telegram keeps the messages to a bot that long): write any message to the bot (or add it to a group) and press again.": "За останні 24 години чатів немає (стільки Telegram зберігає повідомлення боту): напишіть ботові будь-яке повідомлення (або додайте його в групу) і натисніть ще раз.",
  "No connection to {where} ({error}).": "Немає з’єднання з {where} ({error}).",
  "No data": "Немає даних",
  "No device has sent data yet": "Ще жоден пристрій не надіслав дані",
@@ -629,6 +629,7 @@
  "by total volume · click a row to add the host to the filters": "за загальним обсягом · клік по рядку додає хост у фільтри",
  "by traffic volume": "за обсягом трафіку",
  "change password": "змініть пароль",
+ "channel": "канал",
  "city": "місто",
  "click to filter by port": "клік — фільтр за портом",
  "click to filter by service": "клік — фільтр за сервісом",
@@ -672,6 +673,7 @@
  "free edition": "безкоштовна редакція",
  "from it": "з нього",
  "from the internet": "з інтернету",
+ "group": "група",
  "has not sent data yet": "ще не надсилав даних",
  "host": "хост",
  "hosts": "хостів",
@@ -777,6 +779,7 @@
  "period": "період",
  "port": "порт",
  "ports": "портів",
+ "private chat": "приватний чат",
  "protocol": "протокол",
  "protocols": "протоколів",
  "public address": "публічна адреса",
@@ -931,5 +934,6 @@
  "{who}: {sessions} sessions to {svc}, up to {peak} in 10 min.": "{who}: {sessions} сесій до {svc}, до {peak} за 10 хв.",
  "«To» must be at least a minute after «From».": "«До» має бути щонайменше на хвилину пізніше за «Від».",
  "× usual peak": "× звичайного піку",
- "…and {n} more events (the hourly limit of messages).": "…і ще подій: {n} (ліміт повідомлень на годину)."
+ "…and {n} more events (the hourly limit of messages).": "…і ще подій: {n} (ліміт повідомлень на годину).",
+ "✓ {name} · {kind} — the chat ID is right.": "✓ {name} · {kind} — ID чату правильний."
 }

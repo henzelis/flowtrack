@@ -206,13 +206,33 @@ def test(cfg):
         raise ValueError(_explain(e)) from None
 
 
-def chats(cfg, token=''):
-    """Chats that wrote to the bot lately (getUpdates): to pick the chat ID without looking it up elsewhere."""
+def _token(cfg, token=''):
     token = token or cfg['telegram']['token']
     if not token:
         raise ValueError(tr('Enter the bot token first.'))
     if not TOKEN_RE.match(token):
         raise ValueError(tr('The bot token looks wrong.'))
+    return token
+
+
+def _chat_info(c):
+    name = c.get('title') or ' '.join(x for x in (c.get('first_name'), c.get('last_name')) if x) or c.get('username') or ''
+    return {'id': str(c['id']), 'type': c.get('type', ''), 'name': name}
+
+
+def check_chat(cfg, token=''):
+    """The entered chat as Telegram knows it (getChat). Unlike chats() it needs no fresh message to the bot:
+    Telegram keeps the messages to a bot (getUpdates) for 24 hours only."""
+    token = _token(cfg, token)
+    try:
+        return _chat_info(call(token, 'getChat', {'chat_id': cfg['telegram']['chat']}))
+    except TelegramError as e:
+        raise ValueError(_explain(e)) from None
+
+
+def chats(cfg, token=''):
+    """Chats that wrote to the bot in the last 24 hours (getUpdates): to pick the chat ID without looking it up elsewhere."""
+    token = _token(cfg, token)
     try:
         ups = call(token, 'getUpdates', {'limit': 100, 'timeout': 0}) or []
     except TelegramError as e:
@@ -222,8 +242,7 @@ def chats(cfg, token=''):
         for k in ('message', 'channel_post', 'my_chat_member', 'edited_message'):
             c = (u.get(k) or {}).get('chat')
             if c:
-                name = c.get('title') or ' '.join(x for x in (c.get('first_name'), c.get('last_name')) if x) or c.get('username') or ''
-                out[str(c['id'])] = {'id': str(c['id']), 'type': c.get('type', ''), 'name': name}
+                out[str(c['id'])] = _chat_info(c)
     return list(out.values())
 
 

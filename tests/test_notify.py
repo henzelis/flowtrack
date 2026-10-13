@@ -38,6 +38,34 @@ class Settings(unittest.TestCase):
         self.assertEqual(N.validate({'telegram': {'on': True, 'chat': '42'}}, N.load())['telegram']['token'], TOK)
 
 
+class Chats(unittest.TestCase):
+    """Find chat: the entered ID is checked with getChat (works after Telegram dropped the 24-hour getUpdates)."""
+    def setUp(self):
+        self.calls, self.orig = [], N.call
+
+        def fake(token, method, params=None, timeout=15):
+            self.calls.append(method)
+            if method == 'getUpdates':
+                return []                                   # nothing in the last 24 hours
+            if params['chat_id'] == '42':
+                return {'id': 42, 'type': 'private', 'first_name': 'Yegor', 'last_name': 'B'}
+            raise N.TelegramError('Bad Request: chat not found')
+        N.call = fake
+
+    def tearDown(self):
+        N.call = self.orig
+
+    def test_entered_id_checked(self):
+        cfg = N.validate({'telegram': {'token': TOK, 'chat': '42'}}, N.defaults())
+        self.assertEqual(N.chats(cfg), [])
+        self.assertEqual(N.check_chat(cfg), {'id': '42', 'type': 'private', 'name': 'Yegor B'})
+        with self.assertRaises(ValueError) as e:
+            N.check_chat(N.validate({'telegram': {'token': TOK, 'chat': '43'}}, N.defaults()))
+        self.assertIn('Chat not found', str(e.exception))
+        with self.assertRaises(ValueError):
+            N.check_chat(N.validate({'telegram': {'chat': '42'}}, N.defaults()))      # no token
+
+
 class Message(unittest.TestCase):
     def test_escaped_and_limited(self):
         ev = [{'sev': 'crit', 'title': 'A <b>', 'text': 'x & y'}] + [{'sev': 'warn', 'title': f't{i}', 'text': 'z' * 900} for i in range(10)]

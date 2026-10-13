@@ -1154,10 +1154,18 @@ def post_notify_test(body):
 
 
 def post_notify_chats(body):
+    """Chats that wrote to the bot lately, and the entered chat ID checked with Telegram (when there is one)."""
+    cfg = _notify_form(body)
     try:
-        return {'chats': notify.chats(_notify_form(body))}
+        out = {'chats': notify.chats(cfg), 'checked': None, 'check_error': ''}
     except ValueError as e:
         raise BadRequest(str(e)) from None
+    if cfg['telegram']['chat']:
+        try:
+            out['checked'] = notify.check_chat(cfg)
+        except ValueError as e:
+            out['check_error'] = str(e)
+    return out
 
 
 def post_events_ignore(body):
