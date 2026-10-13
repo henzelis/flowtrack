@@ -25,7 +25,7 @@ import time
 
 import notify
 import reputation
-from common import STATE_DIR, CHError, ch, tr
+from common import STATE_DIR, CHError, N_, ch, tr, trn
 
 CONFIG = os.path.join(STATE_DIR, 'events.json')
 STATE = os.path.join(STATE_DIR, 'detect_state.json')
@@ -70,14 +70,11 @@ KINDS = {
     'burst':        {'on': True, 'sev': 'info'},
     'new_country':  {'on': True, 'sev': 'info'},
 }
-NAMES = {'port_scan': ('Port scan', 'Сканування портів'), 'brute_force': ('Password guessing', 'Перебір паролів'),
-         'probes': ('Probes of management services', 'Зондування сервісів керування'), 'heavy_client': ('Aggressive client', 'Агресивний клієнт'),
-         'ddos': ('DDoS / flood', 'DDoS / флуд'), 'inside_scan': ('Inside host scans the internet', 'Внутрішній хост сканує інтернет'),
-         'lateral_scan': ('Scan inside the network', 'Сканування всередині мережі'), 'sustained_upload': ('Sustained upload', 'Тривале вивантаження'),
-         'burst': ('Traffic burst', 'Сплеск трафіку'), 'new_country': ('New destination', 'Новий напрямок'),
-         'malware_contact': ('Contact with malware infrastructure', 'Зв’язок з інфраструктурою шкідливого ПЗ'),
-         'listed_contact': ('Contact with a listed address', 'Зв’язок з адресою зі списку'),
-         'listed_inbound': ('Listed addresses calling us', 'Звернення адрес зі списків')}
+NAMES = {'port_scan': N_('Port scan'), 'brute_force': N_('Password guessing'), 'probes': N_('Probes of management services'),
+         'heavy_client': N_('Aggressive client'), 'ddos': N_('DDoS / flood'), 'inside_scan': N_('Inside host scans the internet'),
+         'lateral_scan': N_('Scan inside the network'), 'sustained_upload': N_('Sustained upload'), 'burst': N_('Traffic burst'),
+         'new_country': N_('New destination'), 'malware_contact': N_('Contact with malware infrastructure'),
+         'listed_contact': N_('Contact with a listed address'), 'listed_inbound': N_('Listed addresses calling us')}
 LIMITS = {'ports': (2, 65535), 'services': (2, 100), 'hosts': (2, 100000), 'sessions': (2, 10 ** 7), 'factor': (2, 1000),
           'min_sessions': (1, 10 ** 8), 'min_mbps': (1, 10 ** 6), 'refl_mbps': (1, 10 ** 6), 'minutes': (1, 10),
           'hosts_busy': (2, 100000)}
@@ -122,7 +119,7 @@ def _ignore_item(s):
     try:
         return str(ipaddress.ip_network(s, strict=False))
     except ValueError:
-        raise ValueError(tr(f'not an address, network or ASN: {s}', f'не адреса, мережа чи ASN: {s}')) from None
+        raise ValueError(tr('not an address, network or ASN: {value}', value=s)) from None
 
 
 def _ports(v):
@@ -131,9 +128,9 @@ def _ports(v):
         try:
             p = int(p)
         except (TypeError, ValueError):
-            raise ValueError(tr(f'not a port: {p}', f'не порт: {p}')) from None
+            raise ValueError(tr('not a port: {port}', port=p)) from None
         if not 1 <= p <= 65535:
-            raise ValueError(tr(f'not a port: {p}', f'не порт: {p}'))
+            raise ValueError(tr('not a port: {port}', port=p))
         out.append(p)
     return sorted(set(out))
 
@@ -155,15 +152,15 @@ def validate(body):
                 try:
                     n = int(v[x])
                 except (TypeError, ValueError):
-                    raise ValueError(tr(f'{NAMES[k][0]}: the thresholds must be numbers', f'{NAMES[k][1]}: пороги мають бути числами')) from None
+                    raise ValueError(tr('{kind}: the thresholds must be numbers', kind=tr(NAMES[k]))) from None
                 if not lo <= n <= hi:
-                    raise ValueError(tr(f'{NAMES[k][0]}: a threshold must be {lo:,}–{hi:,}', f'{NAMES[k][1]}: поріг має бути від {lo:,} до {hi:,}'))
+                    raise ValueError(tr('{kind}: a threshold must be {lo}–{hi}', kind=tr(NAMES[k]), lo=f'{lo:,}', hi=f'{hi:,}'))
                 d[x] = n
     ign = body.get('ignore', [])
     ign = ign if isinstance(ign, list) else str(ign).replace(',', ' ').split()
     cfg['ignore'] = sorted({_ignore_item(s) for s in ign if str(s).strip()})
     if len(cfg['ignore']) > 5000:
-        raise ValueError(tr('at most 5000 entries to ignore', 'не більше 5000 винятків'))
+        raise ValueError(tr('at most 5000 entries to ignore'))
     if 'sensitive' in body:
         cfg['sensitive'] = _ports(body['sensitive'])
     if 'public' in body:
@@ -173,7 +170,7 @@ def validate(body):
         raise ValueError('roles')
     for ep, role in roles.items():
         if role not in ('public', 'sensitive', 'normal') or not _endpoint(ep):
-            raise ValueError(tr(f'bad service role: {ep}', f'хибна роль сервісу: {ep}'))
+            raise ValueError(tr('bad service role: {service}', service=ep))
     cfg['roles'] = {ep: r for ep, r in roles.items()}
     lists = body.get('lists') or {}
     cfg['lists'].update({n: bool(v) for n, v in (lists.items() if isinstance(lists, dict) else []) if n in cfg['lists']})
@@ -186,9 +183,9 @@ def validate(body):
         try:
             out.add(str(ipaddress.ip_network(x, strict=False)) if '/' in x else str(ipaddress.ip_address(x)))
         except ValueError:
-            raise ValueError(tr(f'own list: not an address or network: {x}', f'власний список: не адреса чи мережа: {x}')) from None
+            raise ValueError(tr('own list: not an address or network: {value}', value=x)) from None
     if len(out) > 20000:
-        raise ValueError(tr('own list: at most 20,000 entries', 'власний список: не більше 20 000 записів'))
+        raise ValueError(tr('own list: at most 20,000 entries'))
     cfg['own_list'] = sorted(out)
     return cfg
 
@@ -769,7 +766,7 @@ def describe(r):
     title, text = _describe(r)
     names = r['info'].get('lists')
     if names and r['kind'] in ('port_scan', 'brute_force', 'heavy_client'):
-        text += tr(f' On reputation lists: {_lists(names)}.', f' Є у списках репутації: {_lists(names)}.')
+        text += tr(' On reputation lists: {lists}.', lists=_lists(names))
     return title, text
 
 
@@ -788,57 +785,59 @@ def _describe(r):
     if kind == 'port_scan':
         how = i.get('how')
         if how == 'hosts':
-            return (tr('Network sweep', 'Обхід мережі'),
-                    tr(f"{_who(r)} called port {_plist(i.get('ports', []))} on {len(i.get('targets', []))}+ of our addresses.",
-                       f"{_who(r)} звертався до порту {_plist(i.get('ports', []))} на {len(i.get('targets', []))}+ наших адресах."))
+            return (tr('Network sweep'),
+                    tr('{who} called port {ports} on {n}+ of our addresses.', who=_who(r), ports=_plist(i.get('ports', [])), n=len(i.get('targets', []))))
         n = max(int(r['value']), len(i.get('ports', [])))
-        return (tr('Port scan', 'Сканування портів'),
-                tr(f"{_who(r)} tried {n:,} ports of ours: {_plist(i.get('ports', []))}.",
-                   f"{_who(r)} перебирав {n:,} наших портів: {_plist(i.get('ports', []))}."))
+        return (tr('Port scan'),
+                tr('{who} tried {n} ports of ours: {ports}.', who=_who(r), n=f'{n:,}', ports=_plist(i.get('ports', []))))
+    many = dict(who=_who(r), sessions=f"{i.get('sessions', 0):,}", svc=svc, peak=f"{int(r['value']):,}") if kind in ('brute_force', 'heavy_client') else {}
     if kind == 'brute_force':
-        return (tr('Password guessing', 'Перебір паролів'),
-                tr(f"{_who(r)} opened {i.get('sessions', 0):,} sessions to {svc}" + (f", up to {int(r['value']):,} in 10 min." if int(r['hits']) > 1 else ' in 10 min.'),
-                   f"{_who(r)} відкрив {i.get('sessions', 0):,} сесій до {svc}" + (f", до {int(r['value']):,} за 10 хв." if int(r['hits']) > 1 else ' за 10 хв.')))
+        return (tr('Password guessing'),
+                tr('{who} opened {sessions} sessions to {svc}, up to {peak} in 10 min.', **many) if int(r['hits']) > 1
+                else tr('{who} opened {sessions} sessions to {svc} in 10 min.', **many))
     if kind == 'probes':
         n = len(i.get('sources', []))
         cc = ', '.join(i.get('countries', [])[:5])
-        return (tr(f'Probes of {svc}', f'Зондування {svc}'),
-                tr(f"{n:,} outside address{'es' if n != 1 else ''} called this management service ({i.get('sessions', 0):,} sessions)" + (f"; most from {cc}." if cc else '.'),
-                   f"До цього сервісу керування звертались зовнішні адреси: {n:,} ({i.get('sessions', 0):,} сесій)" + (f"; найбільше з {cc}." if cc else '.')))
+        kw = dict(n=f'{n:,}', sessions=f"{i.get('sessions', 0):,}", cc=cc)
+        return (tr('Probes of {svc}', svc=svc),
+                trn(n, '{n} outside address called this management service ({sessions} sessions); most from {cc}.',
+                    '{n} outside addresses called this management service ({sessions} sessions); most from {cc}.', **kw) if cc else
+                trn(n, '{n} outside address called this management service ({sessions} sessions).',
+                    '{n} outside addresses called this management service ({sessions} sessions).', **kw))
     if kind == 'heavy_client':
-        return (tr('Aggressive client', 'Агресивний клієнт'),
-                tr(f"{_who(r)}: {i.get('sessions', 0):,} sessions to {svc}" + (f", up to {int(r['value']):,} in 10 min." if int(r['hits']) > 1 else ' in 10 min.'),
-                   f"{_who(r)}: {i.get('sessions', 0):,} сесій до {svc}" + (f", до {int(r['value']):,} за 10 хв." if int(r['hits']) > 1 else ' за 10 хв.')))
+        return (tr('Aggressive client'),
+                tr('{who}: {sessions} sessions to {svc}, up to {peak} in 10 min.', **many) if int(r['hits']) > 1
+                else tr('{who}: {sessions} sessions to {svc} in 10 min.', **many))
     if kind == 'ddos':
         how = i.get('how')
+        kw = dict(srcs=f"{i.get('srcs', 0):,}", minutes=i.get('minutes', 0), mbps=_mbps(i.get('bps', 0)), base_mbps=_mbps(i.get('baseline', 0)))
         if how == 'sessions':
-            return (tr(f'Flood of {svc}', f'Флуд на {svc}'),
-                    tr(f"Up to {i.get('per_minute', 0):,} new sessions a minute from {i.get('srcs', 0):,} addresses (usual peak {round(i.get('baseline', 0)):,}), {i.get('minutes', 0)} min.",
-                       f"До {i.get('per_minute', 0):,} нових сесій за хвилину з {i.get('srcs', 0):,} адрес (звичайний пік {round(i.get('baseline', 0)):,}), {i.get('minutes', 0)} хв."))
+            return (tr('Flood of {svc}', svc=svc),
+                    tr('Up to {per_minute} new sessions a minute from {srcs} addresses (usual peak {base}), {minutes} min.',
+                       per_minute=f"{i.get('per_minute', 0):,}", base=f"{round(i.get('baseline', 0)):,}", **kw))
         if how == 'reflection':
-            return (tr('Reflection attack', 'Атака відбиттям'),
-                    tr(f"Up to {_mbps(i.get('bps', 0))} Mbit/s of UDP from ports {_plist(i.get('ports', []))} (usual peak {_mbps(i.get('baseline', 0))} Mbit/s), from {i.get('srcs', 0):,} addresses, {i.get('minutes', 0)} min.",
-                       f"До {_mbps(i.get('bps', 0))} Мбіт/с UDP з портів {_plist(i.get('ports', []))} (звичайний пік {_mbps(i.get('baseline', 0))} Мбіт/с), з {i.get('srcs', 0):,} адрес, {i.get('minutes', 0)} хв."))
-        return (tr('Traffic flood', 'Флуд трафіку'),
-                tr(f"Inbound up to {_mbps(i.get('bps', 0))} Mbit/s on {r['exporter']} (usual peak {_mbps(i.get('baseline', 0))} Mbit/s), {i.get('minutes', 0)} min, {i.get('srcs', 0):,} addresses.",
-                   f"Вхідний трафік до {_mbps(i.get('bps', 0))} Мбіт/с на {r['exporter']} (звичайний пік {_mbps(i.get('baseline', 0))} Мбіт/с), {i.get('minutes', 0)} хв, {i.get('srcs', 0):,} адрес."))
+            return (tr('Reflection attack'),
+                    tr('Up to {mbps} Mbit/s of UDP from ports {ports} (usual peak {base_mbps} Mbit/s), from {srcs} addresses, {minutes} min.',
+                       ports=_plist(i.get('ports', [])), **kw))
+        return (tr('Traffic flood'),
+                tr('Inbound up to {mbps} Mbit/s on {device} (usual peak {base_mbps} Mbit/s), {minutes} min, {srcs} addresses.', device=r['exporter'], **kw))
     if kind in ('malware_contact', 'listed_contact'):
         hosts = i.get('hosts', [])
         who = ', '.join(hosts[:5]) + (f' +{len(hosts) - 5}' if len(hosts) > 5 else '')
         extra = ', '.join(x for x in (i.get('country', ''), i.get('org', '')) if x)
         dst = f"{r['dst']} ({extra})" if extra else r['dst']
         cat = reputation.category(i.get('lists', []))
-        what = {'malware': tr('a botnet controller or malware host', 'контролер ботнету або хост шкідливого ПЗ'),
-                'drop': tr('a netblock run by criminals (do not route)', 'мережа, яку контролюють зловмисники (не маршрутизувати)'),
-                'anon': tr('a Tor exit relay', 'вихідний вузол Tor')}.get(cat, tr('a host seen attacking others', 'хост, помічений в атаках'))
+        what = {'malware': tr('a botnet controller or malware host'),
+                'drop': tr('a netblock run by criminals (do not route)'),
+                'anon': tr('a Tor exit relay')}.get(cat, tr('a host seen attacking others'))
         ok = i.get('sessions', 0) - i.get('failed', 0)
-        return (tr('Contact with malware infrastructure', 'Зв’язок з інфраструктурою шкідливого ПЗ') if kind == 'malware_contact' else tr('Contact with a listed address', 'Зв’язок з адресою зі списку'),
-                tr(f"{who} opened {i.get('sessions', 0):,} session{'s' if i.get('sessions', 0) != 1 else ''} to {dst}, ports {_plist(i.get('ports', []))} — {what} ({_lists(i.get('lists', []))}). "
-                   + (f"Sent {_bytes(i.get('sent', 0))}, received {_bytes(i.get('got', 0))}." if ok > 0 else 'No answer came back.')
-                   + (' Check the device.' if kind == 'malware_contact' else ''),
-                   f"{who} відкрив сесій до {dst}: {i.get('sessions', 0):,}, порти {_plist(i.get('ports', []))} — {what} ({_lists(i.get('lists', []))}). "
-                   + (f"Відправлено {_bytes(i.get('sent', 0))}, отримано {_bytes(i.get('got', 0))}." if ok > 0 else 'Відповіді не було.')
-                   + (' Перевірте пристрій.' if kind == 'malware_contact' else '')))
+        n = i.get('sessions', 0)
+        text = trn(n, '{who} opened {n} session to {dst}, ports {ports} — {what} ({lists}).', '{who} opened {n} sessions to {dst}, ports {ports} — {what} ({lists}).',
+                   n=f'{n:,}', who=who, dst=dst, ports=_plist(i.get('ports', [])), what=what, lists=_lists(i.get('lists', [])))
+        text += ' ' + (tr('Sent {sent}, received {got}.', sent=_bytes(i.get('sent', 0)), got=_bytes(i.get('got', 0))) if ok > 0 else tr('No answer came back.'))
+        if kind == 'malware_contact':
+            text += ' ' + tr('Check the device.')
+        return (tr('Contact with malware infrastructure') if kind == 'malware_contact' else tr('Contact with a listed address'), text)
     if kind == 'listed_inbound':
         m = i.get('srcmap', {})
         per = {}
@@ -846,15 +845,16 @@ def _describe(r):
             for n in names:
                 per[n] = per.get(n, 0) + 1
         top = ', '.join(f'{reputation.TITLES.get(n, n)} {c:,}' for n, c in sorted(per.items(), key=lambda x: -x[1]))
-        return (tr('Listed addresses calling us', 'Звернення адрес зі списків'),
-                tr(f"{len(m):,} address{'es' if len(m) != 1 else ''} from reputation lists called our services ({i.get('sessions', 0):,} sessions; ports {_plist(i.get('ports', []), 8)}): {top}.",
-                   f"Адреси зі списків репутації, що зверталися до наших сервісів: {len(m):,} ({i.get('sessions', 0):,} сесій; порти {_plist(i.get('ports', []), 8)}): {top}."))
+        return (tr('Listed addresses calling us'),
+                trn(len(m), '{n} address from reputation lists called our services ({sessions} sessions; ports {ports}): {top}.',
+                    '{n} addresses from reputation lists called our services ({sessions} sessions; ports {ports}): {top}.',
+                    n=f'{len(m):,}', sessions=f"{i.get('sessions', 0):,}", ports=_plist(i.get('ports', []), 8), top=top))
     if kind in ('inside_scan', 'lateral_scan'):
-        title = tr('Inside host scans the internet', 'Внутрішній хост сканує інтернет') if kind == 'inside_scan' else tr('Scan inside the network', 'Сканування всередині мережі')
+        title = tr('Inside host scans the internet') if kind == 'inside_scan' else tr('Scan inside the network')
         if i.get('how') == 'ports':
             n = max(int(r['value']), len(i.get('ports', [])))
-            return (title, tr(f"{r['src']} tried {n:,} ports of {r['dst']} without answers: {_plist(i.get('ports', []))}. Check the device.",
-                              f"{r['src']} перебирав {n:,} портів {r['dst']} без відповідей: {_plist(i.get('ports', []))}. Перевірте пристрій."))
-        return (title, tr(f"{r['src']} called port {port} on {int(r['value']):,} addresses, mostly without an answer. Check the device.",
-                          f"{r['src']} звертався до порту {port} на {int(r['value']):,} адресах, здебільшого без відповіді. Перевірте пристрій."))
+            return (title, tr('{src} tried {n} ports of {dst} without answers: {ports}. Check the device.',
+                              src=r['src'], n=f'{n:,}', dst=r['dst'], ports=_plist(i.get('ports', []))))
+        return (title, tr('{src} called port {port} on {n} addresses, mostly without an answer. Check the device.',
+                          src=r['src'], port=port, n=f"{int(r['value']):,}"))
     return kind, ''

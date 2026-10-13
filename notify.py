@@ -17,7 +17,7 @@ import time
 import urllib.error
 import urllib.request
 
-from common import STATE_DIR, set_lang, tr
+from common import STATE_DIR, known_lang, set_lang, tr, trn
 
 CONFIG = os.path.join(STATE_DIR, 'notify.json')
 SEVERITIES = ('info', 'warn', 'crit')
@@ -71,29 +71,27 @@ def validate(body, old):
     t['on'] = bool(src.get('on'))
     tok = str(src.get('token') or '').strip()
     if tok and not TOKEN_RE.match(tok):
-        raise ValueError(tr('The bot token looks wrong: it is like 123456789:AA… (from @BotFather).',
-                            'Токен бота схожий на хибний: він має вигляд 123456789:AA… (від @BotFather).'))
+        raise ValueError(tr('The bot token looks wrong: it is like 123456789:AA… (from @BotFather).'))
     t['token'] = tok or old['telegram']['token']
     chat = str(src.get('chat') or '').strip()
     if chat and not CHAT_RE.match(chat):
-        raise ValueError(tr('The chat ID is a number (a group\'s starts with -) or @channel.',
-                            'ID чату — це число (у групи починається з -) або @канал.'))
+        raise ValueError(tr('The chat ID is a number (a group\'s starts with -) or @channel.'))
     t['chat'] = chat
     if src.get('min_sev') in SEVERITIES:
         t['min_sev'] = src['min_sev']
-    if src.get('lang') in ('en', 'uk'):
+    if known_lang(src.get('lang')):
         t['lang'] = src['lang']
     link = str(src.get('link') or '').strip().rstrip('/')
     if link and not re.match(r'^https?://[^\s<>"]+$', link):
-        raise ValueError(tr('The FlowTrack address must start with https:// or http://.', 'Адреса FlowTrack має починатися з https:// або http://.'))
+        raise ValueError(tr('The FlowTrack address must start with https:// or http://.'))
     t['link'] = link
     if t['on'] and not (t['token'] and t['chat']):
-        raise ValueError(tr('Enter the bot token and the chat ID to switch Telegram on.', 'Щоб увімкнути Telegram, введіть токен бота й ID чату.'))
+        raise ValueError(tr('Enter the bot token and the chat ID to switch Telegram on.'))
     cfg['kinds'] = {str(k): bool(v) for k, v in (body.get('kinds') or {}).items()}
     try:
         cfg['per_hour'] = max(1, min(600, int(body.get('per_hour', 20))))
     except (TypeError, ValueError):
-        raise ValueError(tr('Messages an hour must be a number.', 'Кількість повідомлень на годину має бути числом.')) from None
+        raise ValueError(tr('Messages an hour must be a number.')) from None
     return cfg
 
 
@@ -123,24 +121,22 @@ def call(token, method, params=None, timeout=15):
 def _explain(e):
     m = str(e)
     if 'Unauthorized' in m or 'Not Found' in m:
-        return tr('Telegram does not know this bot token.', 'Telegram не знає цього токена бота.')
+        return tr('Telegram does not know this bot token.')
     if 'chat not found' in m:
-        return tr('Chat not found: send any message to the bot first (or add it to the group), then try again.',
-                  'Чат не знайдено: спершу надішліть боту будь-яке повідомлення (або додайте його в групу) і спробуйте знову.')
+        return tr('Chat not found: send any message to the bot first (or add it to the group), then try again.')
     if 'blocked' in m or 'kicked' in m:
-        return tr('The bot was blocked or removed from the chat.', 'Бота заблоковано або видалено з чату.')
-    return tr(f'Telegram: {m}', f'Telegram: {m}')
+        return tr('The bot was blocked or removed from the chat.')
+    return 'Telegram: ' + m
 
 
 def test(cfg):
     t = cfg['telegram']
     if not (t['token'] and t['chat']):
-        raise ValueError(tr('Enter the bot token and the chat ID first.', 'Спершу введіть токен бота й ID чату.'))
+        raise ValueError(tr('Enter the bot token and the chat ID first.'))
     set_lang(t['lang'])
     try:
         call(t['token'], 'sendMessage', {'chat_id': t['chat'], 'parse_mode': 'HTML', 'disable_web_page_preview': True,
-             'text': '✅ <b>FlowTrack</b>\n' + html.escape(tr('Test message: notifications reach this chat.',
-                                                             'Тестове повідомлення: сповіщення доходять у цей чат.'))})
+             'text': '✅ <b>FlowTrack</b>\n' + html.escape(tr('Test message: notifications reach this chat.'))})
     except TelegramError as e:
         raise ValueError(_explain(e)) from None
 
@@ -149,9 +145,9 @@ def chats(cfg, token=''):
     """Chats that wrote to the bot lately (getUpdates): to pick the chat ID without looking it up elsewhere."""
     token = token or cfg['telegram']['token']
     if not token:
-        raise ValueError(tr('Enter the bot token first.', 'Спершу введіть токен бота.'))
+        raise ValueError(tr('Enter the bot token first.'))
     if not TOKEN_RE.match(token):
-        raise ValueError(tr('The bot token looks wrong.', 'Токен бота схожий на хибний.'))
+        raise ValueError(tr('The bot token looks wrong.'))
     try:
         ups = call(token, 'getUpdates', {'limit': 100, 'timeout': 0}) or []
     except TelegramError as e:
@@ -178,10 +174,9 @@ def format_events(events, more, lang, link):
         parts.append(part)
         size += len(part) + 2
     if more:
-        parts.append(html.escape(tr(f'…and {more} more event{"s" if more != 1 else ""} (the hourly limit of messages).',
-                                    f'…і ще подій: {more} (ліміт повідомлень на годину).')))
+        parts.append(html.escape(trn(more, '…and {n} more event (the hourly limit of messages).', '…and {n} more events (the hourly limit of messages).')))
     if link:
-        parts.append(f'<a href="{html.escape(link)}/#v=threats">{html.escape(tr("Open the events in FlowTrack", "Відкрити події у FlowTrack"))}</a>')
+        parts.append(f'<a href="{html.escape(link)}/#v=threats">{html.escape(tr("Open the events in FlowTrack"))}</a>')
     return '\n\n'.join(parts)
 
 

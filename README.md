@@ -82,7 +82,8 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   incident view can be bookmarked or shared.
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
 - Login with two roles: **admin** (users, devices) and **viewer** (read-only).
-- English and Ukrainian, switchable per browser (the user menu); the browser language picks the default.
+- English and Ukrainian, chosen per browser in Settings → General; the browser language picks the default. More
+  languages are one file each, see [Translations](#translations).
 
 ## Quick start
 
@@ -376,6 +377,33 @@ been measured yet. Answers for 6 hours or more are kept on the server for 60 s, 
 same period get them at once. On a small office network (about 4 records/s, 330,000 records a day; real data) every
 Overview request for 24 hours or 7 days is answered in under 0.1 s.
 
+## Translations
+
+The code holds English only; every other language is one dictionary, `web/i18n/<code>.json` (`uk.json` is the
+Ukrainian one). It serves the web UI and the server's texts (errors, events, Telegram messages) alike. A new language
+needs no code change: copy `uk.json` to e.g. `de.json`, set `"@name"` (the language's own name, shown in Settings →
+General) and `"@locale"` (dates and numbers, e.g. `de-DE`), and translate the values:
+
+```json
+{
+ "@name": "Deutsch",
+ "@locale": "de-DE",
+ "Password guessing": "Passwort-Raten",
+ "Ignore {addr}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.": "{addr} ignorieren? …",
+ "ends in {n} days": {"one": "endet in {n} Tag", "other": "endet in {n} Tagen"}
+}
+```
+
+- The key is the English text. `{name}` placeholders stay as they are, in any order.
+- A text with a number may give the forms of its language ([CLDR plural categories](https://cldr.unicode.org/index/cldr-spec/plural-rules):
+  `one`, `few`, `many`, `other`) or one text for all.
+- A key with a prefix such as `button::Sign in` is the same English text in another place that may need another
+  translation; the prefix is not shown.
+- A missing text stays English. `python3 -m unittest tests.test_i18n` lists the texts a dictionary lacks or no
+  longer needs (it runs over every file in `web/i18n/`).
+
+The installer's own messages (English and Ukrainian) are in `install.sh`.
+
 ## Roadmap
 
 **Next — scale and reach**
@@ -399,6 +427,7 @@ Overview request for 24 hours or 7 days is answered in under 0.1 s.
 | `topology.py` | Path analysis: layer-3 neighbours of the devices, link states, the hops of a path |
 | `rollups.py` | 5-minute and hourly totals for long periods: tables, filling the history, which one a query reads |
 | `web/` | the web UI (plain HTML/CSS/JS, ECharts vendored — no build step) |
+| `web/i18n/` | language dictionaries for the UI and the server's texts (see [Translations](#translations)) |
 | `deploy/` | systemd units, GeoIP refresh, configuration examples |
 | `install.sh` | the one-line installer |
 

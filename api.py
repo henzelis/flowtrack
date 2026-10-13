@@ -28,7 +28,8 @@ import rollups  # noqa: E402
 import snmp  # noqa: E402
 import topology  # noqa: E402
 from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, license_refresh, iface_addrs, is_private, listen_signature,  # noqa: E402
-                    listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr)
+                    listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr,
+                    trn, N_, get_lang, languages)
 
 # pre-aggregated 5-minute totals for long periods (rollups.py); FT_ROLLUPS=0 reads only the records (for comparisons)
 USE_ROLLUPS = os.environ.get('FT_ROLLUPS', '1') != '0'
@@ -294,7 +295,8 @@ def api_meta(q):
                         'city': c.get('city', ''), 'country': c.get('country', ''), 'lat': c.get('lat'), 'lon': c.get('lon'), 'last': r['last']})
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows WHERE ts >= now() - toIntervalDay({d:UInt16})", {'d': view_days()}, fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
-            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION}
+            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION,
+            'langs': languages()}
 
 
 def edition_info(admin=False):
@@ -314,51 +316,51 @@ def edition_info(admin=False):
     return out
 
 
-_LICENSE_UK = {
-    'this is not a FlowTrack license code': 'це не код ліцензії FlowTrack',
-    'the license code was mistyped or cut short': 'код ліцензії введено з помилкою або не повністю',
-    'this license is for another FlowTrack version': 'ця ліцензія для іншої версії FlowTrack',
-    'this license is for another FlowTrack edition': 'ця ліцензія для іншої редакції FlowTrack',
-    'the license was not issued by FlowTrack or was altered': 'ліцензію видав не FlowTrack або її змінено',
-    'this license was deactivated on this server to move it elsewhere': 'цю ліцензію деактивовано на цьому сервері для перенесення на інший',
-    'the system clock is behind — set the correct date and time (NTP)': 'системний годинник відстає — встановіть правильні дату й час (NTP)',
-    'no license is installed': 'ліцензію не встановлено',
-}
+# Licensing messages come in English from the core and the license server; in another UI language they are shown by
+# these English texts of the dictionaries (N_ marks a text for them), in English as they came.
+_LICENSE_MSGS = {
+    N_('this is not a FlowTrack license code'), N_('the license code was mistyped or cut short'),
+    N_('this license is for another FlowTrack version'), N_('this license is for another FlowTrack edition'),
+    N_('the license was not issued by FlowTrack or was altered'), N_('this license was deactivated on this server to move it elsewhere'),
+    N_('the system clock is behind — set the correct date and time (NTP)'), N_('no license is installed')}
 
 
-_SERVER_UK = {
-    'unknown': 'цей ліцензійний ключ невідомий серверу ліцензій',
-    'revoked': 'цей ліцензійний ключ відкликано',
-    'expired': 'термін дії цього ліцензійного ключа минув',
-    'returned': 'цю ліцензію деактивовано або звільнено, тут вона більше не діє',
-    'unreachable': 'сервер ліцензій недоступний — перевірте з’єднання з інтернетом (або введіть ліцензію FTL-… від постачальника)',
-    'busy': 'забагато запитів до сервера ліцензій — спробуйте за хвилину',
-    'error': 'помилка сервера ліцензій — спробуйте пізніше',
+_SERVER_MSGS = {
+    'unknown': N_('this license key is not known to the license server'),
+    'revoked': N_('this license key was revoked'),
+    'expired': N_('this license key has expired'),
+    'returned': N_('this license was deactivated or released and no longer works here'),
+    'unreachable': N_('the license server is unreachable — check the internet connection (or enter an FTL-… license from the vendor)'),
+    'busy': N_('too many requests to the license server — try again in a minute'),
+    'error': N_('license server error — try again later'),
 }
 
 
 def license_message(code, msg, lic=None):
     """A licensing message in the UI language."""
     lic = lic or {}
+    if get_lang() == 'en':
+        return msg or ''
     if code == 'in_use':
         inst = re.search(r'installation (\S+)', msg)
-        return tr(msg, f"цей ключ уже активний на інсталяції {inst.group(1) if inst else '?'} — спершу деактивуйте його там "
-                       '(Налаштування → Ліцензія) або попросіть постачальника звільнити його')
+        return tr('this key is already active on installation {inst} — deactivate it there first (Settings → License) '
+                  'or ask the vendor to release it', inst=inst.group(1) if inst else '?')
     if code == 'unconfirmed':
         when = re.search(r'since (\d{4}-\d{2}-\d{2})', msg)
-        return tr(msg, f'сервер ліцензій не підтверджував цю ліцензію з {when.group(1)} — перевірте з’єднання з ним' if when
-                  else 'цю онлайн-ліцензію ще не підтвердив сервер ліцензій')
+        return (tr('the license server has not confirmed this license since {date} — check the connection to it', date=when.group(1))
+                if when else tr('the license server has not confirmed this online license yet'))
     if code == 'unknown' and 'license key' not in msg:
-        return tr(msg, 'цю ліцензію не видавав сервер ліцензій')
+        return tr('this license was not issued by the license server')
     if code == 'invalid' and 'license key' in msg:
-        return tr(msg, 'це не ліцензійний ключ FlowTrack' if 'not a' in msg else 'ліцензійний ключ введено з помилкою або не повністю')
-    if code in _SERVER_UK and msg not in _LICENSE_UK and (code != 'expired' or 'license key' in msg):
-        return tr(msg, _SERVER_UK[code])        # from the license server
+        return tr('this is not a FlowTrack license key') if 'not a' in msg else tr('the license key was mistyped or cut short')
+    if code in _SERVER_MSGS and msg not in _LICENSE_MSGS and (code != 'expired' or 'license key' in msg):
+        return tr(_SERVER_MSGS[code])        # from the license server
     if code == 'expired' and lic.get('expires'):
-        return tr(msg, 'ліцензія закінчилась ' + time.strftime('%Y-%m-%d', time.gmtime(lic['expires'])))
+        return tr('the license ended on {date}', date=time.strftime('%Y-%m-%d', time.gmtime(lic['expires'])))
     if code == 'other_instance':
-        return tr(msg, f"цю ліцензію видано для інсталяції {lic.get('instance')}, а не для цієї ({licensing.instance_id()})")
-    return tr(msg, _LICENSE_UK.get(msg, msg)) if msg else ''
+        return tr('this license was issued for installation {inst}, not for this one ({this})',
+                  inst=lic.get('instance'), this=licensing.instance_id())
+    return (tr(msg) if msg in _LICENSE_MSGS else msg) if msg else ''
 
 
 def post_license(body):
@@ -386,8 +388,8 @@ def post_license_checkin():
     out = edition_info(admin=True)
     lic = out.get('license') or {}
     until = time.strftime('%Y-%m-%d', time.gmtime(lic['expires'])) if lic.get('expires') else ''
-    out['checked'] = {'renewed': renewed, 'note': tr(f'Renewed: the license is valid until {until}', f'Оновлено: ліцензія діє до {until}') if renewed
-                      else tr('The license server has no renewal for this license', 'На сервері ліцензій немає оновлення для цієї ліцензії')}
+    out['checked'] = {'renewed': renewed, 'note': tr('Renewed: the license is valid until {date}', date=until) if renewed
+                      else tr('The license server has no renewal for this license')}
     return out
 
 
@@ -893,17 +895,19 @@ def snmp_error_text(code, e, ip):
     where = f"{e.get('host') or ip}:{e.get('port', 161)}"
     v3 = e.get('version') == '3'
     return {
-        'timeout': tr(f"No answer from {where}. Check that SNMP is on, that the device lets this server in (trusted hosts / allowed addresses, SNMP access on the interface), UDP {e.get('port', 161)} on the way, and "
-                      + ("the privacy password and protocol — with wrong ones the device does not answer." if v3 else "the community — with a wrong one the device does not answer."),
-                      f"Немає відповіді від {where}. Перевірте, що SNMP увімкнено, пристрій пускає цей сервер (довірені хости / дозволені адреси, доступ SNMP на інтерфейсі), UDP {e.get('port', 161)} по дорозі, і "
-                      + ("пароль і протокол шифрування — з неправильними пристрій не відповідає." if v3 else "community — з неправильним пристрій не відповідає.")),
-        'user': tr(f"The device does not know the SNMPv3 user «{e.get('user', '')}».", f"Пристрій не знає користувача SNMPv3 «{e.get('user', '')}»."),
-        'auth': tr('Wrong authentication password or protocol.', 'Неправильний пароль або протокол автентифікації.'),
-        'priv': tr('Wrong privacy (encryption) password or protocol.', 'Неправильний пароль або протокол шифрування.'),
-        'level': tr('The device does not allow this security level for the user.', 'Пристрій не дозволяє цей рівень безпеки для користувача.'),
-        'host': tr(f"Unknown host {e.get('host')}.", f"Невідомий хост {e.get('host')}."),
-        'tool': tr('The net-snmp tools are not installed on the server (package snmp): run sudo flowtrack upgrade.', 'На сервері немає утиліт net-snmp (пакет snmp): виконайте sudo flowtrack upgrade.'),
-    }.get(code, tr('The device answered with an error.', 'Пристрій відповів помилкою.'))
+        'timeout': tr('No answer from {where}. Check that SNMP is on, that the device lets this server in (trusted hosts / allowed addresses, '
+                      'SNMP access on the interface), UDP {port} on the way, and the privacy password and protocol — with wrong ones the '
+                      'device does not answer.', where=where, port=e.get('port', 161)) if v3 else
+                   tr('No answer from {where}. Check that SNMP is on, that the device lets this server in (trusted hosts / allowed addresses, '
+                      'SNMP access on the interface), UDP {port} on the way, and the community — with a wrong one the device does not answer.',
+                      where=where, port=e.get('port', 161)),
+        'user': tr('The device does not know the SNMPv3 user «{user}».', user=e.get('user', '')),
+        'auth': tr('Wrong authentication password or protocol.'),
+        'priv': tr('Wrong privacy (encryption) password or protocol.'),
+        'level': tr('The device does not allow this security level for the user.'),
+        'host': tr('Unknown host {host}.', host=e.get('host')),
+        'tool': tr('The net-snmp tools are not installed on the server (package snmp): run sudo flowtrack upgrade.'),
+    }.get(code, tr('The device answered with an error.'))
 
 
 def api_devices(q):
@@ -983,66 +987,65 @@ def _alerts_now(kinds):
                   WHERE ts >= now() - INTERVAL 3 HOUR AND dir = 'up' GROUP BY int_ip, ext_ip, service, ext_port, m HAVING b * 8 / 60 > 5000000)
             GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON') if kinds['sustained_upload']['on'] else []:
         out.append({'sev': kinds['sustained_upload']['sev'], 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
-                    'title': tr('Sustained upload', 'Тривале вивантаження'),
-                    'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Mbit/s for {r['mins']} min in the last 3 h.",
-                               f"{NAMES.get(r['int_ip']) or r['int_ip']} → {r['ext_ip']}:{r['port']} ({r['service']}) — {float(r['bps']) / 1e6:.1f} Мбіт/с протягом {r['mins']} хв за останні 3 год."),
+                    'title': tr('Sustained upload'),
+                    'text': tr('{host} → {dst} ({service}) — {mbps} Mbit/s for {mins} min in the last 3 h.', host=NAMES.get(r['int_ip']) or r['int_ip'],
+                               dst=f"{r['ext_ip']}:{r['port']}", service=r['service'], mbps=f"{float(r['bps']) / 1e6:.1f}", mins=r['mins']),
                     'when': r['since']})
     for r in ch("""SELECT exporter, sum(lost) AS lost_n, sum(packets) AS packets_n FROM exporter_stats WHERE ts >= now() - INTERVAL 1 HOUR GROUP BY exporter HAVING lost_n > 0""", fmt='JSON'):
         r['lost'], r['packets'] = r['lost_n'], r['packets_n']
         pct = 100 * int(r['lost']) / max(1, int(r['packets']) + int(r['lost']))
-        out.append({'sev': 'warn' if pct < 2 else 'crit', 'kind': 'export_loss', 'device': r['exporter'], 'title': tr('Export loss', 'Втрати експорту'),
-                    'text': tr(f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: {r['lost']} packets ({pct:.2f}%) lost in the last hour. Check the path to the collector.",
-                               f"{exporters_cfg().get(r['exporter'], {}).get('name', r['exporter'])}: втрачено {r['lost']} пакетів ({pct:.2f}%) за годину. Перевірте канал до колектора."),
-                    'when': tr('last hour', 'за годину')})
+        out.append({'sev': 'warn' if pct < 2 else 'crit', 'kind': 'export_loss', 'device': r['exporter'], 'title': tr('Export loss'),
+                    'text': tr('{device}: {lost} packets ({pct}%) lost in the last hour. Check the path to the collector.',
+                               device=exporters_cfg().get(r['exporter'], {}).get('name', r['exporter']), lost=r['lost'], pct=f'{pct:.2f}'),
+                    'when': tr('last hour')})
     col = collector_health(60)
     if col and col['socket_drops'] + col['queue_drops']:
         lost = col['socket_drops'] + col['queue_drops']
         pct = 100 * lost / max(1, col['packets'] + lost)
-        out.append({'sev': 'warn' if pct < 1 else 'crit', 'kind': 'collector_drops', 'title': tr('Collector falling behind', 'Колектор не встигає'),
-                    'text': tr(f"{lost} packets ({pct:.2f}%) dropped in the last hour: socket buffer {col['socket_drops']}, worker queues {col['queue_drops']}. "
-                               f"Raise FT_WORKERS in /etc/flowtrack/env (now {col['workers']}) or net.core.rmem_max.",
-                               f"За годину відкинуто {lost} пакетів ({pct:.2f}%): буфер сокета — {col['socket_drops']}, черга воркерів — {col['queue_drops']}. "
-                               f"Збільште FT_WORKERS у /etc/flowtrack/env (зараз {col['workers']}) або net.core.rmem_max."), 'when': tr('last hour', 'за годину')})
+        out.append({'sev': 'warn' if pct < 1 else 'crit', 'kind': 'collector_drops', 'title': tr('Collector falling behind'),
+                    'text': tr('{lost} packets ({pct}%) dropped in the last hour: socket buffer {sock}, worker queues {queue}. '
+                               'Raise FT_WORKERS in /etc/flowtrack/env (now {workers}) or net.core.rmem_max.', lost=lost, pct=f'{pct:.2f}',
+                               sock=col['socket_drops'], queue=col['queue_drops'], workers=col['workers']), 'when': tr('last hour')})
     ed = edition()
     lic = ed['license'] or {}
     if ed['status'] == 'expired':
-        out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowTrack Pro license expired', 'Ліцензія FlowTrack Pro закінчилась'),
-                    'text': tr(f"{ed['message'].capitalize()}. The Community limits apply again ({COMMUNITY['rps']:,} records/s, {COMMUNITY['retention_days']} days); stored data is kept, records older than {COMMUNITY['retention_days']} days show again with a renewed key. Enter it in Settings → License.",
-                               f"Ліцензія діяла до {time.strftime('%d.%m.%Y', time.gmtime(lic.get('expires') or 0))}. Знову діють ліміти Community ({COMMUNITY['rps']:,} записів/с, {COMMUNITY['retention_days']} днів); збережені дані лишаються, записи, старші за {COMMUNITY['retention_days']} днів, знову видно з подовженим ключем. Введіть його у «Налаштування → Ліцензія»."),
+        out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowTrack Pro license expired'),
+                    'text': tr('{msg}. The Community limits apply again ({rps} records/s, {days} days); stored data is kept, records older than '
+                               '{days} days show again with a renewed key. Enter it in Settings → License.',
+                               msg=license_message(ed['status'], ed['message'], lic).capitalize(), rps=f"{COMMUNITY['rps']:,}", days=COMMUNITY['retention_days']),
                     'when': time.strftime('%Y-%m-%d', time.gmtime(lic.get('expires') or 0))})
     elif ed['status'] in ('invalid', 'other_instance', 'returned', 'clock'):
-        out.append({'sev': 'crit', 'kind': 'license_invalid', 'title': tr('The license does not work on this server', 'Ліцензія не діє на цьому сервері'),
-                    'text': tr(f"{license_message(ed['status'], ed['message'], lic).capitalize()}. The Community limits apply ({COMMUNITY['rps']:,} records/s, {COMMUNITY['retention_days']} days); stored data is kept. See Settings → License.",
-                               f"{license_message(ed['status'], ed['message'], lic).capitalize()}. Діють ліміти Community ({COMMUNITY['rps']:,} записів/с, {COMMUNITY['retention_days']} днів); збережені дані лишаються. Див. «Налаштування → Ліцензія»."),
-                    'when': tr('now', 'зараз')})
+        out.append({'sev': 'crit', 'kind': 'license_invalid', 'title': tr('The license does not work on this server'),
+                    'text': tr('{msg}. The Community limits apply ({rps} records/s, {days} days); stored data is kept. See Settings → License.',
+                               msg=license_message(ed['status'], ed['message'], lic).capitalize(), rps=f"{COMMUNITY['rps']:,}", days=COMMUNITY['retention_days']),
+                    'when': tr('now')})
     elif ed['status'] == 'active' and lic.get('days_left', 99) < 14:
-        out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon', 'Ліцензія FlowTrack Pro скоро закінчиться'),
-                    'text': tr(f"The license ends on {time.strftime('%Y-%m-%d', time.gmtime(lic['expires']))} ({lic['days_left']} day{'' if lic['days_left'] == 1 else 's'} left). After that the Community limits apply.",
-                               f"Ліцензія діє до {time.strftime('%d.%m.%Y', time.gmtime(lic['expires']))} (лишилось днів: {lic['days_left']}). Після цього діятимуть ліміти Community."),
-                    'when': tr(f"{lic['days_left']} day{'' if lic['days_left'] == 1 else 's'} left", f"лишилось {lic['days_left']} дн.")})
+        out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon'),
+                    'text': trn(lic['days_left'], 'The license ends on {date} ({n} day left). After that the Community limits apply.',
+                                'The license ends on {date} ({n} days left). After that the Community limits apply.',
+                                date=time.strftime('%Y-%m-%d', time.gmtime(lic['expires']))),
+                    'when': trn(lic['days_left'], '{n} day left', '{n} days left')})
     if col and col.get('license_drops'):
-        out.append({'sev': 'warn', 'kind': 'license_limit', 'title': tr('Edition limit reached', 'Досягнуто ліміту редакції'),
-                    'text': tr(f"{col['license_drops']} records were not stored in the last hour: the traffic exceeds {ed['rps']:,} records/s, the limit of FlowTrack Community. "
-                               "FlowTrack Pro has no limit.",
-                               f"За годину {col['license_drops']} записів не збережено: трафік перевищує {ed['rps']:,} записів/с — ліміт FlowTrack Community. "
-                               "У FlowTrack Pro ліміту немає."), 'when': tr('last hour', 'за годину')})
+        out.append({'sev': 'warn', 'kind': 'license_limit', 'title': tr('Edition limit reached'),
+                    'text': tr('{n} records were not stored in the last hour: the traffic exceeds {rps} records/s, the limit of FlowTrack Community. '
+                               'FlowTrack Pro has no limit.', n=col['license_drops'], rps=f"{ed['rps']:,}"), 'when': tr('last hour')})
     if col and col['dropped_rows']:
-        out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': tr('Records not stored', 'Записи не збережено'),
-                    'text': tr(f"{col['dropped_rows']} records did not reach the database in the last hour: ClickHouse was unavailable longer than the collector buffer lasts.",
-                               f"За годину {col['dropped_rows']} записів не потрапили в базу: ClickHouse був недоступний довше, ніж вміщує буфер колектора."), 'when': tr('last hour', 'за годину')})
+        out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': tr('Records not stored'),
+                    'text': tr('{n} records did not reach the database in the last hour: ClickHouse was unavailable longer than the collector buffer lasts.',
+                               n=col['dropped_rows']), 'when': tr('last hour')})
     for r in ch("""SELECT int_ip, country, min(ts) AS first FROM flows WHERE ts >= now() - INTERVAL 1 DAY AND country != '' GROUP BY int_ip, country
             HAVING (int_ip, country) NOT IN (SELECT int_ip, country FROM flows WHERE ts < now() - INTERVAL 1 DAY AND ts >= now() - INTERVAL 7 DAY GROUP BY int_ip, country)
                AND (SELECT min(ts) FROM flows) < now() - INTERVAL 2 DAY
             ORDER BY first DESC LIMIT 5""", fmt='JSON') if kinds['new_country']['on'] else []:
-        out.append({'sev': kinds['new_country']['sev'], 'kind': 'new_country', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('New destination', 'Новий напрямок'),
-                    'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']} contacted {r['country']} for the first time this week.",
-                               f"{NAMES.get(r['int_ip']) or r['int_ip']} вперше за тиждень звернувся до країни {r['country']}."), 'when': r['first']})
+        out.append({'sev': kinds['new_country']['sev'], 'kind': 'new_country', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('New destination'),
+                    'text': tr('{host} contacted {country} for the first time this week.', host=NAMES.get(r['int_ip']) or r['int_ip'], country=r['country']),
+                    'when': r['first']})
     for r in ch("""WITH per AS (SELECT int_ip, toStartOfFiveMinutes(ts) AS m, sum(bytes) AS b FROM flows WHERE ts >= now() - INTERVAL 1 DAY GROUP BY int_ip, m)
             SELECT int_ip, max(b) AS peak, quantile(0.5)(b) AS med, argMax(m, b) AS at FROM per GROUP BY int_ip
             HAVING count() > 24 AND peak > 100000000 AND peak > 8 * med AND at >= now() - INTERVAL 3 HOUR ORDER BY peak DESC LIMIT 5""", fmt='JSON') if kinds['burst']['on'] else []:
-        out.append({'sev': kinds['burst']['sev'], 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('Traffic burst', 'Сплеск трафіку'),
-                    'text': tr(f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB in 5 min — {float(r['peak']) / max(1.0, float(r['med'])):.0f}× the daily median.",
-                               f"{NAMES.get(r['int_ip']) or r['int_ip']}: {int(r['peak']) / 1e6:.0f} MB за 5 хв — у {float(r['peak']) / max(1.0, float(r['med'])):.0f}× вище медіани за добу."), 'when': r['at']})
+        out.append({'sev': kinds['burst']['sev'], 'kind': 'burst', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']), 'title': tr('Traffic burst'),
+                    'text': tr('{host}: {mb} MB in 5 min — {times}× the daily median.', host=NAMES.get(r['int_ip']) or r['int_ip'],
+                               mb=f"{int(r['peak']) / 1e6:.0f}", times=f"{float(r['peak']) / max(1.0, float(r['med'])):.0f}"), 'when': r['at']})
     return out
 
 
@@ -1165,7 +1168,7 @@ def _str(v, n, field):
     if v is None or v == '':
         return ''
     if not isinstance(v, str) or len(v) > n:
-        raise BadRequest(tr(f'{field}: up to {n} characters', f'{field}: до {n} символів'))
+        raise BadRequest(tr('{field}: up to {n} characters', field=field, n=n))
     return v.strip()
 
 
@@ -1173,12 +1176,12 @@ def device_from_body(b):
     try:
         ip = str(ipaddress.ip_address(str(b.get('ip', '')).strip()))
     except ValueError:
-        raise BadRequest(tr('Invalid exporter IP address', 'Некоректна IP-адреса експорту'))
-    cfg = {'name': _str(b.get('name'), 64, tr('name', 'назва')) or ip, 'vendor': _str(b.get('vendor'), 64, tr('vendor', 'виробник')), 'model': _str(b.get('model'), 64, tr('model', 'модель')),
-           'city': _str(b.get('city'), 64, tr('city', 'місто')), 'sampling': _str(b.get('sampling'), 16, tr('sampling', 'вибірка')) or '1:1'}
-    cc = _str(b.get('country'), 2, tr('country', 'країна')).upper()
+        raise BadRequest(tr('Invalid exporter IP address'))
+    cfg = {'name': _str(b.get('name'), 64, tr('name')) or ip, 'vendor': _str(b.get('vendor'), 64, tr('vendor')), 'model': _str(b.get('model'), 64, tr('model')),
+           'city': _str(b.get('city'), 64, tr('city')), 'sampling': _str(b.get('sampling'), 16, tr('sampling')) or '1:1'}
+    cc = _str(b.get('country'), 2, tr('country')).upper()
     if cc and not cc.isalpha():
-        raise BadRequest(tr('Country code: two Latin letters', 'Код країни — дві латинські літери'))
+        raise BadRequest(tr('Country code: two Latin letters'))
     cfg['country'] = cc
     try:
         cfg['wan_ifs'] = sorted({int(x) for x in (b.get('wan_ifs') or []) if 0 <= int(x) < 2**32})
@@ -1189,13 +1192,13 @@ def device_from_body(b):
             if cfg[k] is not None and abs(cfg[k]) > lim:
                 raise ValueError
     except (TypeError, ValueError):
-        raise BadRequest(tr('Interfaces are whole numbers; latitude/longitude are numbers within ±90/±180', 'Інтерфейси — цілі числа; широта/довгота — числа в межах ±90/±180'))
+        raise BadRequest(tr('Interfaces are whole numbers; latitude/longitude are numbers within ±90/±180'))
     pubs = []
     for x in (b.get('public_ips') or [])[:16]:
         try:
             pubs.append(str(ipaddress.ip_address(str(x).strip())))
         except ValueError:
-            raise BadRequest(tr(f'Invalid public IP: {x}', f'Некоректна публічна IP: {x}'))
+            raise BadRequest(tr('Invalid public IP: {ip}', ip=x))
     cfg['public_ips'] = pubs
     old = exporters_cfg(raw=True).get(ip, {})
     for k in ('if_names', 'if_addrs'):
@@ -1204,20 +1207,19 @@ def device_from_body(b):
     return ip, cfg
 
 
-SNMP_FIELDS = {'version': ('SNMP version', 'Версія SNMP'), 'host': ('SNMP address', 'Адреса SNMP'), 'port': ('SNMP port', 'Порт SNMP'),
-               'community': ('Community: 1–64 characters', 'Community: 1–64 символи'), 'user': ('SNMPv3 user: 1–32 characters', 'Користувач SNMPv3: 1–32 символи'),
-               'level': ('Security level', 'Рівень безпеки'), 'auth_proto': ('Authentication protocol', 'Протокол автентифікації'),
-               'auth_pass': ('Authentication password: 8–64 characters', 'Пароль автентифікації: 8–64 символи'), 'priv_proto': ('Privacy protocol', 'Протокол шифрування'),
-               'priv_pass': ('Privacy password: 8–64 characters', 'Пароль шифрування: 8–64 символи')}
+SNMP_FIELDS = {'version': N_('SNMP version'), 'host': N_('SNMP address'), 'port': N_('SNMP port'),
+               'community': N_('Community: 1–64 characters'), 'user': N_('SNMPv3 user: 1–32 characters'),
+               'level': N_('Security level'), 'auth_proto': N_('Authentication protocol'),
+               'auth_pass': N_('Authentication password: 8–64 characters'), 'priv_proto': N_('Privacy protocol'),
+               'priv_pass': N_('Privacy password: 8–64 characters')}
 
 
 def snmp_from_body(ip, b):
     try:
         return snmp.settings_from(b, snmp.load_settings().get(ip))
     except ValueError as e:
-        en, uk = SNMP_FIELDS.get(str(e), (str(e), str(e)))
-        raise BadRequest(tr(f'{en}: invalid value (no spaces at the ends, no quotes at the start, no control characters)',
-                            f'{uk}: некоректне значення (без пробілів на краях, лапок на початку і керівних символів)'))
+        field = tr(SNMP_FIELDS[str(e)]) if str(e) in SNMP_FIELDS else str(e)
+        raise BadRequest(tr('{field}: invalid value (no spaces at the ends, no quotes at the start, no control characters)', field=field))
 
 
 def post_device_save(body, user):
@@ -1236,7 +1238,7 @@ def device_ip(body):
     try:
         return str(ipaddress.ip_address(str(body.get('ip', '')).strip()))
     except ValueError:
-        raise BadRequest(tr('Invalid device IP address', 'Некоректна IP-адреса пристрою'))
+        raise BadRequest(tr('Invalid device IP address'))
 
 
 def post_snmp_test(body, user):
@@ -1253,7 +1255,7 @@ def post_snmp_poll(body, user):
     """Poll a device now with its stored settings."""
     ip = device_ip(body)
     if not snmp.load_settings().get(ip, {}).get('enabled'):
-        raise BadRequest(tr('SNMP is off for this device', 'Для цього пристрою SNMP вимкнено'))
+        raise BadRequest(tr('SNMP is off for this device'))
     snmp.poll_and_store(ip)
     NAMES.reload()
     return {'ok': True, 'snmp': snmp_status(ip, snmp.load_settings(), snmp.load_data())}
@@ -1263,33 +1265,33 @@ def post_device_interfaces(body, user):
     try:
         ip = str(ipaddress.ip_address(str(body.get('ip', '')).strip()))
     except ValueError:
-        raise BadRequest(tr('Invalid device IP address', 'Некоректна IP-адреса пристрою'))
+        raise BadRequest(tr('Invalid device IP address'))
     items = body.get('interfaces')
     if not isinstance(items, list) or len(items) > 1024:
-        raise BadRequest(tr('A list of interfaces is expected', 'Очікується список інтерфейсів'))
+        raise BadRequest(tr('A list of interfaces is expected'))
     names, addrs, wan, local = {}, {}, [], None
     for it in items:
         try:
             idx = int(it.get('index'))
         except (TypeError, ValueError, AttributeError):
-            raise BadRequest(tr('The interface index must be a number', 'Індекс інтерфейсу має бути числом'))
+            raise BadRequest(tr('The interface index must be a number'))
         if not 0 <= idx < 2**32:
-            raise BadRequest(tr('Interface index out of range', 'Індекс інтерфейсу поза межами'))
+            raise BadRequest(tr('Interface index out of range'))
         name = str(it.get('name') or '').strip()
         if len(name) > 32 or any(ord(ch_) < 32 for ch_ in name):
-            raise BadRequest(tr(f'Interface {idx} name: up to 32 characters, no control characters', f'Назва інтерфейсу {idx}: до 32 символів, без керівних символів'))
+            raise BadRequest(tr('Interface {idx} name: up to 32 characters, no control characters', idx=idx))
         if name:
             names[str(idx)] = name
         raw = it.get('addrs') or []
         if isinstance(raw, str):
             raw = raw.replace(',', ' ').split()
         if not isinstance(raw, list) or len(raw) > 8:
-            raise BadRequest(tr(f'Interface {idx}: up to 8 addresses', f'Інтерфейс {idx}: до 8 адрес'))
+            raise BadRequest(tr('Interface {idx}: up to 8 addresses', idx=idx))
         try:
             # 'a.b.c.d/nn' keeps its prefix (interface address with mask), a bare address stays bare
             ok = [str(ipaddress.ip_interface(a) if '/' in a else ipaddress.ip_address(a)) for a in (str(x).strip() for x in raw) if a]
         except ValueError as e:
-            raise BadRequest(tr(f'Interface {idx}: invalid address ({e})', f'Інтерфейс {idx}: некоректна адреса ({e})'))
+            raise BadRequest(tr('Interface {idx}: invalid address ({error})', idx=idx, error=e))
         if ok:
             addrs[str(idx)] = ok
         role = it.get('role', 'lan')
@@ -1297,10 +1299,10 @@ def post_device_interfaces(body, user):
             wan.append(idx)
         elif role == 'local':
             if local is not None:
-                raise BadRequest(tr('Only one interface can have the role «the device itself»', 'Роль «сам пристрій» може мати лише один інтерфейс'))
+                raise BadRequest(tr('Only one interface can have the role «the device itself»'))
             local = idx
         elif role != 'lan':
-            raise BadRequest(tr('Role: lan, wan or local', 'Роль: lan, wan або local'))
+            raise BadRequest(tr('Role: lan, wan or local'))
     merged = exporters_cfg(raw=True).get(ip, {})
     entry = load_ui_exporter(ip)
     entry.update({'if_names': names, 'if_addrs': addrs, 'wan_ifs': sorted(set(wan)), 'local_if': local})
@@ -1313,7 +1315,7 @@ def post_device_interfaces(body, user):
 def post_device_delete(body, user):
     ip = str(body.get('ip', ''))
     if ip not in exporters_cfg():
-        raise BadRequest(tr('The device is not configured', 'Пристрій не налаштований'))
+        raise BadRequest(tr('The device is not configured'))
     save_ui_exporter(ip, None)
     snmp.save_settings(ip, None)
     NAMES.reload()
@@ -1443,7 +1445,7 @@ class H(BaseHTTPRequestHandler):
                 return self.json(200, edition_info(admin=AUTH.users[user]['role'] == 'admin'))
             if u.path in ADMIN_GET:
                 if AUTH.users[user]['role'] != 'admin':
-                    return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
+                    return self.json(403, {'error': tr('Administrator rights required')})
                 if u.path == '/api/events/config':
                     return self.json(200, get_events_config())
                 if u.path == '/api/notify':
@@ -1528,7 +1530,7 @@ class H(BaseHTTPRequestHandler):
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
             if AUTH.users[user]['role'] != 'admin':
-                return self.json(403, {'error': tr('Administrator rights required', 'Потрібні права адміністратора')})
+                return self.json(403, {'error': tr('Administrator rights required')})
             res = admin_routes[u.path]()
             return self.json(200, res if isinstance(res, dict) else {'ok': True})
         except AuthError as e:
@@ -1537,7 +1539,7 @@ class H(BaseHTTPRequestHandler):
             return self.json(400, {'error': str(e)})
         except OSError as e:
             print(f'[flowtrack-api] POST {u.path}: {e}', flush=True)
-            return self.json(500, {'error': tr('could not save', 'не вдалося зберегти')})
+            return self.json(500, {'error': tr('could not save')})
 
 
 _HOST_RE = re.compile(r'^[A-Za-z0-9.\-]+$|^\[[0-9A-Fa-f:.]+\]$')

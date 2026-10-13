@@ -4,6 +4,7 @@ import contextlib
 import ipaddress
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -92,17 +93,89 @@ def load_json(name, default):
 
 
 # ---------------------------------------------------------------- language
-# Texts shown to people come in English and Ukrainian: tr('English', 'Українська'). The web server sets the
-# language per request from the ft_lang cookie; everything else (logs, stored data) is English.
+# Texts shown to people are written in English: tr('English text'). Other languages are the dictionaries of the web UI,
+# web/i18n/<code>.json ("English text": "translation"); a text missing there stays English. {name} placeholders take
+# their values from keyword arguments: tr('not a port: {port}', port=p). A text with a number has both English forms:
+# trn(n, '{n} day', '{n} days') (the latter is the key; the dictionary gives the forms of its language as
+# {"one": …, "few": …, "many": …, "other": …} or one text). The same English text that needs different translations
+# gets a context prefix: tr('button::Sign in'). The web server sets the language per request from the ft_lang cookie;
+# everything else (logs, stored data) is English.
+I18N_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web', 'i18n')
 _lang = threading.local()
+_dicts = {}
+_CTX = re.compile(r'^[a-z]+::')
+_PLACE = re.compile(r'\{(\w+)\}')
+
+
+def _dict(lang):
+    if lang not in _dicts:
+        try:
+            with open(os.path.join(I18N_DIR, lang + '.json'), encoding='utf-8') as f:
+                _dicts[lang] = json.load(f)
+        except (OSError, ValueError):
+            _dicts[lang] = None
+    return _dicts[lang]
+
+
+def languages():
+    """[[code, own name], …]: English and every dictionary, by name."""
+    out = []
+    for f in sorted(os.listdir(I18N_DIR)) if os.path.isdir(I18N_DIR) else []:
+        code = f[:-5]
+        if f.endswith('.json') and re.fullmatch(r'[a-z]{2,3}', code) and _dict(code):
+            out.append([code, _dict(code).get('@name', code)])
+    return [['en', 'English']] + sorted(out, key=lambda x: x[1])
+
+
+def known_lang(lang):
+    return isinstance(lang, str) and (lang == 'en' or bool(re.fullmatch(r'[a-z]{2,3}', lang) and _dict(lang)))
 
 
 def set_lang(lang):
-    _lang.value = 'uk' if lang == 'uk' else 'en'
+    _lang.value = lang if known_lang(lang) else 'en'
 
 
-def tr(en, uk):
-    return uk if getattr(_lang, 'value', 'en') == 'uk' else en
+def get_lang():
+    return getattr(_lang, 'value', 'en')
+
+
+def _fill(s, kw):
+    return _PLACE.sub(lambda m: str(kw[m.group(1)]) if m.group(1) in kw else m.group(0), s)
+
+
+def N_(en):
+    """Marks an English text for the dictionaries when tr() gets it later from a variable."""
+    return en
+
+
+def tr(en, **kw):
+    d = _dict(get_lang()) if get_lang() != 'en' else None
+    s = d[en] if d and isinstance(d.get(en), str) else _CTX.sub('', en)
+    return _fill(s, kw) if kw else s
+
+
+def _plural(lang, n):
+    """CLDR plural category of a whole number; add a language here when its dictionary has forms beyond one/other."""
+    if not isinstance(n, int):
+        return 'other'
+    if lang in ('uk', 'ru', 'be'):
+        return 'one' if n % 10 == 1 and n % 100 != 11 else 'few' if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else 'many'
+    if lang == 'pl':
+        return 'one' if n == 1 else 'few' if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else 'many'
+    return 'one' if n == 1 else 'other'
+
+
+def trn(count, one, other, **kw):
+    """{n} is the count unless given (e.g. n=f'{count:,}')."""
+    lang = get_lang(); d = _dict(lang) if lang != 'en' else None
+    t = d.get(other) if d else None
+    if t is None:
+        s = one if count == 1 else other
+    elif isinstance(t, str):
+        s = t
+    else:
+        s = t.get(_plural(lang, count)) or t.get('other') or other
+    return _fill(s, {'n': count, **kw})
 
 
 # ---------------------------------------------------------------- listening sockets
