@@ -499,3 +499,5 @@ table.evr a{color:var(--blue-hi);font-weight:700;text-decoration:none}
 .ntseg{margin-bottom:14px}
 .ntshared{margin-top:16px;padding-top:16px;border-top:1px solid var(--edge)}
 .form .chk:has(input:disabled){opacity:.45}
+.protos{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 2px}
+.protos .seg{flex-wrap:wrap}

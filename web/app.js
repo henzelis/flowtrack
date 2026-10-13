@@ -1578,13 +1578,50 @@ function vEventsCfg(){
     err.textContent = ''; ok.hidden = true;
     try { show({...await apiPost('events/config', {}), notify:await get('api/notify')}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
 }
+// How each vendor exports flows: the protocols it can send, in the order offered (the first is the recommended one),
+// each with the configuration for the device. FlowTrack recognises the protocol of every packet by itself; the choice
+// picks the instructions and lets the Devices page warn when something else arrives.
+const PROTO_NAME = {netflow5:'NetFlow v5', netflow9:'NetFlow v9', ipfix:'IPFIX', sflow:'sFlow v5'};
+const PROTO_READY = ['netflow5', 'netflow9', 'ipfix'];       // what the collector decodes (sFlow comes next)
+const ciscoFnf = proto => (ip, port) => `flow record FT-REC\n match ipv4 source address\n match ipv4 destination address\n match ipv4 protocol\n match transport source-port\n match transport destination-port\n match interface input\n match flow direction\n collect interface output\n collect counter bytes long\n collect counter packets long\n collect timestamp sys-uptime first\n collect timestamp sys-uptime last\nflow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n export-protocol ${proto}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record FT-REC\n cache timeout active 60\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON input\n ip flow monitor FT-MON output`;
+const juniper = (tpl, kw) => (ip, port) => `set services flow-monitoring ${tpl} template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} ${kw} template FT`;
+const vyos = v => (ip, port) => `set system flow-accounting netflow version ${v}\nset system flow-accounting netflow server ${ip} port ${port}\nset system flow-accounting netflow timeout expiry-interval 60\nset system flow-accounting interface eth0\n# ${T('VyOS 1.4 and newer: set system flow-accounting netflow interface eth0')}\ncommit; save`;
+const huawei = v => (ip, port) => `ip netstream timeout active 1\nip netstream export version ${v}\nip netstream export source <${T('address of this device')}>\nip netstream export host ${ip} ${port}\n# ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/1\n ip netstream inbound\n ip netstream outbound`;
+const steps = list => (ip, port) => list(ip, port).map((x, i) => `${i + 1}. ${x}`).join('\n');
 const VENDORS = {
-  Fortinet:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`,
-  Cisco:(ip, port) => `flow record FT-REC\n match ipv4 source address\n match ipv4 destination address\n match ipv4 protocol\n match transport source-port\n match transport destination-port\n match interface input\n match flow direction\n collect interface output\n collect counter bytes long\n collect counter packets long\n collect timestamp sys-uptime first\n collect timestamp sys-uptime last\nflow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record FT-REC\n cache timeout active 60\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON input\n ip flow monitor FT-MON output`,
-  MikroTik:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=9`,
-  Juniper:(ip, port) => `set services flow-monitoring version-ipfix template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} version-ipfix template FT`,
-  'Linux / pmacct':(ip, port) => `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: 10\npcap_interface: eth0`,
+  Fortinet:{netflow9:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`},
+  Cisco:{netflow9:ciscoFnf('netflow-v9'), ipfix:ciscoFnf('ipfix'),
+    netflow5:(ip, port) => `! ${T('classic NetFlow (older IOS): IPv4 only')}\nip flow-export version 5\nip flow-export destination ${ip} ${port}\nip flow-cache timeout active 1\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow ingress\n ip flow egress`},
+  MikroTik:{netflow9:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=9`,
+    ipfix:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=ipfix`,
+    netflow5:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=5`},
+  Juniper:{ipfix:juniper('version-ipfix', 'version-ipfix'), netflow9:juniper('version9', 'version9')},
+  'Palo Alto':{netflow9:steps((ip, port) => [T('Device → Server Profiles → NetFlow → Add: name FlowTrack, active timeout 1 min, template refresh 1 min.'),
+    T('Servers → Add: address {ip}, port {port}.', {ip, port}), T('Network → Interfaces → each interface to watch → Advanced → NetFlow Profile: FlowTrack.'), T('Commit.')])},
+  'Check Point':{netflow9:(ip, port) => `# Gaia clish\nadd netflow collector ip ${ip} port ${port} export-format Netflow_V9\nsave config`,
+    netflow5:(ip, port) => `# Gaia clish\nadd netflow collector ip ${ip} port ${port} export-format Netflow_V5\nsave config`},
+  SonicWall:Object.fromEntries([['ipfix', 'IPFIX'], ['netflow9', 'NetFlow version-9'], ['netflow5', 'NetFlow version-5']].map(([k, l]) => [k, steps((ip, port) => [
+    T('Device → AppFlow → Flow Reporting (older SonicOS: Log → Flow Reporting).'), T('Send flows to an external collector: on; protocol: {proto}.', {proto: l}),
+    T('External collector: {ip}, port {port}.', {ip, port}), T('Report on the interfaces to watch (WAN and LAN), then Accept.')])])),
+  Huawei:{netflow9:huawei(9), netflow5:huawei(5)},
+  Arista:{ipfix:(ip, port) => `flow tracking sampled\n   sample 1024\n   tracker FT\n      exporter FT\n         collector ${ip} port ${port}\n         local interface Management1\n   no shutdown\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface Ethernet1\n   flow tracker sampled FT`},
+  'VyOS / EdgeOS':{netflow9:vyos(9), ipfix:vyos(10), netflow5:vyos(5)},
+  'pfSense / OPNsense':Object.fromEntries([['netflow9', 'v9', '9'], ['ipfix', null, '10'], ['netflow5', 'v5', '5']].map(([k, opn, pf]) => [k, steps((ip, port) => [
+    ...(opn ? [T('OPNsense: Reporting → NetFlow: listening interfaces (WAN and LAN), version {v}, destination {ip}:{port}, Apply.', {v: opn, ip, port})] : []),
+    T('pfSense: install the softflowd package; Services → softflowd: interfaces (WAN and LAN), host {ip}, port {port}, NetFlow version {v}, Save.', {ip, port, v: pf})])])),
+  'Linux / pmacct':Object.fromEntries([['ipfix', 10], ['netflow9', 9], ['netflow5', 5]].map(([k, v]) => [k, (ip, port) =>
+    `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: ${v}\npcap_interface: eth0\n# ${T('or softflowd')}: softflowd -i eth0 -n ${ip}:${port} -v ${v} -t maxlife=60`])),
+  Other:Object.fromEntries(['netflow9', 'ipfix', 'netflow5'].map(k => [k, steps((ip, port) => [
+    T('Flow export ({proto}) to {ip}, UDP port {port}.', {proto: PROTO_NAME[k], ip, port}), T('Active timeout 60 s, inactive timeout 15 s; templates resent at least every minute.'),
+    T('On every interface to watch (WAN and LAN), ingress — or ingress and egress when the record carries the flow direction.'),
+    T('Fields: addresses, ports, protocol, input and output interface, bytes, packets, first and last time.')])])),
+  // sFlow only, until the collector decodes it: kept here, not offered yet
+  'HPE Aruba':{sflow:null},
 };
+// the protocols FlowTrack takes from this vendor now, recommended first; vendors with none are not offered yet
+const vendorProtos = v => Object.keys(VENDORS[v] || {}).filter(p => PROTO_READY.includes(p) && VENDORS[v][p]);
+const VENDOR_LIST = () => Object.keys(VENDORS).filter(v => vendorProtos(v).length);
+const vendorLabel = v => v === 'Other' ? T('Other') : v;
 // SNMP on the device, from the values in the form (stored secrets are not sent to the browser: placeholders then)
 const SNMP_AUTH = ['MD5', 'SHA', 'SHA-224', 'SHA-256', 'SHA-384', 'SHA-512'], SNMP_PRIV = ['DES', 'AES', 'AES-192', 'AES-256'];
 const SNMP_LEVELS = {noAuthNoPriv:T('no authentication, no privacy'), authNoPriv:T('authentication only'), authPriv:T('authentication + privacy')};
@@ -1611,6 +1648,9 @@ const SNMP_VENDORS = {
   Juniper:(ip, s) => (s.version === '3'
     ? `set snmp v3 usm local-engine user ${snmpVal(s, 'user', 'user')} ${s.level === 'noAuthNoPriv' ? 'authentication-none' : `authentication-${s.auth_proto.toLowerCase().replace('-', '')} authentication-password "${snmpVal(s, 'auth_pass', 'auth-password')}"`}${s.level === 'authPriv' ? `\nset snmp v3 usm local-engine user ${snmpVal(s, 'user', 'user')} privacy-${s.priv_proto === 'DES' ? 'des' : 'aes128'} privacy-password "${snmpVal(s, 'priv_pass', 'priv-password')}"` : ''}\nset snmp v3 vacm security-to-group security-model usm security-name ${snmpVal(s, 'user', 'user')} group flowtrack\nset snmp v3 vacm access group flowtrack default-context-prefix security-model usm security-level ${{noAuthNoPriv:'none', authNoPriv:'authentication', authPriv:'privacy'}[s.level]} read-view all\nset snmp view all oid .1 include`
     : `set snmp community "${snmpVal(s, 'community', 'community')}" authorization read-only\nset snmp community "${snmpVal(s, 'community', 'community')}" clients ${ip}/32`),
+  Other:(ip, s) => s.version === '3'
+    ? `# ${T('SNMPv3, read-only, from {ip}: user {user}, level {level}', {ip, user: snmpVal(s, 'user', 'user'), level: s.level})}` + (s.level !== 'noAuthNoPriv' ? `\n# ${T('authentication')} ${s.auth_proto}` : '') + (s.level === 'authPriv' ? `, ${T('privacy')} ${s.priv_proto}` : '')
+    : `# ${T('SNMP v2c, read-only, from {ip}: community {community}', {ip, community: snmpVal(s, 'community', 'community')})}`,
   'Linux / pmacct':(ip, s) => s.version === '3'
     ? `# /etc/snmp/snmpd.conf\nagentAddress udp:${s.port || 161}\nrouser ${snmpVal(s, 'user', 'user')} ${{noAuthNoPriv:'noauth', authNoPriv:'auth', authPriv:'priv'}[s.level]}\n# ${T('stop snmpd, add the user, start snmpd')}:\n# net-snmp-create-v3-user -ro${s.level !== 'noAuthNoPriv' ? ` -a ${s.auth_proto} -A '${snmpVal(s, 'auth_pass', 'auth-password')}'` : ''}${s.level === 'authPriv' ? ` -x ${s.priv_proto} -X '${snmpVal(s, 'priv_pass', 'priv-password')}'` : ''} ${snmpVal(s, 'user', 'user')}`
     : `# /etc/snmp/snmpd.conf\nagentAddress udp:${s.port || 161}\nrocommunity ${snmpVal(s, 'community', 'community')} ${ip}`,
@@ -1779,10 +1819,13 @@ function vDevices(){
     });
     return `<div class="tw"><table><thead><tr><th>${T('Status')}</th><th>${T('Device')}</th><th>${T('Vendor / model')}</th><th>${T('Protocol')}</th><th>${T('Site')}</th><th>${T('Export IP')}</th><th class="num">${T('Records/s')}</th><th class="num">${T('Templates')}</th><th>${T('Sampling')}</th><th class="num">${T('Loss')}</th><th class="num">${T('No template')}</th>${isAdmin() ? '<th></th>' : ''}</tr></thead><tbody>
       ${d.map(x => { const never = !x.last, stale = Date.now() / 1000 - x.last > 180, st = never ? 'warn' : stale ? 'crit' : x.loss_pct > 0.5 ? 'warn' : '';
-        return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? T('has not sent data yet') : stale ? T('no data for over 3 min') : T('online')}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ` <span class="tag">${T('not described')}</span>`}${snmpTag(x)}${dupPill(x)}${repeatPill(x)}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? T('waiting') : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
+        return `<tr class="click" data-pick="${esc(x.ip)}"><td><span class="dot ${st}" title="${never ? T('has not sent data yet') : stale ? T('no data for over 3 min') : T('online')}"></span></td><td><b class="mono">${esc(x.name)}</b>${x.configured ? '' : ` <span class="tag">${T('not described')}</span>`}${protoPill(x)}${snmpTag(x)}${dupPill(x)}${repeatPill(x)}</td><td>${esc(x.vendor || '—')}<br><span class="nat">${esc(x.model)}</span></td><td><span class="tag">${never ? T('waiting') : esc(x.proto)}</span></td><td>${esc(x.site || '—')}</td><td class="ipl">${esc(x.ip)}</td>
           <td class="num mono">${x.rps}</td><td class="num mono">${x.templates}</td><td class="mono">${esc(x.sampling)}</td><td class="num mono" style="color:${x.loss_pct ? 'var(--warn)' : 'inherit'}">${x.loss_pct}%</td><td class="num mono">${x.no_template}</td>
           ${isAdmin() ? `<td><button class="btn" data-edit="${esc(x.ip)}">${T('Edit')}</button></td>` : ''}</tr>`; }).join('') || `<tr><td colspan="12"><div class="empty">${T('No device has sent data yet')}</div></td></tr>`}</tbody></table></div>${collectorBar(res.collector, res.listen)}<p class="note">${T('Click a row to see the device’s interfaces below. To filter by device, use the device list at the top.')}${isAdmin() ? T(' The collector picks up description changes within a minute.') : ''}</p>`; });
 }
+// the protocol chosen in the description and the one that arrives differ
+const protoPill = x => x.config && x.config.protocol && x.detected && x.config.protocol !== x.detected
+  ? ` <span class="pill warn" title="${T('The device sends {got}, while {want} is chosen in its description: change the export on the device, or the protocol in the description.', {got: PROTO_NAME[x.detected] || x.detected, want: PROTO_NAME[x.config.protocol] || x.config.protocol})}">${T('expected {proto}', {proto: PROTO_NAME[x.config.protocol] || x.config.protocol})}</span>` : '';
 // duplicates: removed ones (direction field present) or a warning when the exporter reports flows twice
 const dupPill = x => x.dup_pct >= 2
   ? ` <span class="pill warn" title="${T('{pct}% of the records in 15 min arrive twice. The device monitors both directions on several interfaces but sends no direction field, so the copies cannot be told apart: add the flow direction field to the exported record, or monitor ingress only.', {pct: x.dup_pct})}">${T('duplicates {pct}%', {pct: x.dup_pct})}</span>`
@@ -1897,7 +1940,10 @@ function openModal(title, sub, body, wide){
 const formErr = (id, msg) => { const el = document.getElementById(id); if (el) { el.textContent = msg || ''; el.hidden = !msg; } };
 function openDevice(dev){
   const c = dev ? dev.config || {} : {}, editing = !!dev, st = (dev && dev.snmp) || {};
-  let vendor = c.vendor && VENDORS[c.vendor] ? c.vendor : (c.vendor || 'Fortinet');
+  let vendor = VENDOR_LIST().includes(c.vendor) ? c.vendor : c.vendor ? 'Other' : 'Fortinet';
+  // the protocol: as described, else what the device sends now, else the vendor's recommended one
+  const fitProto = p => vendorProtos(vendor).includes(p) ? p : vendorProtos(vendor)[0];
+  let proto = fitProto(c.protocol || (dev && dev.detected) || '');
   const [me, nfPort] = collectorTarget();
   // SNMP in the form; the secrets the server keeps never come back (has_* says one is stored: empty = keep it)
   const sn = {enabled:!!st.enabled, version:st.version || '2c', host:st.host || '', port:st.port || 161, community:'', user:st.user || '', level:st.level || 'authPriv',
@@ -1906,8 +1952,12 @@ function openDevice(dev){
   const SN_IDS = {sHost:'host', sPort:'port', sComm:'community', sUser:'user', sAuthP:'auth_pass', sPrivP:'priv_pass', sVer:'version', sLevel:'level', sAuth:'auth_proto', sPriv:'priv_proto'};
   const syncSn = () => { const on = document.getElementById('sOn'); if (!on) return; sn.enabled = on.checked;
     Object.entries(SN_IDS).forEach(([id, k]) => { const el = document.getElementById(id); if (el) sn[k] = k.endsWith('pass') || k === 'community' ? el.value : el.value.trim(); }); };
-  const code = () => { const v = VENDORS[vendor] ? vendor : 'Fortinet', rem = v === 'Cisco' ? '!' : '#';
-    return VENDORS[v](me, nfPort) + (sn.enabled ? `\n\n${rem} ---- SNMP ${sn.version === '3' ? 'v3' : 'v2c'} ----\n` + SNMP_VENDORS[v](me, sn) : ''); };
+  const code = () => { const rem = ['Cisco', 'Arista'].includes(vendor) ? '!' : '#';
+    return VENDORS[vendor][proto](me, nfPort) + (sn.enabled ? `\n\n${rem} ---- SNMP ${sn.version === '3' ? 'v3' : 'v2c'} ----\n` + (SNMP_VENDORS[vendor] || SNMP_VENDORS.Other)(me, sn) : ''); };
+  const protoNote = () => !editing || !dev.detected ? '' : dev.detected === proto ? `<span class="nat">${T('the device sends it now')}</span>`
+    : `<span class="pill warn">${T('the device sends {proto} now', {proto: PROTO_NAME[dev.detected] || dev.detected})}</span>`;
+  const protoSeg = () => `<div class="protos"><span class="nat">${T('Export protocol')}</span><div class="seg" id="protoSeg" role="group">${vendorProtos(vendor).map((p, i) =>
+    `<button type="button" data-v="${p}" aria-pressed="${p === proto}"${i ? '' : ` title="${T('recommended for this vendor')}"`}>${PROTO_NAME[p]}${i ? '' : ' ★'}</button>`).join('')}</div> <span id="protoNote">${protoNote()}</span></div>`;
   const opt = (list, cur) => list.map(([k, l]) => `<option value="${esc(k)}"${k === cur ? ' selected' : ''}>${esc(l)}</option>`).join('');
   const kept = T('stored — leave empty to keep');
   const pw = (id, k, label) => `<label>${label}<input id="${id}" type="password" autocomplete="new-password" value="${esc(sn[k])}" placeholder="${st['has_' + k] ? kept : ''}"></label>`;
@@ -1925,7 +1975,8 @@ function openDevice(dev){
     if (!picked) [sn.auth_proto, sn.priv_proto] = snmpDefaults(VENDORS[vendor] ? vendor : 'Fortinet');
     snmpFit(VENDORS[vendor] ? vendor : 'Fortinet', sn);
     const m = openModal(editing ? T('Device {name}', {name: dev.name}) : T('Connect a device'), editing ? esc(dev.ip) : T('Set up export on the device and describe it here'), `
-      <div class="vendors" role="group">${Object.keys(VENDORS).map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(k)}</button>`).join('')}</div>
+      <div class="vendors" role="group">${VENDOR_LIST().map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(vendorLabel(k))}</button>`).join('')}</div>
+      ${protoSeg()}
       <div class="cols"><div><h4>${T('1. Configuration on the device')}</h4><pre class="codebox" id="devCode">${esc(code())}</pre></div>
       <form class="form" id="devForm" autocomplete="off"><h4 style="margin:0">${T('2. Description for FlowTrack')}</h4>
         <div class="two"><label>${T('IP the export comes from')}<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>${T('Name')}<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
@@ -1938,7 +1989,10 @@ function openDevice(dev){
         <div class="snmpbox" id="sBox"${sn.enabled ? '' : ' hidden'}>${snmpBox()}</div>
         <p class="err" id="fErr" hidden></p>
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${editing ? T('Save') : T('Add device')}</button>${editing && dev.configured ? `<button class="btn" type="button" id="fDel">${T('Delete description')}</button>` : ''}<span class="nat" id="fDelAsk" hidden>${T('Really delete?')} <button class="btn" type="button" id="fDelYes">${T('Yes, delete')}</button></span></div></form></div>`, true);
-    m.root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; keep(); draw(); restore(); });
+    m.root.querySelectorAll('.vendors button').forEach(b => b.onclick = () => { vendor = b.dataset.v; proto = fitProto(proto); keep(); draw(); restore(); });
+    m.root.querySelectorAll('#protoSeg button').forEach(b => b.onclick = () => { proto = b.dataset.v;
+      m.root.querySelectorAll('#protoSeg button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+      document.getElementById('protoNote').innerHTML = protoNote(); redraw(); });
     const list = id => document.getElementById(id).value.split(',').map(x => x.trim()).filter(Boolean);
     // SNMP: the version, level and checkbox change the fields; every change updates the device configuration
     const box = document.getElementById('sBox'), redraw = () => { document.getElementById('devCode').textContent = code(); };
@@ -1957,7 +2011,7 @@ function openDevice(dev){
     document.getElementById('sOn').onchange = e => { syncSn(); box.hidden = !e.target.checked; redraw(); };
     document.getElementById('devForm').addEventListener('submit', async e => { e.preventDefault(); formErr('fErr'); syncSn();
       try {
-        await apiPost('devices/save', {ip:document.getElementById('fIp').value.trim(), name:document.getElementById('fName').value, vendor, model:document.getElementById('fModel').value,
+        await apiPost('devices/save', {ip:document.getElementById('fIp').value.trim(), name:document.getElementById('fName').value, vendor, protocol:proto, model:document.getElementById('fModel').value,
           sampling:document.getElementById('fSamp').value, wan_ifs:list('fWan'), local_if:document.getElementById('fLocal').value.trim(), public_ips:list('fPub'),
           city:document.getElementById('fCity').value, country:document.getElementById('fCc').value, lat:document.getElementById('fLat').value.trim(), lon:document.getElementById('fLon').value.trim(),
           snmp:sn});

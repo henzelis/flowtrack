@@ -950,6 +950,7 @@ def api_devices(q):
         recs, span = int(s['records']), max(60, int(s['span']))
         out.append({'ip': s['exporter'], 'name': c.get('name', s['exporter']), 'vendor': c.get('vendor', ''), 'model': c.get('model', ''),
                     'site': ', '.join(x for x in (c.get('city', ''), c.get('country', '')) if x), 'proto': {5: 'NetFlow v5', 9: 'NetFlow v9', 10: 'IPFIX'}.get(int(s['version']), f"v{s['version']}"),
+                    'detected': PROTOCOLS.get(int(s['version']), '') if int(s['last']) else '',
                     'rps': round(recs / span, 1), 'packets': int(s['packets']), 'records': recs, 'lost': int(s['lost']),
                     'loss_pct': round(100 * int(s['lost']) / max(1, int(s['packets']) + int(s['lost'])), 2), 'no_template': int(s['no_template']),
                     'errors': int(s['errors']), 'templates': int(s['templates']), 'last': int(s['last']),
@@ -958,7 +959,7 @@ def api_devices(q):
                     'direction_field': bool(s['exporter'] in dups and int(dups[s['exporter']]['with_dir'])),
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 and int(s['last']) > cfg_changed + 120 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
-                    'config': {k: c.get(k) for k in ('name', 'vendor', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
+                    'config': {k: c.get(k) for k in ('name', 'vendor', 'protocol', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'snmp': snmp_status(s['exporter'], sset, sdata),
                     'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}),
                                                 sdata.get(s['exporter']) if sset.get(s['exporter'], {}).get('enabled') else None)})
@@ -1184,6 +1185,9 @@ def _str(v, n, field):
     return v.strip()
 
 
+PROTOCOLS = {5: 'netflow5', 9: 'netflow9', 10: 'ipfix'}     # export version -> the protocol a description may expect
+
+
 def device_from_body(b):
     try:
         ip = str(ipaddress.ip_address(str(b.get('ip', '')).strip()))
@@ -1191,6 +1195,10 @@ def device_from_body(b):
         raise BadRequest(tr('Invalid exporter IP address'))
     cfg = {'name': _str(b.get('name'), 64, tr('name')) or ip, 'vendor': _str(b.get('vendor'), 64, tr('vendor')), 'model': _str(b.get('model'), 64, tr('model')),
            'city': _str(b.get('city'), 64, tr('city')), 'sampling': _str(b.get('sampling'), 16, tr('sampling')) or '1:1'}
+    proto = b.get('protocol') or ''
+    if proto not in ('', 'sflow', *PROTOCOLS.values()):
+        raise BadRequest(tr('Unknown export protocol'))
+    cfg['protocol'] = proto
     cc = _str(b.get('country'), 2, tr('country')).upper()
     if cc and not cc.isalpha():
         raise BadRequest(tr('Country code: two Latin letters'))

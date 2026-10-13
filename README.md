@@ -31,6 +31,11 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 - NetFlow v5, NetFlow v9 and IPFIX from exporters on IPv4 or IPv6 (the collector and the web
   interface listen on both). Templates are tracked per exporter and saved, so a collector restart does
   not drop the first minutes of data while waiting for the exporter to resend them.
+- The protocol of every packet is recognised by itself. *Settings → Devices → Connect a device* gives ready
+  configuration for Fortinet, Cisco, MikroTik, Juniper, Palo Alto, Check Point, SonicWall, Huawei, Arista,
+  VyOS / EdgeOS, pfSense / OPNsense, Linux (pmacct, softflowd) and any other exporter, per export protocol the
+  vendor offers (recommended one marked); the Devices page warns when a device sends another protocol than its
+  description expects.
 - Correct accounting of delta counters. FortiOS (like NetFlow v9/IPFIX in general) re-exports a long
   session every `active-flow-timeout`, and each export covers only its own interval — the next export's
   `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. Traffic is therefore the plain sum of records.
