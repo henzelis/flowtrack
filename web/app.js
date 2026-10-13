@@ -2,11 +2,17 @@
 // FlowTrack web UI — talks to /api/* (see api.py). No build step.
 
 // ===================== language =====================
-// English or Ukrainian. Every text is written in both languages side by side: T('English', 'Українська').
+// The code holds English only: T('English text'). Other languages are dictionaries web/i18n/<lang>.json
+// ("English text": "translation"), loaded by index.html before this file; a text missing there stays English.
+// {name} placeholders take their values from the second argument: T('Ignore {addr}?', {addr}).
+// Not moved to the dictionary yet: T('English', 'Українська').
 // The choice is kept in localStorage and in the ft_lang cookie (the API answers errors and events in it).
-const LANG = (() => { try { const s = localStorage.getItem('ft-lang'); if (s === 'en' || s === 'uk') return s; } catch (e) {}
-  return /^uk/i.test(navigator.language || '') ? 'uk' : 'en'; })();
-const T = (en, uk) => LANG === 'uk' ? uk : en;
+const LANG = window.FT_LANG || 'en', DICT = window.FT_DICT || {};
+const T = (en, a) => {
+  if (typeof a === 'string') return LANG === 'uk' ? a : en;
+  const s = Object.hasOwn(DICT, en) ? DICT[en] : en;
+  return a ? s.replace(/\{(\w+)\}/g, (m, k) => Object.hasOwn(a, k) ? String(a[k]) : m) : s;
+};
 const LOC = T('en-GB', 'uk-UA');
 document.documentElement.lang = LANG;
 document.cookie = `ft_lang=${LANG}; path=/; max-age=31536000; SameSite=Lax`;
@@ -1392,24 +1398,24 @@ function vGeo(){
 }
 // detections and anomalies: name, what triggers it, its thresholds (keys as in detect.KINDS)
 const EV_KINDS = () => ({
-  port_scan:[T('Port scan', 'Сканування портів'), T('one outside address calls many ports of ours, several of our management services, or one port on many of our addresses — within 10 min', 'одна зовнішня адреса звертається до багатьох наших портів, кількох сервісів керування або до одного порту на багатьох наших адресах — за 10 хв'),
-    {ports:T('ports', 'портів'), services:T('services', 'сервісів'), hosts:T('addresses', 'адрес')}],
-  brute_force:[T('Password guessing', 'Перебір паролів'), T('one address opens many sessions to a sensitive service (SSH, RDP, management) within 10 min', 'одна адреса відкриває багато сесій до чутливого сервісу (SSH, RDP, керування) за 10 хв'), {sessions:T('sessions / 10 min', 'сесій / 10 хв')}],
-  probes:[T('Probes of management services', 'Зондування сервісів керування'), T('one summary a day per sensitive service: how many outside addresses called it', 'один підсумок на добу для кожного чутливого сервісу: скільки зовнішніх адрес до нього зверталось'), {}],
-  heavy_client:[T('Aggressive client', 'Агресивний клієнт'), T('one address opens very many sessions to a public service (web) within 10 min', 'одна адреса відкриває дуже багато сесій до публічного сервісу (веб) за 10 хв'), {sessions:T('sessions / 10 min', 'сесій / 10 хв')}],
-  ddos:[T('DDoS / flood', 'DDoS / флуд'), T('minutes far above the usual peak (99th percentile of the week) and above a floor: new sessions to a service, inbound traffic, UDP reflection', 'хвилини, набагато вищі за звичайний пік (99-й перцентиль тижня) і за мінімум: нові сесії до сервісу, вхідний трафік, UDP-відбиття'),
-    {factor:T('× usual peak', '× звичайного піку'), min_sessions:T('sessions/min at least', 'сесій/хв щонайменше'), min_mbps:T('Mbit/s at least', 'Мбіт/с щонайменше'), refl_mbps:T('reflection, Mbit/s', 'відбиття, Мбіт/с'), minutes:T('minutes of 10', 'хвилин із 10')}],
-  inside_scan:[T('Inside host scans the internet', 'Внутрішній хост сканує інтернет'), T('a host of ours calls many addresses on one port, or many ports of one address, mostly without answer — a sign of malware', 'наш хост звертається до багатьох адрес на один порт або до багатьох портів однієї адреси, здебільшого без відповіді — ознака шкідливого ПЗ'),
-    {hosts:T('addresses', 'адрес'), hosts_busy:T('on web / DNS / NTP', 'для веб / DNS / NTP'), ports:T('ports', 'портів')}],
-  lateral_scan:[T('Scan inside the network', 'Сканування всередині мережі'), T('a host calls many hosts or ports of the local network without answer', 'хост звертається до багатьох хостів або портів локальної мережі без відповіді'), {hosts:T('hosts', 'хостів'), ports:T('ports', 'портів')}],
-  malware_contact:[T('Contact with malware infrastructure', 'Зв’язок з інфраструктурою шкідливого ПЗ'), T('a host of ours opens a connection to a botnet controller or a malware host (abuse.ch lists)', 'наш хост відкриває з’єднання з контролером ботнету або хостом шкідливого ПЗ (списки abuse.ch)'), {}],
-  listed_contact:[T('Contact with a listed address', 'Зв’язок з адресою зі списку'), T('a host of ours opens a connection to an address on another enabled reputation list', 'наш хост відкриває з’єднання з адресою з іншого увімкненого списку репутації'), {}],
-  listed_inbound:[T('Listed addresses calling us', 'Звернення адрес зі списків'), T('one summary a day: how many listed addresses called our services, by list', 'один підсумок на добу: скільки адрес зі списків зверталося до наших сервісів, за списками'), {}],
-  sustained_upload:[T('Sustained upload', 'Тривале вивантаження'), T('more than 5 Mbit/s to one address for 45 min out of 3 h', 'понад 5 Мбіт/с до однієї адреси 45 хв із 3 год'), {}],
-  burst:[T('Traffic burst', 'Сплеск трафіку'), T('5 minutes ×8 above the host’s daily median', '5 хвилин у ×8 вище за медіану хоста за добу'), {}],
-  new_country:[T('New destination', 'Новий напрямок'), T('a host contacts a country for the first time this week', 'хост уперше за тиждень звертається до країни'), {}],
+  port_scan:[T('Port scan'), T('one outside address calls many ports of ours, several of our management services, or one port on many of our addresses — within 10 min'),
+    {ports:T('ports'), services:T('services'), hosts:T('addresses')}],
+  brute_force:[T('Password guessing'), T('one address opens many sessions to a sensitive service (SSH, RDP, management) within 10 min'), {sessions:T('sessions / 10 min')}],
+  probes:[T('Probes of management services'), T('one summary a day per sensitive service: how many outside addresses called it'), {}],
+  heavy_client:[T('Aggressive client'), T('one address opens very many sessions to a public service (web) within 10 min'), {sessions:T('sessions / 10 min')}],
+  ddos:[T('DDoS / flood'), T('minutes far above the usual peak (99th percentile of the week) and above a floor: new sessions to a service, inbound traffic, UDP reflection'),
+    {factor:T('× usual peak'), min_sessions:T('sessions/min at least'), min_mbps:T('Mbit/s at least'), refl_mbps:T('reflection, Mbit/s'), minutes:T('minutes of 10')}],
+  inside_scan:[T('Inside host scans the internet'), T('a host of ours calls many addresses on one port, or many ports of one address, mostly without answer — a sign of malware'),
+    {hosts:T('addresses'), hosts_busy:T('on web / DNS / NTP'), ports:T('ports')}],
+  lateral_scan:[T('Scan inside the network'), T('a host calls many hosts or ports of the local network without answer'), {hosts:T('hosts'), ports:T('ports')}],
+  malware_contact:[T('Contact with malware infrastructure'), T('a host of ours opens a connection to a botnet controller or a malware host (abuse.ch lists)'), {}],
+  listed_contact:[T('Contact with a listed address'), T('a host of ours opens a connection to an address on another enabled reputation list'), {}],
+  listed_inbound:[T('Listed addresses calling us'), T('one summary a day: how many listed addresses called our services, by list'), {}],
+  sustained_upload:[T('Sustained upload'), T('more than 5 Mbit/s to one address for 45 min out of 3 h'), {}],
+  burst:[T('Traffic burst'), T('5 minutes ×8 above the host’s daily median'), {}],
+  new_country:[T('New destination'), T('a host contacts a country for the first time this week'), {}],
 });
-const SEV = () => ({crit:T('critical', 'критично'), warn:T('warning', 'увага'), info:T('info', 'інфо')});
+const SEV = () => ({crit:T('critical'), warn:T('warning'), info:T('info')});
 // stored times are UTC 'YYYY-MM-DD hh:mm:ss': local time, with the day when not today
 function evTime(s){
   if (!/^\d{4}-\d\d-\d\d \d\d:\d\d/.test(String(s))) return String(s);
@@ -1427,30 +1433,30 @@ function evRange(a, b){
 const evFilter = x => x.fk && x.fv ? [x.fk, x.fv] : x.ip ? ['ip', x.ip] : x.device ? ['device', x.device] : null;
 function vThreats(){
   const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies', 'Події та аномалії'), T('in the chosen period and filters · scans, password guessing and floods are checked every 10 minutes', 'за вибраний період і фільтри · сканування, перебір паролів і флуд перевіряються кожні 10 хвилин'))}<div id="alBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('search', T('What is watched', 'Що відстежується'), '', isAdmin() ? `<button class="btn" id="evCfg">${T('Configure', 'Налаштувати')}</button>` : '')}<div id="watchBox" class="loading"></div></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies'), T('in the chosen period and filters · scans, password guessing and floods are checked every 10 minutes'))}<div id="alBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('search', T('What is watched'), '', isAdmin() ? `<button class="btn" id="evCfg">${T('Configure')}</button>` : '')}<div id="watchBox" class="loading"></div></section></div>`;
   if (isAdmin()) document.getElementById('evCfg').onclick = () => { state.view = 'settings'; state.setTab = 'events'; render(); };
   const sevs = SEV(), kinds = EV_KINDS();
   section('alBox', async () => { const res = await api('alerts'), all = res.alerts, cur = state.evSev || 'all';
     const W = document.getElementById('watchBox');
     if (W) { W.classList.remove('loading'); W.innerHTML = `<div class="watch">${Object.entries(kinds).map(([k, [name, desc]]) => { const c = (res.watch || {})[k] || {};
-      return `<div class="${c.on === false ? 'off' : ''}"><b>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off', 'вимк.') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
-      <div><b>${T('Export and collector health', 'Стан експорту і колектора')}</b><span class="pill warn">${sevs.warn}</span><p>${T('lost packets, a collector falling behind, the edition limit, the license', 'втрачені пакети, колектор не встигає, ліміт редакції, ліцензія')}</p></div></div>`; }
-    const skip = (res.unfiltered || []).map(k => FILTER_LABEL[k] || k), note = skip.length ? `<p class="note evskip">${T('Not applied to events', 'До подій не застосовуються')}: ${esc(skip.join(', '))}</p>` : '';
-    if (!all.length) return note + `<div class="empty">${state.filters.length ? T('No events for these filters in this period', 'Подій за цими фільтрами в цьому періоді немає') : T('No events — all quiet', 'Подій немає — усе спокійно')}</div>`;
+      return `<div class="${c.on === false ? 'off' : ''}"><b>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
+      <div><b>${T('Export and collector health')}</b><span class="pill warn">${sevs.warn}</span><p>${T('lost packets, a collector falling behind, the edition limit, the license')}</p></div></div>`; }
+    const skip = (res.unfiltered || []).map(k => FILTER_LABEL[k] || k), note = skip.length ? `<p class="note evskip">${T('Not applied to events')}: ${esc(skip.join(', '))}</p>` : '';
+    if (!all.length) return note + `<div class="empty">${state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`;
     const n = s => all.filter(x => x.sev === s).length, a = cur === 'all' ? all : all.filter(x => x.sev === cur);
     setTimeout(() => {
       document.querySelectorAll('#evSeg button').forEach(b => b.onclick = () => { state.evSev = b.dataset.v; vThreats(); });
       document.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => {
-        if (!confirm(T(`Ignore ${b.dataset.ign}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.`, `Ігнорувати ${b.dataset.ign}? Її події більше не записуватимуться і не показуватимуться. Скасувати можна в «Налаштування → Події».`))) return;
+        if (!confirm(T('Ignore {addr}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.', {addr: b.dataset.ign}))) return;
         try { await apiPost('events/ignore', {value:b.dataset.ign}); vThreats(); } catch (e) { alert(e.message); } });
     });
-    return `<div class="seg evseg" id="evSeg" role="group">${[['all', T('All', 'Усі'), all.length], ['crit', sevs.crit, n('crit')], ['warn', sevs.warn, n('warn')], ['info', sevs.info, n('info')]].map(([k, l, c]) =>
+    return `<div class="seg evseg" id="evSeg" role="group">${[['all', T('All'), all.length], ['crit', sevs.crit, n('crit')], ['warn', sevs.warn, n('warn')], ['info', sevs.info, n('info')]].map(([k, l, c]) =>
       `<button data-v="${k}" aria-pressed="${cur === k}">${l} <span class="mono">${c}</span></button>`).join('')}</div>` + note +
       (a.length ? '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
       <div class="meta"><span class="pill ${x.sev}">${sevs[x.sev] || x.sev}</span><span class="mono">${x.stored && x.first !== x.last ? esc(evRange(x.first, x.last)) : esc(evTime(x.when))}</span>
-        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter', 'Фільтр')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address', 'Не записувати й не показувати події цієї адреси')}">${T('Ignore', 'Ігнорувати')}</button>` : ''}</span></div></div>`).join('') + '</div>'
-        : `<div class="empty">${T('No events of this priority', 'Подій із таким пріоритетом немає')}</div>`); });
+        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address')}">${T('Ignore')}</button>` : ''}</span></div></div>`).join('') + '</div>'
+        : `<div class="empty">${T('No events of this priority')}</div>`); });
 }
 // Settings → Events (administrators): detections on/off, priority, thresholds; roles of our services; exceptions
 function vEventsCfg(){

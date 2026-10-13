@@ -44,6 +44,17 @@
   </main>
 </div>
 <div id="drawerRoot"></div>
-<script src="app.js"></script>
+<script>
+// the language first: English is in the code, another language is a dictionary i18n/<lang>.json; then the app
+(function () {
+  const LANGS = ['en', 'uk'];
+  let l = ''; try { l = localStorage.getItem('ft-lang') || ''; } catch (e) {}
+  if (!LANGS.includes(l)) l = LANGS.find(x => x !== 'en' && (navigator.language || '').toLowerCase().startsWith(x)) || 'en';
+  const start = dict => { window.FT_LANG = l; window.FT_DICT = dict;
+    const s = document.createElement('script'); s.src = 'app.js'; document.body.appendChild(s); };
+  if (l === 'en') return start({});
+  fetch(`i18n/${l}.json`, {cache: 'no-cache'}).then(r => r.ok ? r.json() : {}).catch(() => ({})).then(start);
+})();
+</script>
 </body>
 </html>
