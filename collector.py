@@ -31,6 +31,10 @@ from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
+SFLOW_PORT = int(os.environ.get('FT_SFLOW_PORT', '6343'))   # sFlow's own port (0 = off); sFlow on PORT works too
+SFLOW = 105                # the version recorded for sFlow v5 in exporter_stats (NetFlow / IPFIX: 5, 9, 10)
+COUNTER_COLS = ('if_index', 'if_type', 'speed', 'direction', 'status', 'in_octets', 'in_ucast', 'in_mcast', 'in_bcast',
+                'in_discards', 'in_errors', 'in_unknown', 'out_octets', 'out_ucast', 'out_mcast', 'out_bcast', 'out_discards', 'out_errors')
 FORWARD = [(h, int(p)) for h, p in (x.strip().rsplit(':', 1) for x in os.environ.get('FT_FORWARD', '').split(',') if x.strip())]
 ALLOW = {x.strip() for x in os.environ.get('FT_EXPORTERS', '').split(',') if x.strip()}
 TEMPLATES_FILE = os.path.join(STATE_DIR, 'templates.json')
@@ -136,14 +140,14 @@ class Accounting:
             ver, seq, dom, nrec, shared = peek(data, x['tpl'])
         except (struct.error, IndexError):
             return True                     # malformed: let a worker count it as a decode error
-        if ver in (5, 9, 10):
+        if ver in (5, 9, 10, SFLOW):
             x['version'] = ver
         if seq is None:
             return shared
         last = x['seq'].get(dom)
         if last is not None:
             diff = (seq - last[0]) % 2**32
-            if ver == 9:                     # v9 counts export packets
+            if ver in (9, SFLOW):            # v9 and sFlow count export packets (sFlow: per agent and sub-agent)
                 if 0 < diff < 100000:
                     x['lost'] += diff - 1
             elif last[1] is not None and 0 < diff < 1000000:   # v5 counts flows, IPFIX data records
@@ -167,8 +171,18 @@ def _tpl_fields(body, off, n, ipfix):
     return length, off
 
 
+def sflow_seq_at(data):
+    """Offset of an sFlow v5 datagram's sequence number (after the agent address and sub-agent id); None if not sFlow."""
+    if len(data) >= 28 and data[:4] == b'\0\0\0\x05':
+        return {1: 16, 2: 28}.get(struct.unpack_from('!I', data, 4)[0])
+    return None
+
+
 def packet_body(data):
     """The packet without its sequence number (copies of one export differ only there)."""
+    at = sflow_seq_at(data)
+    if at is not None:
+        return data[:at] + data[at + 4:]
     if len(data) >= 20:
         ver = data[1] if data[0] == 0 else 0
         if ver == 9:
@@ -183,6 +197,10 @@ def packet_body(data):
 def peek(data, tpl):
     """(version, sequence, domain, data records or None if unknown, carries templates/options data).
     tpl = {(domain, template id): (record length or None, is options template)}, learned here."""
+    at = sflow_seq_at(data)
+    if at is not None:                       # sFlow v5: no templates; the domain is the agent address + sub-agent
+        seq, = struct.unpack_from('!I', data, at)
+        return SFLOW, seq, data[4:at], None, False
     ver, = struct.unpack_from('!H', data)
     if ver == 5:
         count, = struct.unpack_from('!H', data, 2)
@@ -251,7 +269,9 @@ class Collector:
         self.exporters = {}
         self.acct = Accounting() if accounting else None
         self.buf = []
+        self.cbuf = []                     # sFlow interface counters waiting for their insert
         self.dropped = 0
+        self.last_sflow = 0
         self._saved_templates = None
         self.last_flush = self.last_tick = time.time()
 
@@ -326,8 +346,22 @@ class Collector:
         for f in self.dec.packet(ip, data, time.time(), learn_only):
             self.store(e, f)
 
+    def sflow_tick(self, now, all=False):
+        """sFlow: the flows summed per minute whose minute has ended (all of them at shutdown), and the interface counters."""
+        for ip, f in self.dec.flush(now, all):
+            self.store(self.exporter(ip), f)
+        for c in self.dec.counters():
+            if len(self.cbuf) < BUFFER_MAX // 10:
+                self.cbuf.append({'ts': utc(c[1]), 'exporter': c[0], **dict(zip(COUNTER_COLS, c[2:]))})
+
     # ------------------------------------------------------------ output
     def flush(self):
+        if self.cbuf:
+            try:
+                ch('INSERT INTO if_counters FORMAT JSONEachRow', data='\n'.join(json.dumps(r, separators=(',', ':')) for r in self.cbuf).encode(), timeout=20)
+                self.cbuf = []
+            except (CHError, OSError) as ex:
+                log(f'WARN interface counters insert failed ({len(self.cbuf)} rows kept): {str(ex)[:200]}')
         if not self.buf:
             return
         batch = self.buf[:BATCH_MAX]
@@ -403,7 +437,10 @@ class Collector:
         log(f'exporter config reloaded ({len(self.cfg)} configured)')
 
     def tick(self, now):
-        if now - self.last_flush >= BATCH_SECONDS or len(self.buf) >= BATCH_MAX:
+        if now - self.last_sflow >= 1:
+            self.last_sflow = now
+            self.sflow_tick(now)
+        if now - self.last_flush >= BATCH_SECONDS or len(self.buf) >= BATCH_MAX or self.cbuf:
             self.flush()
             self.last_flush = now
         if now - self.last_tick >= 10:
@@ -440,10 +477,11 @@ def worker_main(n, q, results, ppid, workers=1):
             last_report = now
         if os.getppid() != ppid:            # receiver gone (killed): stop instead of idling forever
             break
-    while c.buf:                             # write everything that is left; stop only if ClickHouse fails
-        left = len(c.buf)
+    c.sflow_tick(time.time(), all=True)      # the sFlow minutes still being summed
+    while c.buf or c.cbuf:                   # write everything that is left; stop only if ClickHouse fails
+        left = len(c.buf) + len(c.cbuf)
         c.flush()
-        if len(c.buf) >= left:
+        if len(c.buf) + len(c.cbuf) >= left:
             log(f'WARN worker {n}: {len(c.buf)} rows not written at shutdown')
             c.dropped += len(c.buf)
             break
@@ -620,7 +658,17 @@ class Receiver:
         except (OSError, ValueError) as ex:
             log(f'cannot listen on FT_BIND={BIND!r} port {PORT}: {ex}')
             sys.exit(1)
-        self.socks = [s for s, _ in self.listeners]
+        self.sflow_port = 0
+        if SFLOW_PORT and SFLOW_PORT != PORT:      # sFlow's own port; a busy one only costs that port (sFlow on PORT still works)
+            try:
+                self.sflow_listeners = open_listeners(BIND, SFLOW_PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
+                self.sflow_port = SFLOW_PORT
+            except (OSError, ValueError) as ex:
+                self.sflow_listeners = []
+                log(f'WARN cannot listen for sFlow on port {SFLOW_PORT}: {ex} — sFlow is still taken on port {PORT}')
+        else:
+            self.sflow_listeners = []
+        self.socks = [s for s, _ in self.listeners + self.sflow_listeners]
         self.listen_sig = listen_signature(BIND)
         for sock in self.socks:
             sock.setblocking(False)
@@ -635,9 +683,9 @@ class Receiver:
         self.pending, self.npending = [[] for _ in range(self.n)], 0
         listen = describe_listeners(self.listeners)
         where = '; '.join(listen_label(x) for x in listen)
-        log(f'listening on UDP {PORT}: {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
+        log(f'listening on UDP {PORT}' + (f' and {self.sflow_port} (sFlow)' if self.sflow_port else '') + f': {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
             f'forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
-        write_state({'port': PORT, 'bind': BIND, 'listen': listen, 'workers': self.n, 'started': int(time.time())})
+        write_state({'port': PORT, 'sflow_port': self.sflow_port, 'bind': BIND, 'listen': listen, 'workers': self.n, 'started': int(time.time())})
         if self.rcvbuf < RCVBUF:
             log(f'NOTE socket buffer capped by net.core.rmem_max; raise it to {RCVBUF} to absorb bursts (install.sh does)')
         stop = False

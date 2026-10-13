@@ -27,6 +27,10 @@ class Subnets(unittest.TestCase):
            B: {'name': 'core', 'if_addrs': {'1': ['10.255.0.2/30'], '2': ['10.255.0.5/30']}},
            C: {'name': 'backup', 'if_addrs': {'1': ['10.255.0.6/30']}}}
 
+    def test_undescribed_device_is_named_by_its_address(self):
+        t = T.build({}, [], [iface('198.51.100.9', 1, 10, 10)], {'198.51.100.9'})
+        self.assertEqual(t['nodes']['198.51.100.9']['name'], '198.51.100.9')
+
     def test_shared_subnet_and_states(self):
         ifs = [iface(A, 9, 1000, 500), iface(B, 1, 500, 1000), iface(B, 2, 700, 0), iface(A, 3, 300, 900)]
         t = T.build(self.cfg, [], ifs, {A, B})

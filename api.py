@@ -274,7 +274,7 @@ def listen_info():
     try:
         with open(os.path.join(STATE_DIR, 'collector.json')) as f:
             st = json.load(f)
-        netflow = {'port': int(st['port']), 'listen': live(st.get('listen') or [])}
+        netflow = {'port': int(st['port']), 'sflow_port': int(st.get('sflow_port') or 0), 'listen': live(st.get('listen') or [])}
     except (OSError, ValueError, KeyError, TypeError):
         netflow = None
     out = {'netflow': netflow, 'web': {'port': PORT, 'listen': live(WEB_LISTEN)}}
@@ -819,10 +819,14 @@ def iface(c, idx, nbytes, ext, seen=(), sn=None):
             'snmp_speed': si.get('speed') or 0, 'snmp_addrs': (sn or {}).get('addrs', {}).get(str(idx), [])}
 
 
-def interfaces_of(c, rows, seen_addrs, sn=None):
-    """Interfaces seen in the data, plus those only mentioned in the settings (so a WAN index that never
-    shows up in the data is visible and can be corrected)."""
+def interfaces_of(c, rows, seen_addrs, sn=None, cnt=None):
+    """Interfaces seen in the data, those the sFlow counters report (a switch port without sampled traffic), plus those
+    only mentioned in the settings (so a WAN index that never shows up in the data is visible and can be corrected)."""
+    cnt = cnt or {}
     out = [iface(c, int(r['i']), int(r['bytes']), int(r['ext']), seen_addrs.get(int(r['i']), ()), sn) for r in rows]
+    out += [iface(c, idx, 0, 0, (), sn) for idx in sorted(set(cnt) - {i['index'] for i in out})]
+    for i in out:
+        i['counters'] = cnt.get(i['index'])
     seen = {i['index'] for i in out}
     configured = set(c.get('wan_ifs', [])) | {int(k) for key in ('if_names', 'if_addrs') for k in c.get(key, {}) if str(k).isdigit()}
     if c.get('local_if') is not None:
@@ -830,6 +834,26 @@ def interfaces_of(c, rows, seen_addrs, sn=None):
     for idx in sorted(configured - seen):
         out.append({**iface(c, idx, 0, 0, (), sn), 'unseen': True})
     return sorted(out, key=lambda i: i['index'])
+
+
+def sflow_counters():
+    """exporter -> ifIndex -> what the sFlow interface counters of the last 10 minutes say: speed, state, average in /
+    out bit/s, errors and discards (a counter that went back, e.g. after a reboot, is skipped for that step)."""
+    try:
+        rows = ch("""SELECT exporter, if_index, groupArray((toUInt32(ts), speed, status, in_octets, out_octets, in_errors + out_errors,
+                in_discards + out_discards)) AS a FROM if_counters WHERE ts >= now() - INTERVAL 10 MINUTE GROUP BY exporter, if_index""", fmt='JSON')
+    except CHError:                    # the table appears when the collector of 1.7.0 starts
+        return {}
+    out = {}
+    for r in rows:
+        a = sorted(([int(v) for v in x] for x in r['a']), key=lambda x: x[0])
+        span = a[-1][0] - a[0][0]
+        step = lambda k: sum(b[k] - x[k] for x, b in zip(a, a[1:]) if b[k] >= x[k])
+        out.setdefault(r['exporter'], {})[int(r['if_index'])] = {
+            'speed': a[-1][1], 'up': bool(a[-1][2] & 2), 'admin_up': bool(a[-1][2] & 1), 'last': a[-1][0],
+            'in_bps': round(step(3) * 8 / span) if span else None, 'out_bps': round(step(4) * 8 / span) if span else None,
+            'errors': step(5), 'discards': step(6), 'minutes': round(span / 60, 1)}
+    return out
 
 
 def collector_health(minutes=15):
@@ -913,6 +937,7 @@ def snmp_error_text(code, e, ip):
 def api_devices(q):
     exp = exporters_cfg(raw=True)
     sset, sdata = snmp.load_settings(), snmp.load_data()
+    cnt = sflow_counters()
     stats = ch("""SELECT exporter, argMax(version, ts) AS version, sum(packets) AS packets, sum(records) AS records, sum(lost) AS lost,
             sum(no_template) AS no_template, sum(decode_errors) AS errors, argMax(templates, ts) AS templates, argMax(sampling, ts) AS sampling_n,
             sum(dup_dropped) AS dup_dropped, sum(dup_packets) AS dup_packets,
@@ -949,7 +974,7 @@ def api_devices(q):
         names = c.get('if_names', {})
         recs, span = int(s['records']), max(60, int(s['span']))
         out.append({'ip': s['exporter'], 'name': c.get('name', s['exporter']), 'vendor': c.get('vendor', ''), 'model': c.get('model', ''),
-                    'site': ', '.join(x for x in (c.get('city', ''), c.get('country', '')) if x), 'proto': {5: 'NetFlow v5', 9: 'NetFlow v9', 10: 'IPFIX'}.get(int(s['version']), f"v{s['version']}"),
+                    'site': ', '.join(x for x in (c.get('city', ''), c.get('country', '')) if x), 'proto': PROTO_LABEL.get(PROTOCOLS.get(int(s['version'])), f"v{s['version']}"),
                     'detected': PROTOCOLS.get(int(s['version']), '') if int(s['last']) else '',
                     'rps': round(recs / span, 1), 'packets': int(s['packets']), 'records': recs, 'lost': int(s['lost']),
                     'loss_pct': round(100 * int(s['lost']) / max(1, int(s['packets']) + int(s['lost'])), 2), 'no_template': int(s['no_template']),
@@ -962,7 +987,8 @@ def api_devices(q):
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'protocol', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
                     'snmp': snmp_status(s['exporter'], sset, sdata),
                     'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}),
-                                                sdata.get(s['exporter']) if sset.get(s['exporter'], {}).get('enabled') else None)})
+                                                sdata.get(s['exporter']) if sset.get(s['exporter'], {}).get('enabled') else None,
+                                                cnt.get(s['exporter'], {}))})
     return {'devices': out, 'collector': collector_health(), 'listen': listen_info(), 'snmp_tools': snmp.available()}
 
 
@@ -1185,7 +1211,8 @@ def _str(v, n, field):
     return v.strip()
 
 
-PROTOCOLS = {5: 'netflow5', 9: 'netflow9', 10: 'ipfix'}     # export version -> the protocol a description may expect
+PROTOCOLS = {5: 'netflow5', 9: 'netflow9', 10: 'ipfix', 105: 'sflow'}    # export version (105 = sFlow v5) -> protocol
+PROTO_LABEL = {'netflow5': 'NetFlow v5', 'netflow9': 'NetFlow v9', 'ipfix': 'IPFIX', 'sflow': 'sFlow v5'}
 
 
 def device_from_body(b):
@@ -1196,7 +1223,7 @@ def device_from_body(b):
     cfg = {'name': _str(b.get('name'), 64, tr('name')) or ip, 'vendor': _str(b.get('vendor'), 64, tr('vendor')), 'model': _str(b.get('model'), 64, tr('model')),
            'city': _str(b.get('city'), 64, tr('city')), 'sampling': _str(b.get('sampling'), 16, tr('sampling')) or '1:1'}
     proto = b.get('protocol') or ''
-    if proto not in ('', 'sflow', *PROTOCOLS.values()):
+    if proto not in ('', *PROTOCOLS.values()):
         raise BadRequest(tr('Unknown export protocol'))
     cfg['protocol'] = proto
     cc = _str(b.get('country'), 2, tr('country')).upper()

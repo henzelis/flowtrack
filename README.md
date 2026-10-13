@@ -1,6 +1,6 @@
 # FlowTrack
 
-Self-hosted flow analytics for NetFlow v5/v9 and IPFIX: who talks to whom, how much, over which
+Self-hosted flow analytics for NetFlow v5/v9, IPFIX and sFlow v5: who talks to whom, how much, over which
 service and from where, with live views, a connection map and multi-vendor exporter support.
 
 ```
@@ -28,14 +28,21 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
 ## Features
 
 **Collection**
-- NetFlow v5, NetFlow v9 and IPFIX from exporters on IPv4 or IPv6 (the collector and the web
+- NetFlow v5, NetFlow v9, IPFIX and sFlow v5 from exporters on IPv4 or IPv6 (the collector and the web
   interface listen on both). Templates are tracked per exporter and saved, so a collector restart does
   not drop the first minutes of data while waiting for the exporter to resend them.
 - The protocol of every packet is recognised by itself. *Settings → Devices → Connect a device* gives ready
   configuration for Fortinet, Cisco, MikroTik, Juniper, Palo Alto, Check Point, SonicWall, Huawei, Arista,
-  VyOS / EdgeOS, pfSense / OPNsense, Linux (pmacct, softflowd) and any other exporter, per export protocol the
+  VyOS / EdgeOS, pfSense / OPNsense, HPE Aruba, Linux (pmacct, softflowd, hsflowd) and any other exporter, per export protocol the
   vendor offers (recommended one marked); the Devices page warns when a device sends another protocol than its
   description expects.
+- sFlow v5 (switches, firewalls, Linux hosts) on UDP 6343 — or on the NetFlow port, it is recognised there too. The
+  headers of the sampled packets (Ethernet, VLAN tags, IPv4 / IPv6 with extension headers, TCP / UDP / ICMP) are
+  decoded in the compiled core and summed per minute into flows scaled by the sampling rate; lost datagrams are
+  counted from their sequence numbers. The interface counters the agent sends are kept too: Settings → Devices →
+  Interfaces shows each port's in / out load (and its share of the speed), speed, state, errors and discards —
+  also for ports without sampled traffic. Detections that count sessions (scans, password guessing) see only the
+  sampled part of the traffic; floods, bursts and IP reputation work as with NetFlow.
 - Correct accounting of delta counters. FortiOS (like NetFlow v9/IPFIX in general) re-exports a long
   session every `active-flow-timeout`, and each export covers only its own interval — the next export's
   `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. Traffic is therefore the plain sum of records.
@@ -160,6 +167,7 @@ Other commands on the server:
 | Variable | Default | Meaning |
 |---|---|---|
 | `FT_BIND`, `FT_PORT` | interface of the default route, `2055` | where NetFlow/IPFIX is received: interface name(s) and/or IP address(es), comma-separated, or `0.0.0.0` for all |
+| `FT_SFLOW_PORT` | `6343` | UDP port for sFlow on the same addresses (`0` = off; sFlow sent to `FT_PORT` is taken as well) |
 | `FT_EXPORTERS` | *(empty = any)* | allowed exporter IPs, comma-separated; devices added in the UI are allowed automatically |
 | `FT_FORWARD` | *(empty)* | `host:port,…` — copy every datagram unchanged to other collectors |
 | `FT_WORKERS` | `auto` | decoding processes; `auto` = half the CPU threads, at most 4 |
@@ -420,7 +428,6 @@ The installer's own messages (English and Ukrainian) are in `install.sh`.
 **Features**
 - Notifications: webhook
 - Host names from DHCP leases (FortiGate API) and SNMP interface names / counter cross-checks
-- sFlow v5
 - FortiGate application names from `APPLICATION_TAG`
 - DSCP / traffic class: breakdown and colouring by QoS marking
 - Scheduled reports; configurable retention; ClickHouse backups

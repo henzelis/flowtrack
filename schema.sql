@@ -146,3 +146,32 @@ CREATE TABLE IF NOT EXISTS events
 ENGINE = ReplacingMergeTree(ver)
 ORDER BY (kind, key, first_seen)
 TTL last_seen + INTERVAL 90 DAY;
+
+-- Interface counters from sFlow counter samples (1.7.0): the agent's own ifInOctets … as they arrive (cumulative,
+-- every few seconds per interface); rates come from the difference of two rows.
+CREATE TABLE IF NOT EXISTS if_counters
+(
+    ts           DateTime CODEC(Delta, ZSTD),
+    exporter     LowCardinality(String),
+    if_index     UInt32,
+    if_type      UInt32,
+    speed        UInt64,                         -- bit/s
+    direction    UInt8,                          -- 0 unknown, 1 full duplex, 2 half, 3 in, 4 out
+    status       UInt8,                          -- bit 0 admin up, bit 1 oper up
+    in_octets    UInt64,
+    in_ucast     UInt64,
+    in_mcast     UInt64,
+    in_bcast     UInt64,
+    in_discards  UInt64,
+    in_errors    UInt64,
+    in_unknown   UInt64,
+    out_octets   UInt64,
+    out_ucast    UInt64,
+    out_mcast    UInt64,
+    out_bcast    UInt64,
+    out_discards UInt64,
+    out_errors   UInt64
+)
+ENGINE = MergeTree
+ORDER BY (exporter, if_index, ts)
+TTL ts + INTERVAL 90 DAY;

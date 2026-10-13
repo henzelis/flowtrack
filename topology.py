@@ -199,7 +199,9 @@ def build(cfg, near, ifaces, exporting, pairs=()):
                           'evidence': 'wan', 'a_addr': (cfg.get(d, {}).get('if_addrs', {}).get(str(w)) or [''])[0], 'b_addr': '', 'net': '',
                           'a_out': int(v.get('out_bytes', 0)), 'a_in': int(v.get('in_bytes', 0)), 'b_out': 0, 'b_in': 0,
                           'a_dir': {k: int(v.get(k, 0)) for k in ('up', 'down', 'internal')}, 'b_dir': {}})
-    nodes = {d: {'ip': d, 'exporting': d in exporting, **{k: cfg.get(d, {}).get(k) for k in ('name', 'vendor', 'model', 'city', 'country')}}
+    # a device that exports without a description is named by its address (the UI sorts and shows names)
+    nodes = {d: {'ip': d, 'exporting': d in exporting, **{k: cfg.get(d, {}).get(k) for k in ('name', 'vendor', 'model', 'city', 'country')},
+                 'name': cfg.get(d, {}).get('name') or d}
              for d in devs}
     if any(lk['b'] == INTERNET for lk in links):
         nodes[INTERNET] = {'ip': INTERNET, 'exporting': False, 'name': 'Internet'}

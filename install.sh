@@ -162,7 +162,7 @@ tcp_busy()  { [ -n "$(ss -Hltn "sport = :$1" 2>/dev/null)" ]; }
 port_owner(){ ss -Hlpn "sport = :$2" 2>/dev/null | grep -i "^$1" | grep -o 'users:(("[^"]*"' | head -1 | sed 's/users:(("//' || true; }
 free_from() { local kind=$1 p=$2; while "${kind}_busy" "$p"; do p=$((p+1)); done; echo "$p"; }
 # a port is acceptable if free, or already used by our own service (upgrade / reconfigure)
-NF_OWN=""; WEB_OWN=""
+NF_OWN=""; WEB_OWN=""; SF_OWN=""
 ok_udp() { is_port "$1" && { [ "$1" = "$NF_OWN" ] || ! udp_busy "$1"; }; }
 ok_tcp() { is_port "$1" && { [ "$1" = "$WEB_OWN" ] || ! tcp_busy "$1"; }; }
 
@@ -345,15 +345,21 @@ if [ "$MODE" = upgrade ]; then
   NF_PORT=${NF_PORT:-2055}; WEB_PORT=${WEB_PORT:-3030}; CH_PORT=${CH_PORT:-8123}
   CH_PASSWORD=$(envget FT_CH_PASSWORD); ADMIN_PW=""; WRITE_DEVICE=n; OPEN_FW=n
   NF_BIND=$(envget FT_BIND); WEB_BIND=$(envget FT_WEB_BIND); NF_BIND=${NF_BIND:-0.0.0.0}; WEB_BIND=${WEB_BIND:-0.0.0.0}
-  info "$(t 'Upgrading, settings are kept' 'Оновлення, налаштування збережено') (NetFlow UDP $NF_PORT, web $WEB_PORT)"
+  SF_PORT=$(envget FT_SFLOW_PORT); SF_PORT=${SF_PORT:-6343}     # before 1.7.0 not in the env: the collector's default
+  info "$(t 'Upgrading, settings are kept' 'Оновлення, налаштування збережено') (NetFlow UDP $NF_PORT, sFlow UDP $SF_PORT, web $WEB_PORT)"
 else
-  if [ "$EXISTING" = 1 ]; then NF_OWN=$(envget FT_PORT); WEB_OWN=$(envget FT_WEB_PORT); fi
+  if [ "$EXISTING" = 1 ]; then NF_OWN=$(envget FT_PORT); WEB_OWN=$(envget FT_WEB_PORT); SF_OWN=$(envget FT_SFLOW_PORT); fi
   say ""; say "${B}$(t 'A few questions — press Enter to accept the value in [brackets].' 'Кілька питань — Enter приймає значення в [дужках].')${N}"
   say ""
   say "${B}1/5 $(t 'Ports' 'Порти')${N}"
   def=${NF_OWN:-2055}; ok_udp "$def" || { o=$(port_owner udp "$def"); warn "$(t "UDP $def is in use${o:+ by $o}" "UDP $def зайнятий${o:+ програмою $o}")"; def=$(free_from udp "$def"); }
   ask NF_PORT "$(t 'UDP port for NetFlow/IPFIX from your devices' 'UDP-порт для NetFlow/IPFIX від ваших пристроїв')" "$def" ok_udp \
       "$(t 'Use a free port number 1–65535 (this one is invalid or busy).' 'Введіть вільний порт 1–65535 (цей некоректний або зайнятий).')" FT_NETFLOW_PORT
+  # sFlow's own port (no question): 6343 when free; otherwise off — sFlow sent to the NetFlow port is taken as well
+  SF_PORT=${FT_SFLOW_PORT:-${SF_OWN:-6343}}
+  if [ "$SF_PORT" != 0 ] && { [ "$SF_PORT" = "$NF_PORT" ] || { [ "$SF_PORT" != "$SF_OWN" ] && udp_busy "$SF_PORT"; }; }; then
+    warn "$(t "UDP $SF_PORT (sFlow) is in use — devices can send sFlow to UDP $NF_PORT instead" "UDP $SF_PORT (sFlow) зайнятий — пристрої можуть надсилати sFlow на UDP $NF_PORT")"; SF_PORT=0
+  fi
   def=${WEB_OWN:-3030}; ok_tcp "$def" || { o=$(port_owner tcp "$def"); warn "$(t "TCP $def is in use${o:+ by $o}" "TCP $def зайнятий${o:+ програмою $o}")"; def=$(free_from tcp "$def"); }
   ask WEB_PORT "$(t 'TCP port for the web interface' 'TCP-порт вебінтерфейсу')" "$def" ok_tcp \
       "$(t 'Use a free port number 1–65535 (this one is invalid or busy).' 'Введіть вільний порт 1–65535 (цей некоректний або зайнятий).')" FT_WEB_PORT
@@ -412,7 +418,8 @@ else
   elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then FW=firewalld
   else FW=""; fi
   if [ -n "$FW" ]; then
-    ask_yn OPEN_FW "$(t "Open UDP $NF_PORT ($(bind_label "$NF_BIND")) and TCP $WEB_PORT ($(bind_label "$WEB_BIND")) in $FW?" "Відкрити UDP $NF_PORT ($(bind_label "$NF_BIND")) і TCP $WEB_PORT ($(bind_label "$WEB_BIND")) у $FW?")" y FT_OPEN_FIREWALL
+    UDPS=$NF_PORT; [ "$SF_PORT" != 0 ] && UDPS="$NF_PORT, $SF_PORT"
+    ask_yn OPEN_FW "$(t "Open UDP $UDPS ($(bind_label "$NF_BIND")) and TCP $WEB_PORT ($(bind_label "$WEB_BIND")) in $FW?" "Відкрити UDP $UDPS ($(bind_label "$NF_BIND")) і TCP $WEB_PORT ($(bind_label "$WEB_BIND")) у $FW?")" y FT_OPEN_FIREWALL
   else say "  ${D}$(t 'No active firewall (ufw/firewalld) found — nothing to open.' 'Активного фаєрвола (ufw/firewalld) не знайдено — відкривати нічого.')${N}"; fi
 
   CH_PASSWORD=$(envget FT_CH_PASSWORD); [ -n "$CH_PASSWORD" ] || CH_PASSWORD=$(openssl rand -hex 16)
@@ -422,6 +429,7 @@ else
   say ""; say "${B}$(t 'Summary' 'Підсумок')${N}"
   WEB_IP=$(bind_ips "$WEB_BIND" | head -1)
   say "  NetFlow/IPFIX   UDP ${B}$NF_PORT${N} $(t 'on' 'на') $(bind_label "$NF_BIND")   $(t 'from' 'від') ${EXP_IP:-$(t 'any device' 'будь-якого пристрою')}"
+  [ "$SF_PORT" != 0 ] && say "  sFlow           UDP ${B}$SF_PORT${N} $(t 'on' 'на') $(bind_label "$NF_BIND")"
   say "  $(t 'Web interface' 'Вебінтерфейс')    $PROTO://${WEB_IP:-${LAN_IP:-<server>}}:${B}$WEB_PORT${N} ($(bind_label "$WEB_BIND"))$([ "$USE_TLS" = yes ] && t ' (self-signed certificate)' ' (самопідписаний сертифікат)')"
   [ "$WRITE_DEVICE" = y ] && say "  $(t 'Device' 'Пристрій')         $DEV_NAME ($VENDOR, $EXP_IP${WAN_IFS:+, WAN $WAN_IFS}${CITY:+, $CITY}${COUNTRY:+ $COUNTRY})"
   say "  $(t 'Admin password' 'Пароль admin')    $([ -n "$ADMIN_PW" ] && t 'set now' 'задано зараз' || t 'flowtrack (change it after login)' 'flowtrack (змініть після входу)')"
@@ -512,6 +520,7 @@ FT_CH_PASSWORD=$CH_PASSWORD
 FT_CH_DB=flowtrack
 FT_BIND=$NF_BIND
 FT_PORT=$NF_PORT
+FT_SFLOW_PORT=$SF_PORT
 FT_EXPORTERS=$EXP_IP
 FT_FORWARD=
 FT_WORKERS=auto
@@ -658,7 +667,7 @@ fi
 if [ "${OPEN_FW:-n}" = y ]; then
   open_fw() {
     local port dev zone
-    for port in "$NF_PORT/udp:$NF_BIND" "$WEB_PORT/tcp:$WEB_BIND"; do
+    for port in "$NF_PORT/udp:$NF_BIND" "$WEB_PORT/tcp:$WEB_BIND" $([ "$SF_PORT" != 0 ] && echo "$SF_PORT/udp:$NF_BIND"); do
       dev=$(iface_of "${port#*:}"); port=${port%%:*}
       if [ "$FW" = ufw ]; then
         if [ -n "$dev" ]; then ufw allow in on "$dev" to any port "${port%/*}" proto "${port#*/}"; else ufw allow "$port"; fi
@@ -712,6 +721,11 @@ if [ "$USE_TLS" = yes ]; then
   say "  ${D}$FP${N}"
 fi
 if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwords are unchanged.' 'Вхід: ваші користувачі й паролі не змінились.')"
+  # sFlow (1.7.0) listens on a port of its own; an upgrade opens nothing in the firewall by itself
+  if [ "${SF_PORT:-0}" != 0 ] && { { command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active' && ! ufw status | grep -q "^$SF_PORT/udp"; } \
+       || { command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1 && ! firewall-cmd --list-ports 2>/dev/null | grep -qw "$SF_PORT/udp"; }; }; then
+    say "  ${D}$(t "sFlow arrives on UDP $SF_PORT: if your devices will send sFlow, open it in the firewall (ufw allow $SF_PORT/udp, or firewall-cmd --permanent --add-port=$SF_PORT/udp)." "sFlow приходить на UDP $SF_PORT: якщо ваші пристрої надсилатимуть sFlow, відкрийте його у фаєрволі (ufw allow $SF_PORT/udp або firewall-cmd --permanent --add-port=$SF_PORT/udp).")${N}"
+  fi
 else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
 EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")
@@ -786,7 +800,8 @@ CFG
     MikroTik) say "${D}/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m"; say "/ip traffic-flow target add dst-address=$CIP port=$NF_PORT version=9${N}" ;;
   esac
   # the web form has the full set: 13 vendors and Other, each export protocol they offer (NetFlow v5 / v9, IPFIX)
-  say "  ${D}$(t 'Other vendors and protocols (NetFlow v5 / v9, IPFIX): Settings → Devices → Connect a device in the web interface.' 'Інші виробники й протоколи (NetFlow v5 / v9, IPFIX): «Налаштування → Пристрої → Підключити пристрій» у вебінтерфейсі.')${N}"
+  say "  ${D}$(t 'Other vendors and protocols (NetFlow v5 / v9, IPFIX, sFlow): Settings → Devices → Connect a device in the web interface.' 'Інші виробники й протоколи (NetFlow v5 / v9, IPFIX, sFlow): «Налаштування → Пристрої → Підключити пристрій» у вебінтерфейсі.')${N}"
+  [ "$SF_PORT" != 0 ] && say "  ${D}sFlow: $CIP UDP $SF_PORT${N}"
   say ""
 fi
 say "${D}$(t 'Status:' 'Стан:') flowtrack status"

@@ -1582,20 +1582,25 @@ function vEventsCfg(){
 // each with the configuration for the device. FlowTrack recognises the protocol of every packet by itself; the choice
 // picks the instructions and lets the Devices page warn when something else arrives.
 const PROTO_NAME = {netflow5:'NetFlow v5', netflow9:'NetFlow v9', ipfix:'IPFIX', sflow:'sFlow v5'};
-const PROTO_READY = ['netflow5', 'netflow9', 'ipfix'];       // what the collector decodes (sFlow comes next)
+const PROTO_READY = ['netflow5', 'netflow9', 'ipfix', 'sflow'];      // what the collector decodes
 const ciscoFnf = proto => (ip, port) => `flow record FT-REC\n match ipv4 source address\n match ipv4 destination address\n match ipv4 protocol\n match transport source-port\n match transport destination-port\n match interface input\n match flow direction\n collect interface output\n collect counter bytes long\n collect counter packets long\n collect timestamp sys-uptime first\n collect timestamp sys-uptime last\nflow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n export-protocol ${proto}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record FT-REC\n cache timeout active 60\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON input\n ip flow monitor FT-MON output`;
 const juniper = (tpl, kw) => (ip, port) => `set services flow-monitoring ${tpl} template FT ipv4-template\nset forwarding-options sampling instance FT input rate 1\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} ${kw} template FT`;
 const vyos = v => (ip, port) => `set system flow-accounting netflow version ${v}\nset system flow-accounting netflow server ${ip} port ${port}\nset system flow-accounting netflow timeout expiry-interval 60\nset system flow-accounting interface eth0\n# ${T('VyOS 1.4 and newer: set system flow-accounting netflow interface eth0')}\ncommit; save`;
 const huawei = v => (ip, port) => `ip netstream timeout active 1\nip netstream export version ${v}\nip netstream export source <${T('address of this device')}>\nip netstream export host ${ip} ${port}\n# ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/1\n ip netstream inbound\n ip netstream outbound`;
 const steps = list => (ip, port) => list(ip, port).map((x, i) => `${i + 1}. ${x}`).join('\n');
+// sFlow: sample the packets coming IN on every interface (sampling both directions everywhere counts traffic twice)
+const SFLOW_NOTE = () => T('sample incoming traffic (ingress) on every interface to watch; sampling both directions counts the traffic twice');
 const VENDORS = {
-  Fortinet:{netflow9:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`},
+  Fortinet:{netflow9:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`,
+    sflow:(ip, port) => `config system sflow\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('FortiOS 7.0 and older: set collector-ip / set collector-port directly under config system sflow')}\n# ${SFLOW_NOTE()}\nconfig system interface\n    edit "wan1"\n        set sflow-sampler enable\n        set sample-rate 1000\n        set sample-direction rx\n        set polling-interval 20\n    next\n    edit "internal"\n        set sflow-sampler enable\n        set sample-rate 1000\n        set sample-direction rx\n        set polling-interval 20\n    next\nend`},
   Cisco:{netflow9:ciscoFnf('netflow-v9'), ipfix:ciscoFnf('ipfix'),
+    sflow:(ip, port) => `! ${T('Cisco Nexus (NX-OS); IOS routers export NetFlow / IPFIX')}\nfeature sflow\nsflow sampling-rate 1024\nsflow counter-poll-interval 20\nsflow collector-ip ${ip} vrf default\nsflow collector-port ${port}\nsflow agent-ip <${T('address of this device')}>\n! ${SFLOW_NOTE()}\nsflow data-source interface ethernet 1/1`,
     netflow5:(ip, port) => `! ${T('classic NetFlow (older IOS): IPv4 only')}\nip flow-export version 5\nip flow-export destination ${ip} ${port}\nip flow-cache timeout active 1\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow ingress\n ip flow egress`},
   MikroTik:{netflow9:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=9`,
     ipfix:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=ipfix`,
     netflow5:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=5`},
-  Juniper:{ipfix:juniper('version-ipfix', 'version-ipfix'), netflow9:juniper('version9', 'version9')},
+  Juniper:{ipfix:juniper('version-ipfix', 'version-ipfix'), netflow9:juniper('version9', 'version9'),
+    sflow:(ip, port) => `# ${T('EX / QFX switches')}\nset protocols sflow collector ${ip} udp-port ${port}\nset protocols sflow sample-rate ingress 1000\nset protocols sflow polling-interval 20\n# ${SFLOW_NOTE()}\nset protocols sflow interfaces ge-0/0/0`},
   'Palo Alto':{netflow9:steps((ip, port) => [T('Device → Server Profiles → NetFlow → Add: name FlowTrack, active timeout 1 min, template refresh 1 min.'),
     T('Servers → Add: address {ip}, port {port}.', {ip, port}), T('Network → Interfaces → each interface to watch → Advanced → NetFlow Profile: FlowTrack.'), T('Commit.')])},
   'Check Point':{netflow9:(ip, port) => `# Gaia clish\nadd netflow collector ip ${ip} port ${port} export-format Netflow_V9\nsave config`,
@@ -1603,20 +1608,25 @@ const VENDORS = {
   SonicWall:Object.fromEntries([['ipfix', 'IPFIX'], ['netflow9', 'NetFlow version-9'], ['netflow5', 'NetFlow version-5']].map(([k, l]) => [k, steps((ip, port) => [
     T('Device → AppFlow → Flow Reporting (older SonicOS: Log → Flow Reporting).'), T('Send flows to an external collector: on; protocol: {proto}.', {proto: l}),
     T('External collector: {ip}, port {port}.', {ip, port}), T('Report on the interfaces to watch (WAN and LAN), then Accept.')])])),
-  Huawei:{netflow9:huawei(9), netflow5:huawei(5)},
-  Arista:{ipfix:(ip, port) => `flow tracking sampled\n   sample 1024\n   tracker FT\n      exporter FT\n         collector ${ip} port ${port}\n         local interface Management1\n   no shutdown\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface Ethernet1\n   flow tracker sampled FT`},
-  'VyOS / EdgeOS':{netflow9:vyos(9), ipfix:vyos(10), netflow5:vyos(5)},
+  Huawei:{netflow9:huawei(9), netflow5:huawei(5),
+    sflow:(ip, port) => `sflow agent ip <${T('address of this device')}>\nsflow collector 1 ip ${ip} udp-port ${port}\n# ${SFLOW_NOTE()}\ninterface GigabitEthernet0/0/1\n sflow flow-sampling collector 1\n sflow flow-sampling rate 1000\n sflow flow-sampling inbound\n sflow counter-sampling collector 1\n sflow counter-sampling interval 20`},
+  Arista:{sflow:(ip, port) => `sflow sample 1024\nsflow polling-interval 20\nsflow destination ${ip} ${port}\nsflow source-interface Management1\nsflow run`,
+    ipfix:(ip, port) => `flow tracking sampled\n   sample 1024\n   tracker FT\n      exporter FT\n         collector ${ip} port ${port}\n         local interface Management1\n   no shutdown\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface Ethernet1\n   flow tracker sampled FT`},
+  'VyOS / EdgeOS':{netflow9:vyos(9), ipfix:vyos(10), netflow5:vyos(5),
+    sflow:(ip, port) => `# VyOS 1.4+\nset system sflow server ${ip} port ${port}\nset system sflow sampling-rate 1000\nset system sflow interface eth0\n# ${T('EdgeOS: set system flow-accounting sflow server {ip} port {port}; set system flow-accounting interface eth0', {ip, port})}\ncommit; save`},
   'pfSense / OPNsense':Object.fromEntries([['netflow9', 'v9', '9'], ['ipfix', null, '10'], ['netflow5', 'v5', '5']].map(([k, opn, pf]) => [k, steps((ip, port) => [
     ...(opn ? [T('OPNsense: Reporting → NetFlow: listening interfaces (WAN and LAN), version {v}, destination {ip}:{port}, Apply.', {v: opn, ip, port})] : []),
     T('pfSense: install the softflowd package; Services → softflowd: interfaces (WAN and LAN), host {ip}, port {port}, NetFlow version {v}, Save.', {ip, port, v: pf})])])),
   'Linux / pmacct':Object.fromEntries([['ipfix', 10], ['netflow9', 9], ['netflow5', 5]].map(([k, v]) => [k, (ip, port) =>
-    `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: ${v}\npcap_interface: eth0\n# ${T('or softflowd')}: softflowd -i eth0 -n ${ip}:${port} -v ${v} -t maxlife=60`])),
+    `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: ${v}\npcap_interface: eth0\n# ${T('or softflowd')}: softflowd -i eth0 -n ${ip}:${port} -v ${v} -t maxlife=60`]).concat([['sflow',
+    (ip, port) => `# /etc/hsflowd.conf (host-sflow)\nsflow {\n  collector { ip = ${ip} udpport = ${port} }\n  sampling = 1000\n  polling = 20\n  pcap { dev = eth0 }\n}\n# ${T('or pmacct')}: plugins: sfprobe · sfprobe_receiver: ${ip}:${port} · sampling_rate: 1000`]])),
   Other:Object.fromEntries(['netflow9', 'ipfix', 'netflow5'].map(k => [k, steps((ip, port) => [
     T('Flow export ({proto}) to {ip}, UDP port {port}.', {proto: PROTO_NAME[k], ip, port}), T('Active timeout 60 s, inactive timeout 15 s; templates resent at least every minute.'),
     T('On every interface to watch (WAN and LAN), ingress — or ingress and egress when the record carries the flow direction.'),
-    T('Fields: addresses, ports, protocol, input and output interface, bytes, packets, first and last time.')])])),
-  // sFlow only, until the collector decodes it: kept here, not offered yet
-  'HPE Aruba':{sflow:null},
+    T('Fields: addresses, ports, protocol, input and output interface, bytes, packets, first and last time.')])]).concat([['sflow', steps((ip, port) => [
+    T('sFlow version 5 to {ip}, UDP port {port}.', {ip, port}), T('Sampling 1 of 1000 packets on fast links (1 of 100–500 on slower ones), counter polling every 20 s.'),
+    SFLOW_NOTE()])]])),
+  'HPE Aruba':{sflow:(ip, port) => `! AOS-CX\nsflow\nsflow collector ${ip} port ${port}\nsflow sampling 1024\nsflow polling 20\n! ${SFLOW_NOTE()}\ninterface 1/1/1\n    sflow\n! ${T('AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling 1024 · sflow 1 polling 1-24 20', {ip, port})}`},
 };
 // the protocols FlowTrack takes from this vendor now, recommended first; vendors with none are not offered yet
 const vendorProtos = v => Object.keys(VENDORS[v] || {}).filter(p => PROTO_READY.includes(p) && VENDORS[v][p]);
@@ -1836,13 +1846,13 @@ const repeatPill = x => x.dup_packets ? ` <span class="pill warn" title="${T('Th
 // (the web UI may be on another one), otherwise the address this page was opened with
 function collectorTarget(){
   const nf = (META.listen || {}).netflow, addrs = nf ? nf.listen.flatMap(x => x.addrs) : [];
-  return [addrs.find(a => !a.includes(':')) || addrs[0] || location.hostname, nf ? nf.port : 2055];
+  return [addrs.find(a => !a.includes(':')) || addrs[0] || location.hostname, nf ? nf.port : 2055, nf ? nf.sflow_port || nf.port : 6343];
 }
 const listenText = l => !l ? '—' : l.listen.map(x => x.iface ? x.iface + (x.addrs.length ? ` (${x.addrs.join(', ')})` : '') : x.addrs.join(', ') || T('all interfaces')).join('; ');
 // receiver health: workers, socket buffer and every place a packet can be lost on the way to the database
 function collectorBar(c, listen){
   const nf = listen && listen.netflow, web = listen && listen.web;
-  const where = (nf || web) ? `<div class="collbar-where">${nf ? `<span>${T('NetFlow/IPFIX received on')}: <b class="mono">UDP ${nf.port} · ${esc(listenText(nf))}</b></span>` : ''}${web ? `<span>${T('Web interface')}: <b class="mono">TCP ${web.port} · ${esc(listenText(web))}</b></span>` : ''}</div>` : '';
+  const where = (nf || web) ? `<div class="collbar-where">${nf ? `<span>${T('NetFlow/IPFIX received on')}: <b class="mono">UDP ${nf.port}${nf.sflow_port ? `, sFlow UDP ${nf.sflow_port}` : ''} · ${esc(listenText(nf))}</b></span>` : ''}${web ? `<span>${T('Web interface')}: <b class="mono">TCP ${web.port} · ${esc(listenText(web))}</b></span>` : ''}</div>` : '';
   if (!c) return where ? `<div class="collbar">${where}</div>` : '';
   const lost = c.socket_drops + c.queue_drops, pct = 100 * lost / Math.max(1, c.packets + lost), fill = c.rcvbuf ? Math.round(100 * c.rx_queue_peak / c.rcvbuf) : 0;
   const cell = (k, v, tip, bad) => `<div title="${esc(tip)}"><span>${k}</span><b class="mono"${bad ? ' style="color:var(--warn)"' : ''}>${v}</b></div>`;
@@ -1872,8 +1882,14 @@ const addrHtml = i => {
   const auto = seen.map(a => `<span class="mono nat" title="${a.includes('/') ? T('network that sends traffic into this interface (24 h)') : T('NAT address traffic leaves this interface with (24 h)')}">${esc(a)}</span>`);
   return [...own, ...auto].join('<br>') || '<span class="nat">—</span>';
 };
+// what the sFlow interface counters of the last minutes say: in / out bit/s (share of the speed), speed, state, errors
+const ifCounters = c => { if (!c) return '<span class="nat">—</span>';
+  const rate = v => v == null ? '—' : fmtR(v) + (c.speed ? ` <span class="nat">${(100 * v / c.speed).toFixed(v < 0.1 * c.speed ? 1 : 0)}%</span>` : '');
+  return `${c.up ? '' : `<span class="tag" title="ifOperStatus">${T('down')}</span> `}<span class="mono" title="${T('average of the last {min} min', {min: c.minutes})}">↓ ${rate(c.in_bps)}<br>↑ ${rate(c.out_bps)}</span>`
+    + (c.speed ? `<div class="nat">${T('speed {speed}', {speed: fmtR(c.speed)})}</div>` : '')
+    + (c.errors || c.discards ? `<span class="pill warn" title="${T('in the last {min} min, both directions', {min: c.minutes})}">${T('errors {e} · discards {d}', {e: fmtInt(c.errors), d: fmtInt(c.discards)})}</span>` : ''); };
 function ifaceTable(x, edit){
-  const admin = isAdmin(), total = x.interfaces.reduce((a, i) => a + i.bytes, 0) || 1;
+  const admin = isAdmin(), total = x.interfaces.reduce((a, i) => a + i.bytes, 0) || 1, counted = x.interfaces.some(i => i.counters);
   // suggest the interface that clearly carries the most internet-facing traffic
   const ranked = [...x.interfaces].filter(i => i.bytes > 0.02 * total).sort((a, b) => b.ext_share - a.ext_share);
   const best = ranked[0] && ranked[0].ext_share >= 0.3 && ranked[0].ext_share >= 3 * ((ranked[1] || {}).ext_share || 0) ? ranked[0].index : null;
@@ -1886,7 +1902,7 @@ function ifaceTable(x, edit){
     const addrs = edit ? `<input class="ifaddr" data-idx="${i.index}" value="${esc(i.addrs.join(', '))}" placeholder="${esc((i.snmp_addrs || []).join(', ') || T('IP or IP/mask, comma-separated'))}" aria-label="${T('Interface {idx} IP addresses', {idx: i.index})}">${i.seen_addrs.length ? `<div class="nat ifseen">${T('in the data')}: ${i.seen_addrs.map(esc).join(', ')}</div>` : ''}`
                        : addrHtml(i);
     const unseen = i.unseen ? ` <span class="pill warn" title="${T('The index is in the settings but did not appear in the data for 24 h — it may be wrong')}">${T('not seen in 24 h')}</span>` : '';
-    return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td></tr>`;
+    return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td>${counted ? `<td class="ifcnt">${ifCounters(i.counters)}</td>` : ''}</tr>`;
   }).join('');
   const sn = x.snmp || {}, when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
   const snmpLine = !sn.enabled ? '' : `<div class="ifsnmp">${sn.polled ? (sn.ok ? `<span class="pill ok">SNMP</span> <span class="nat">${esc(sn.sys && sn.sys.name || '')}${sn.sys && sn.sys.name ? ' · ' : ''}${T('{ifs} interfaces, {addrs} addresses · polled {when}', {ifs: sn.interfaces, addrs: sn.addresses, when: when(sn.polled)})}</span>`
@@ -1895,7 +1911,7 @@ function ifaceTable(x, edit){
   const btns = !admin || !x.interfaces.length ? '' : edit ? `<span class="nat ifmsg"></span><button class="btn ifcancel">${T('Cancel')}</button><button class="btn primary ifsave" disabled>${T('Save')}</button>`
                                                            : `<span class="nat ifmsg"></span><button class="btn ifedit">${T('Edit')}</button>`;
   return `<div class="ifdev${edit ? ' editing' : ''}" data-dev="${esc(x.ip)}"><div class="ifdev-h"><h4 class="mono">${esc(x.name)} <span class="nat">${esc(x.ip)}${x.vendor ? ' · ' + esc(x.vendor) : ''}</span></h4>${btns}</div>${snmpLine}
-    ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">${T('Index')}</th><th>${T('Name')}</th><th>${T('IP addresses')}</th><th>${T('Role')}</th><th class="num">${T('Traffic, 24 h')}</th><th class="num" title="${T('Share of traffic with outside addresses')}">${T('Ext.')}</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">${T('Index')}</th><th>${T('Name')}</th><th>${T('IP addresses')}</th><th>${T('Role')}</th><th class="num">${T('Traffic, 24 h')}</th><th class="num" title="${T('Share of traffic with outside addresses')}">${T('Ext.')}</th>${counted ? `<th title="${T('From the interface counters the device sends with sFlow')}">${T('Load (sFlow counters)')}</th>` : ''}</tr></thead><tbody>${rows}</tbody></table></div>
     <p class="note">${T('Bold: addresses entered by hand; plain: read over SNMP; grey (when neither is known): what the flows of the last 24 h show — the NAT address traffic leaves to the internet with (this is how a WAN usually looks) and the networks that send traffic into the interface. Names and addresses entered by hand take priority over SNMP.')}</p>`
       : `<div class="empty">${T('The collector has not seen interfaces of this device yet (24 h)')}</div>`}</div>`;
 }
@@ -1944,7 +1960,7 @@ function openDevice(dev){
   // the protocol: as described, else what the device sends now, else the vendor's recommended one
   const fitProto = p => vendorProtos(vendor).includes(p) ? p : vendorProtos(vendor)[0];
   let proto = fitProto(c.protocol || (dev && dev.detected) || '');
-  const [me, nfPort] = collectorTarget();
+  const [me, nfPort, sfPort] = collectorTarget();
   // SNMP in the form; the secrets the server keeps never come back (has_* says one is stored: empty = keep it)
   const sn = {enabled:!!st.enabled, version:st.version || '2c', host:st.host || '', port:st.port || 161, community:'', user:st.user || '', level:st.level || 'authPriv',
               auth_proto:st.auth_proto || snmpDefaults(vendor)[0], auth_pass:'', priv_proto:st.priv_proto || snmpDefaults(vendor)[1], priv_pass:''};
@@ -1953,7 +1969,7 @@ function openDevice(dev){
   const syncSn = () => { const on = document.getElementById('sOn'); if (!on) return; sn.enabled = on.checked;
     Object.entries(SN_IDS).forEach(([id, k]) => { const el = document.getElementById(id); if (el) sn[k] = k.endsWith('pass') || k === 'community' ? el.value : el.value.trim(); }); };
   const code = () => { const rem = ['Cisco', 'Arista'].includes(vendor) ? '!' : '#';
-    return VENDORS[vendor][proto](me, nfPort) + (sn.enabled ? `\n\n${rem} ---- SNMP ${sn.version === '3' ? 'v3' : 'v2c'} ----\n` + (SNMP_VENDORS[vendor] || SNMP_VENDORS.Other)(me, sn) : ''); };
+    return VENDORS[vendor][proto](me, proto === 'sflow' ? sfPort : nfPort) + (sn.enabled ? `\n\n${rem} ---- SNMP ${sn.version === '3' ? 'v3' : 'v2c'} ----\n` + (SNMP_VENDORS[vendor] || SNMP_VENDORS.Other)(me, sn) : ''); };
   const protoNote = () => !editing || !dev.detected ? '' : dev.detected === proto ? `<span class="nat">${T('the device sends it now')}</span>`
     : `<span class="pill warn">${T('the device sends {proto} now', {proto: PROTO_NAME[dev.detected] || dev.detected})}</span>`;
   const protoSeg = () => `<div class="protos"><span class="nat">${T('Export protocol')}</span><div class="seg" id="protoSeg" role="group">${vendorProtos(vendor).map((p, i) =>
