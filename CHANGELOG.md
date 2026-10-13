@@ -3,6 +3,18 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.6.3 — 2026-10-13
+
+- **Languages are dictionaries.** The code now holds English only; every other language is one file,
+  `web/i18n/<code>.json` (`uk.json` = Ukrainian), used by the web UI and the server's texts alike (errors, events,
+  Telegram messages). A new language needs no code change: add a file, and it appears in the language list by
+  itself. How to write one: README → *Translations*.
+- The language is chosen in Settings → General, from a list of the installed languages (it left the user menu, where
+  more languages would not fit). The Telegram message language uses the same list.
+- Ukrainian: correct plural forms ("лишилося 5 днів", "2 експортери"), one translation for the same term across
+  pages.
+- A test checks the dictionaries against the code: every text translated, nothing left over, the same placeholders.
+
 ## 1.6.2 — 2026-10-12
 
 - **Telegram notifications.** Settings → Events → *Telegram notifications*: your own bot (token from @BotFather) and
