@@ -14,7 +14,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   shows each port's in / out load with its share of the speed, the speed, the state, errors and discards — ports
   without sampled traffic included.
 - Connect a device: sFlow instructions for Fortinet, Cisco Nexus, Juniper, Huawei, Arista, HPE Aruba (new),
-  VyOS / EdgeOS, Linux (hsflowd, pmacct) and Other, on the sFlow port, sampling incoming traffic.
+  VyOS / EdgeOS, Linux (hsflowd, pmacct) and Other, on the sFlow port: switches sample incoming traffic on every
+  port; a router or firewall doing NAT samples its LAN side in both directions, not the WAN (checked on a FortiGate:
+  on the WAN sFlow sees the public address, not the inside host). On a FortiGate with FortiAPs in tunnel mode sFlow
+  sees Wi-Fi only as the access point's CAPWAP traffic, so the form recommends NetFlow v9 there for per-host traffic.
 - Detections that count sessions (port scans, password guessing) see only the sampled part of sFlow traffic;
   floods, bursts and IP reputation work as with NetFlow. A device should send either NetFlow / IPFIX or sFlow to
   FlowTrack, not both (the traffic would count twice).

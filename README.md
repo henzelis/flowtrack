@@ -42,7 +42,9 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   counted from their sequence numbers. The interface counters the agent sends are kept too: Settings → Devices →
   Interfaces shows each port's in / out load (and its share of the speed), speed, state, errors and discards —
   also for ports without sampled traffic. Detections that count sessions (scans, password guessing) see only the
-  sampled part of the traffic; floods, bursts and IP reputation work as with NetFlow.
+  sampled part of the traffic; floods, bursts and IP reputation work as with NetFlow. On a router or firewall that
+  does NAT, sample the LAN-side interfaces in both directions, not the WAN (there the packets carry the public address). Wi-Fi through FortiAPs in tunnel mode shows in sFlow
+  as the access point's CAPWAP traffic, not as its clients — on such a FortiGate use NetFlow v9.
 - Correct accounting of delta counters. FortiOS (like NetFlow v9/IPFIX in general) re-exports a long
   session every `active-flow-timeout`, and each export covers only its own interval — the next export's
   `FIRST_SWITCHED` equals the previous `LAST_SWITCHED`. Traffic is therefore the plain sum of records.
