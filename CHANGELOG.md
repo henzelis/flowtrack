@@ -3,6 +3,19 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.6.6 — 2026-10-13
+
+- **Export protocol per vendor.** Settings → Devices → *Connect a device* offers the protocols each vendor can send
+  (NetFlow v5, NetFlow v9, IPFIX; the recommended one marked ★), with the device configuration for each. New
+  vendors: Palo Alto, Check Point, SonicWall, Huawei, Arista, VyOS / EdgeOS, pfSense / OPNsense, and *Other* with
+  generic instructions; Linux also shows softflowd.
+- The description keeps the chosen protocol; editing a device preselects what it sends now. FlowTrack still recognises
+  every packet by itself — the choice never blocks data — and the Devices page shows *expected …* when another
+  protocol arrives than the description says.
+- Installer: the MikroTik hint uses NetFlow v9 like the web form (was IPFIX), the Cisco one names
+  `export-protocol netflow-v9`, and the end of the install points to *Connect a device* for other vendors and
+  protocols.
+
 ## 1.6.5 — 2026-10-13
 
 - Settings → Events → Notifications → Telegram: **Find chat checks an entered chat ID** with Telegram ("✓ name ·
