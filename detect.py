@@ -469,16 +469,21 @@ def reputation_hits(K, rep, X, p, t0):
 
 def lateral(k, p):
     """Inside -> inside: one host calls many hosts on one port, or many ports of one host, with tiny unanswered probes.
-    Internal records are oriented source -> destination: a call is answered when the reverse record exists (so a
-    server's answers to its clients' random ports never count); the source port must look like a client's."""
+    The records are taken source -> destination: a call is answered when the reverse record exists (so a server's
+    answers to its clients' random ports never count); the source port must look like a client's."""
     known, quiet = _arr(KNOWN), _arr((53, 67, 68, 123, 137, 138, 1900, 5353, 5355))
-    win = "ts >= {t0:DateTime} AND ts < {t1:DateTime} AND dir = 'internal' AND proto IN (6, 17)"
+    # since 1.7.0 inside records are stored client -> server ('internal_back' = the server's answer): turned back to
+    # source -> destination here, so a probe is judged by its own packets whichever side the ports point to
+    sw = "dir = 'internal_back'"
+    recs = (f"(SELECT exporter, proto, packets, if({sw}, ext_ip, int_ip) AS int_ip, if({sw}, ext_port, int_port) AS int_port, "
+            f"if({sw}, int_ip, ext_ip) AS ext_ip, if({sw}, int_port, ext_port) AS ext_port FROM flows "
+            "WHERE ts >= {t0:DateTime} AND ts < {t1:DateTime} AND dir IN ('internal', 'internal_back') AND proto IN (6, 17))")
     # a probe is tiny: a few packets that got no answer (a device that exports one direction only shows no answers
     # at all, but real conversations are bigger than that)
     base = f"""SELECT any(exporter) AS ex, int_ip AS a, ext_ip AS b, ext_port AS bp, count() AS recs,
-            (proto, ext_ip, ext_port, int_ip, int_port) IN (SELECT proto, int_ip, int_port, ext_ip, ext_port FROM flows WHERE {win})
+            (proto, ext_ip, ext_port, int_ip, int_port) IN (SELECT proto, int_ip, int_port, ext_ip, ext_port FROM {recs})
             OR sum(packets) > 3 AS answered
-        FROM flows WHERE {win} AND NOT (int_port < 1024 OR has({known}, int_port)) AND NOT has({quiet}, ext_port) AND NOT {_ignored('int_ip')}
+        FROM {recs} WHERE NOT (int_port < 1024 OR has({known}, int_port)) AND NOT has({quiet}, ext_port) AND NOT {_ignored('int_ip')}
         GROUP BY proto, int_ip, int_port, ext_ip, ext_port"""
     hits = []
     for r in ch(f"""SELECT a, bp, any(ex) AS ex, uniqExactIf(b, NOT answered) AS hosts, count() AS n, groupUniqArrayIf(10)(b, NOT answered) AS dlist

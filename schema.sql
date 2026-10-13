@@ -3,6 +3,8 @@
 
 -- One row per flow record (one direction of a session for FortiOS; whatever the exporter sends otherwise).
 -- int_* = the inside endpoint, ext_* = the outside endpoint, decided per exporter (WAN interfaces) or by RFC 1918.
+-- Between two inside hosts (1.7.0): int_* = the client, ext_* = the server (common.server_is_src); dir 'internal' =
+-- the client's packets, 'internal_back' = the server's answer.
 CREATE TABLE IF NOT EXISTS flows
 (
     ts         DateTime CODEC(Delta, ZSTD),      -- flow end; used for bucketing
@@ -10,7 +12,7 @@ CREATE TABLE IF NOT EXISTS flows
     exporter   LowCardinality(String),           -- exporter IP
     in_if      UInt32,
     out_if     UInt32,
-    dir        Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4),
+    dir        Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5),
     int_ip     String,
     int_port   UInt16,
     ext_ip     String,
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS usage_1h
     ts       DateTime,
     exporter LowCardinality(String),
     int_ip   String,
-    dir      Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4),
+    dir      Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5),
     bytes    UInt64,
     packets  UInt64,
     flows    UInt64
@@ -51,6 +53,11 @@ CREATE TABLE IF NOT EXISTS usage_1h
 ENGINE = SummingMergeTree
 ORDER BY (ts, exporter, int_ip, dir)
 TTL ts + INTERVAL 3 YEAR;
+
+-- tables from before 1.7.0: the direction of a server's answer between inside hosts (adding an Enum value only
+-- changes metadata)
+ALTER TABLE flows MODIFY COLUMN dir Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5);
+ALTER TABLE usage_1h MODIFY COLUMN dir Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5);
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS usage_1h_mv TO usage_1h AS
 SELECT toStartOfHour(ts) AS ts, exporter, int_ip, dir,

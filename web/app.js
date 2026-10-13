@@ -37,6 +37,8 @@ const state = {view:'overview', range:'24h', filters:[], heroMode:'map', heroLiv
 let META = {devices:[]}, ME = null;
 const isAdmin = () => ME && ME.role === 'admin';
 const isInternal = () => state.traffic === 'internal';
+// a record whose packets went to int_ip: from the internet, or a server's answer to an inside client
+const isBack = f => f.dir === 'down' || f.dir === 'internal_back';
 const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface'];
 const FILTER_LABEL = {iface:T('interface'), in_if:T('in via'), out_if:T('out via'), ip:T('host'), dst:T('ext. IP'), service:T('service'), l7:T('protocol'), country:T('country'), city:T('city'), port:T('port'), device:T('device'), asn:'ASN', dir:T('direction'), proto:'L4'};
 let renderSeq = 0;
@@ -244,8 +246,8 @@ function createRiver(host, opts){
   function size(){ kick(); const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; }
   const ro = new ResizeObserver(size); ro.observe(host); size(); onCleanup(() => ro.disconnect());
   const nodeLabel = (side, k) => {
-    if (side === 'L') { if (k === '__other') return [isInternal() ? T('Other sources') : T('Other inside'), T('Remaining addresses')]; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? T('Inside') : T('Public (self)'))]; }
-    if (k === '__other') return [isInternal() ? T('Other destinations') : T('Other outside'), T('Remaining addresses')]; const r = info.R.get(k) || {};
+    if (side === 'L') { if (k === '__other') return [isInternal() ? T('Other clients') : T('Other inside'), T('Remaining addresses')]; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? T('Inside') : T('Public (self)'))]; }
+    if (k === '__other') return [isInternal() ? T('Other servers') : T('Other outside'), T('Remaining addresses')]; const r = info.R.get(k) || {};
     if (isInternal()) return [r.name || k, r.name ? k : T('Inside')];
     return [k, [r.service, r.city || ccName(r.country)].filter(Boolean).join(' · ')];
   };
@@ -297,7 +299,7 @@ function createRiver(host, opts){
     if (!data) return;
     const L = layout();
     ctx.font = `600 ${compact ? 11.5 : 13}px Manrope, sans-serif`; ctx.fillStyle = C.ink2; ctx.textBaseline = 'middle';
-    ctx.textAlign = 'left'; ctx.fillText(isInternal() ? T('Sources') : T('Inside addresses'), 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText(isInternal() ? T('Destinations') : T('Outside addresses'), W - 2, L.headH / 2 - 2);
+    ctx.textAlign = 'left'; ctx.fillText(isInternal() ? T('Clients (who connects)') : T('Inside addresses'), 2, L.headH / 2 - 2); ctx.textAlign = 'right'; ctx.fillText(isInternal() ? T('Servers (connected to)') : T('Outside addresses'), W - 2, L.headH / 2 - 2);
     if (!left.length) { ctx.textAlign = 'center'; ctx.fillStyle = C.ink3; ctx.fillText(data.live ? T('No traffic under this filter in the last {min} min — Period shows the whole range', {min: Math.round(data.window / 60)}) : T('No traffic under this filter for the selected period'), W / 2, H / 2); return; }
     ctx.globalCompositeOperation = 'lighter';
     for (const b of bands) {
@@ -540,7 +542,7 @@ function mountHero(){
   const sub = live ? (g ? T('live · 2 min · updating…') : T('live · the last 2 min'))
     : (g ? rangeLabel() : T('the selected period'));
   fill('heroSec', `${ph('flow', T('Network traffic'), `<span id="heroLbl" class="tnum">${sub}</span>`,
-      (isInternal() ? `<span class="legend"><span><i class="bar" style="background:${C.up}"></i>${T('source → destination')}</span></span>`
+      (isInternal() ? `<span class="legend"><span><i class="bar" style="background:${C.up}"></i>${T('client → server (what it sends)')}</span><span><i class="bar" style="background:${C.down}"></i>${T('server → client (the answer)')}</span></span>`
         : `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span>${g ? '' : `<span><i style="background:${C.int}"></i>${T('inside')}</span><span><i style="background:${C.ext}"></i>${T('outside')}</span>`}</span>`)
       + (g ? seg('scaleSeg', [['sqrt', T('Compressed'), T('Width ∝ √volume — small flows stand out next to large ones')], ['lin', T('Linear'), T('Width proportional to volume')]], state.scale) : '')
       + seg('heroLiveSeg', [['live', T('Live'), T('The last 2 minutes of data, updated as it arrives')], ['period', T('toggle::Period'), T('The whole selected period')]], live ? 'live' : 'period')
@@ -585,7 +587,7 @@ function vOverview(){
       <section class="glass panel">${ph('users', T('Top hosts'), T('inside addresses'))}<div id="hostBox" class="loading"></div></section>
     </div>
     <section class="glass panel s4">${ph('chart', T('Traffic trend'), rangeLabel())}<div class="chart" id="cTrend"></div></section>
-    <section class="glass panel s4">${ph('conv', T('Top conversations'), (isInternal() ? T('source → destination') : T('inside → outside address')))}<div id="convBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('conv', T('Top conversations'), (isInternal() ? T('client → server') : T('inside → outside address')))}<div id="convBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('list', T('Recent flows'), T('new network activity'), `<button class="lnk" id="toFlows">${T('All')}</button>`)}<div id="recentBox" class="loading"></div></section></div>`;
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
@@ -601,7 +603,7 @@ function vOverview(){
   api('series').then(s => { const el = document.getElementById('cTrend'); if (el) trendChart(el, s); }).catch(e => fill('cTrend', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:5}); return convRows(t.rows, t.total); });
   section('recentBox', async () => { const t = await api('flows', {limit:7});
-    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${isInternal() ? T('Source → destination · service') : T('Inside → outside · service')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${f.dir === 'down' ? 'd' : 'u'}">${f.dir === 'down' ? '←' : '→'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(dv(f.service))}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records')}</div></td></tr>`}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${isInternal() ? T('Client → server · service') : T('Inside → outside · service')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${isBack(f) ? 'd' : 'u'}">${isBack(f) ? '←' : '→'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(dv(f.service))}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records')}</div></td></tr>`}</tbody></table></div>`; });
 }
 
 // filters that describe a river selection (a host, an outside address, or a conversation band); none for «Others»
@@ -633,9 +635,9 @@ async function inspectorHtml(sel){
 function vFlows(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s9">${ph('flow', isInternal() ? T('Exchange between inside addresses') : T('Exchange between inside and outside addresses'), isInternal() ? T('source → destination · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»') : T('Colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»'),
+    <section class="glass panel s9">${ph('flow', isInternal() ? T('Exchange between inside addresses') : T('Exchange between inside and outside addresses'), isInternal() ? T('who connects to whom: clients on the left, the servers they connect to on the right · colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»') : T('Colour = direction · width = volume (the compressed scale shows small flows too) · top 10 on each side, the rest in «Others»'),
       seg('metricSeg', [['bytes', T('Bytes')], ['packets', T('Packets')], ['flows', 'Flows']], state.metric) + seg('scaleSeg', [['sqrt', T('Compressed'), T('Width ∝ √volume — small flows stay visible next to big ones')], ['lin', T('Linear'), T('Width proportional to volume')]], state.scale) + seg('liveSeg', [['live', T('Live')], ['period', T('toggle::Period')]], flowLive() ? 'live' : 'period'), true)}
-      <div class="legend" style="margin:-6px 0 10px">${isInternal() ? `<span><i class="bar" style="background:${C.up}"></i>${T('source → destination')}</span><span><i style="background:${C.int}"></i>${T('inside address')}</span>` : `<span><i class="bar" style="background:${C.down}"></i>${T('download (outside → inside)')}</span><span><i class="bar" style="background:${C.up}"></i>${T('upload (inside → outside)')}</span><span><i style="background:${C.int}"></i>${T('inside address')}</span><span><i style="background:${C.ext}"></i>${T('outside address')}</span>`}<span id="winLbl" class="mono" style="margin-left:auto"></span></div>
+      <div class="legend" style="margin:-6px 0 10px">${isInternal() ? `<span><i class="bar" style="background:${C.up}"></i>${T('client → server (what it sends)')}</span><span><i class="bar" style="background:${C.down}"></i>${T('server → client (the answer)')}</span><span><i style="background:${C.int}"></i>${T('inside address')}</span>` : `<span><i class="bar" style="background:${C.down}"></i>${T('download (outside → inside)')}</span><span><i class="bar" style="background:${C.up}"></i>${T('upload (inside → outside)')}</span><span><i style="background:${C.int}"></i>${T('inside address')}</span><span><i style="background:${C.ext}"></i>${T('outside address')}</span>`}<span id="winLbl" class="mono" style="margin-left:auto"></span></div>
       <div class="river big" id="river"></div></section>
     <div class="col s3">
       <section class="glass panel kcard" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO.pulse, 22)}</span><span class="k">${T('Total traffic')}</span><span class="v" id="kTot">—</span></section>
@@ -672,7 +674,7 @@ function vFlows(){
   api('summary').then(s => { fill('kTot', fmtB(s.bytes)); fill('kFl', fmtN(s.flows)); }).catch(() => {});
   api('series').then(s => { const el = document.getElementById('cVol'); if (el) trendChart(el, s); }).catch(e => fill('cVol', errBox(e)));
   section('convBox', async () => { const t = await api('top', {dim:'conv', limit:6});
-    return `<div class="tw"><table class="compact"><thead><tr><th>${isInternal() ? T('Source') : T('col::Inside')}</th><th>${isInternal() ? T('Destination') : T('Outside')}</th><th>${T('Service')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="${T('Filter by this conversation')}"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
+    return `<div class="tw"><table class="compact"><thead><tr><th>${isInternal() ? T('Client') : T('col::Inside')}</th><th>${isInternal() ? T('Server') : T('Outside')}</th><th>${T('Service')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${t.rows.map(x => `<tr class="click" data-conv="${esc(x.int_ip)}|${esc(x.ext_ip)}" title="${T('Filter by this conversation')}"><td class="ipl">${esc(x.name || x.int_ip)}</td><td class="ipl">${esc(x.ext_ip)}</td><td>${svcBadge(x.service)}</td><td class="num mono">${isInternal() ? `<div class="two-line"><b>${fmtB(tot(x))}</b><span class="nat"><span class="u" title="${T('the client sent')}">↑ ${fmtB(x.up)}</span> <span class="d" title="${T('the server answered')}">↓ ${fmtB(x.dn)}</span></span></div>` : fmtB(tot(x))}</td></tr>`).join('')}</tbody></table></div>`; });
   document.getElementById('convBox').addEventListener('click', e => { const tr = e.target.closest('tr[data-conv]'); if (!tr) return;
     const [ip, dst] = tr.dataset.conv.split('|'); putFilter({k:'ip', v:ip, neg:false}); putFilter({k:'dst', v:dst, neg:false}); state.sel = null; render(); });
   section('protoBox', async () => { const t = await api('top', {dim:'l7', limit:6});
@@ -1228,10 +1230,16 @@ function vNetwork(){
   load().then(d => { show(d); if (state.netPath && state.netSrc && state.netDst) trace(); }).catch(e => { if (seq === renderSeq) { fill('cNet', errBox(e)); fill('nLinks', ''); } });
   if (live) every(10000, () => load().then(show).catch(() => {}));
 }
+// the top hosts as CSV: [header, rows]; inside traffic adds how many inside hosts each one connected to / was connected from
+function hostsCsv(rows, secs){
+  const head = ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps', ...(isInternal() ? ['connects_to', 'connected_from'] : [])];
+  return [head, rows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs),
+    ...(isInternal() ? [r.calls || 0, r.callers || 0] : [])])];
+}
 function recTable(rows){
   return `<div class="tw"><table><thead><tr><th>${T('Time')}</th><th>${T('Exporter')}</th><th>${T('Inside address')}</th><th></th><th>${T('Outside address')}</th><th>${T('Protocol')}</th><th>${T('Service')}</th><th>${T('Country')}</th><th class="num">${T('Bytes')}</th><th class="num">${T('Packets')}</th><th class="num">${T('Dur.')}</th></tr></thead><tbody>
     ${rows.map((f, i) => `<tr class="click" data-rec="${i}"><td class="mono">${hms(f.t)}</td><td class="ipl">${esc(devName(f.exporter))}</td>
-      <td class="ipl"><button class="link" data-f="ip" data-v="${esc(f.int_ip)}">${esc(f.name || f.int_ip)}</button> <span class="nat">:${f.int_port}</span></td><td class="${f.dir === 'down' || f.dir === 'internal_in' ? 'd' : 'u'}">${f.dir === 'down' || f.dir === 'internal_in' ? '←' : f.dir === 'transit' ? '↔' : '→'}</td>
+      <td class="ipl"><button class="link" data-f="ip" data-v="${esc(f.int_ip)}">${esc(f.name || f.int_ip)}</button> <span class="nat">:${f.int_port}</span></td><td class="${isBack(f) ? 'd' : 'u'}">${isBack(f) ? '←' : f.dir === 'transit' ? '↔' : '→'}</td>
       <td class="ipl"><button class="link" data-f="dst" data-v="${esc(f.ext_ip)}">${esc(f.ext_ip)}</button> <span class="nat">:${f.ext_port}</span></td><td><span class="tag">${esc(dv(f.l7))}</span></td><td>${svcBadge(f.service)}</td>
       <td>${f.country ? `<button class="link" data-f="country" data-v="${esc(f.country)}">${esc(f.country)}</button>` : '—'}</td><td class="num mono">${fmtB(f.bytes)}</td><td class="num mono">${fmtN(f.packets)}</td><td class="num mono">${Math.max(0, f.t - f.t0).toFixed(0)} ${T('s')}</td></tr>
       ${state.openFlow === i ? `<tr class="detail"><td colspan="11"><div class="kv"><div><span>${T('Host')}</span><b>${esc(f.name || '—')} · ${esc(f.int_ip)}</b></div><div><span>${T('NAT (after translation)')}</span><b>${f.nat_ip ? esc(f.nat_ip) + ':' + f.nat_port : '—'}</b></div>
@@ -1275,11 +1283,10 @@ function vTalkers(){
       ['flow', T('Flow details'), T('the Flows page with a filter'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
       ['users', T('Host card'), T('services, protocols, destinations'), () => openHost(h.k)],
       ['globe', T('Geolocation'), T('connection map of this host'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
-      ['list', T('Export CSV'), T('the top hosts table'), () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
-        topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))],
+      ['list', T('Export CSV'), T('the top hosts table'), () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ...hostsCsv(topRows, secs))],
     ].map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join('') : '');
     if (box && h) { const acts = [() => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
-      () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ['rank', 'ip', 'name', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'], topRows.map((r, i) => [i + 1, r.k, r.name || '', tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)]))];
+      () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ...hostsCsv(topRows, secs))];
       box.querySelectorAll('[data-qa]').forEach(b => b.onclick = acts[+b.dataset.qa]); }
   };
   section('tKpi', async () => {
@@ -1299,12 +1306,12 @@ function vTalkers(){
     selected = t.rows.find(r => r.k === fip) || t.rows[0] || null; drawQa();
     const sp = new Map(); for (const [ts, k, b] of ser.rows) { if (!sp.has(k)) sp.set(k, new Map()); sp.get(k).set(ts, b); }
     const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1;
-    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>${T('Host / IP')}</th><th style="width:26%">${T('Volume')}</th><th class="num">%</th><th class="num">Flows</th><th class="num">${T('Avg rate')}</th><th>${T('Trend')}</th><th></th></tr></thead><tbody>
+    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>${T('Host / IP')}</th><th style="width:26%">${T('Volume')}</th>${isInternal() ? `<th class="num" title="${T('→ inside hosts it connected to · ← inside hosts that connected to it')}">${T('Connections')}</th>` : ''}<th class="num">%</th><th class="num">Flows</th><th class="num">${T('Avg rate')}</th><th>${T('Trend')}</th><th></th></tr></thead><tbody>
       ${t.rows.map((r, i) => { const c = colorOf.get(r.k);
         return `<tr class="click${r.k === fip ? ' is-picked' : ''}" data-pick="${esc(r.k)}" title="${T('Add to filters')}"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? T('no name') : T('public address')))}</span></span></div></td>
-          <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div></td>
-          <td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
-          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="${T('Host card')}">›</button></td></tr>`; }).join('') || `<tr><td colspan="8"><div class="empty">${T('No data')}</div></td></tr>`}</tbody></table></div>`);
+          <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div>${isInternal() ? `<span class="nat mono"><span class="u" title="${T('sent')}">↑ ${fmtB(r.up)}</span> <span class="d" title="${T('received')}">↓ ${fmtB(r.dn)}</span></span>` : ''}</td>
+          ${isInternal() ? `<td class="num mono"><span class="u" title="${T('inside hosts it connected to')}">→ ${fmtN(r.calls || 0)}</span> · <span class="d" title="${T('inside hosts that connected to it')}">← ${fmtN(r.callers || 0)}</span></td>` : ''}<td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
+          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="${T('Host card')}">›</button></td></tr>`; }).join('') || `<tr><td colspan="${isInternal() ? 9 : 8}"><div class="empty">${T('No data')}</div></td></tr>`}</tbody></table></div>`);
     if (box) { box.classList.remove('loading');
       box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => addFilter('ip', tr.dataset.pick));
       box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation(); openHost(b.dataset.open); }); }

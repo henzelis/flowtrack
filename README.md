@@ -204,7 +204,10 @@ Monitoring both directions (ingress and egress) is fine: when a flow is reported
 on the way out, FlowTrack keeps one copy if the record carries the direction field (NetFlow v9
 `DIRECTION` / IPFIX `flowDirection`), and Settings → Devices warns when an exporter sends copies that
 cannot be told apart. The *Internet / Internal / All* selector in the top bar switches between internet
-traffic and traffic between inside addresses.
+traffic and traffic between inside addresses. Inside traffic is shown client -> server: who started the session
+(by the ports — the server is on a well-known port, otherwise on the lower one), the server and its service, what
+the client sent (upload) and what the server answered (download); Top hosts adds how many inside hosts each one
+connected to and how many connected to it.
 
 **FortiGate (FortiOS 7.x)** — NetFlow v9, full rate:
 

@@ -27,7 +27,8 @@ import ftcore  # noqa: E402
 import detect  # noqa: E402
 import rollups  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
-                    exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, service_name)
+                    exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, server_is_src,
+                    service_name)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -306,7 +307,12 @@ class Collector:
             elif pd and not ps:
                 d, ii, ei = 'down', (dst, dport), (src, sport)
             elif ps and pd:
-                d, ii, ei = 'internal', (src, sport), (dst, dport)
+                # inside <-> inside: int_* = the client (who started the session), ext_* = the server and its service
+                # port; 'internal' = the client sent this record, 'internal_back' = the server's answer
+                if server_is_src(proto, sport, dport):
+                    d, ii, ei = 'internal_back', (dst, dport), (src, sport)
+                else:
+                    d, ii, ei = 'internal', (src, sport), (dst, dport)
             else:
                 d, ii, ei = 'transit', (src, sport), (dst, dport)
 
@@ -606,6 +612,8 @@ class Receiver:
             try:
                 rollups.ensure(log)
                 self.retention_ready.wait()
+                if not rollups.reorient_internal(log):    # 1.7.0: inside traffic stored client -> server
+                    return
                 rollups.backfill(log)
                 return
             except (CHError, OSError) as ex:
@@ -638,6 +646,7 @@ class Receiver:
         for attempt in range(60):
             try:
                 apply_schema(SCHEMA)
+                rollups.widen_dir()
                 break
             except (CHError, OSError) as ex:
                 log(f'waiting for ClickHouse ({ex.__class__.__name__}) ...')

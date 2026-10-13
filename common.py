@@ -695,6 +695,46 @@ def classify_l7(proto, port):
     return name, None
 
 
+def _known_port(proto, port):
+    return port < 1024 or (proto, port) in PORTS
+
+
+def server_is_src(proto, sport, dport):
+    """A record between two inside hosts: is its source the server side of the session (i.e. the record is a reply)?
+    The server is the end on a well-known port (below 1024 or in PORTS); when neither or both are, the lower port
+    (clients take high ephemeral ports); equal ports or no ports (ICMP …): the source started it."""
+    if proto not in (6, 17, 132) or not sport or not dport:
+        return False
+    ks, kd = _known_port(proto, sport), _known_port(proto, dport)
+    if ks != kd:
+        return ks
+    return sport < dport
+
+
+def server_is_src_sql(proto='proto', sport='int_port', dport='ext_port'):
+    """server_is_src() as a ClickHouse expression over the record's columns (for records stored source -> destination)."""
+    known = ', '.join(f'({p}, {n})' for p, n in sorted(PORTS))
+    ks = f"({sport} < 1024 OR has([{known}], ({proto}, {sport})))"
+    kd = f"({dport} < 1024 OR has([{known}], ({proto}, {dport})))"
+    return (f"({proto} IN (6, 17, 132) AND {sport} != 0 AND {dport} != 0 AND "
+            f"if({ks} != {kd}, {ks}, {sport} < {dport}))")
+
+
+def classify_l7_sql(proto='proto', port='ext_port'):
+    """classify_l7()[0] as a ClickHouse expression."""
+    arms = ', '.join(f"({proto}, {port}) = ({p}, {n}), '{l7}'" for (p, n), (l7, _) in sorted(PORTS.items()))
+    names = ', '.join(f"{proto} = {p}, '{n}'" for p, n in sorted(PROTO_NAMES.items()))
+    return (f"multiIf({arms}, {proto} IN (6, 17) AND {port} != 0, "
+            f"if({port} < 1024, concat(if({proto} = 6, 'TCP', 'UDP'), '/', toString({port})), concat(if({proto} = 6, 'TCP', 'UDP'), ' other')), "
+            f"multiIf({names}, concat('IP/', toString({proto}))))")
+
+
+def port_service_sql(proto='proto', port='ext_port'):
+    """classify_l7()[1] (the service the port alone names, '' if none) as a ClickHouse expression."""
+    arms = ', '.join(f"({proto}, {port}) = ({p}, {n}), '{s}'" for (p, n), (_, s) in sorted(PORTS.items()) if s)
+    return f"multiIf({arms}, '')"
+
+
 def service_name(port_service, asn, as_org, ext_ip):
     if port_service:
         return port_service

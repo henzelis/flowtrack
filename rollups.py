@@ -13,12 +13,13 @@ after the next full hour."""
 import threading
 import time
 
-from common import CHError, ch
+from common import CHError, ch, classify_l7_sql, port_service_sql, server_is_src_sql
 
 BUCKET = 300        # the finest bucket (5 minutes); charts use rollups only with steps that are multiples of a table's own
 VERSION = 1          # bump when a definition below changes: the tables are then built again
 
-_COMMON = [('exporter', 'LowCardinality(String)'), ('dir', "Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4)")]
+DIR = "Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5)"     # as flows.dir
+_COMMON = [('exporter', 'LowCardinality(String)'), ('dir', DIR)]
 # name -> bucket (seconds), key columns (name, type, expression over `flows`) and attributes (any(...): the same for
 # every record of a key, or any one of them, exactly like any() over the records). Measured on 40 M records a day
 # where attributes follow the destination (as in real data): traffic 1/29, ports 1/35, geo 1/25 of the records.
@@ -75,6 +76,15 @@ def _get_state():
 
 def _set(k, v):
     ch(f"INSERT INTO agg_state (k, v) VALUES ('{k}', {int(v)})")
+
+
+def widen_dir():
+    """Tables from before 1.7.0: the direction of a server's answer between inside hosts ('internal_back'). Runs
+    before anything is received — the materialized views would refuse such a record otherwise. Only metadata."""
+    have = {r['name'] for r in ch("SELECT name FROM system.tables WHERE database = currentDatabase()", fmt='JSON')}
+    for name in ROLLUPS:
+        if name in have:
+            ch(f'ALTER TABLE {name} MODIFY COLUMN dir {DIR}')
 
 
 def ensure(log=print):
@@ -175,6 +185,81 @@ def _fill(ready, log, stop):
     for name in ready:
         _set(f'ready_from:{name}', 0)
     log(f"rollups: {', '.join(ready)}: history filled ({n} days, {time.time() - t0:.0f} s)")
+    return True
+
+
+_PRIVATE = ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', 'fc00::/7', 'fe80::/10', '::1/128')
+REORIENT_TMP = 'flows_reorient'
+
+
+def reorient_internal(log=print, stop=None, settle=600):
+    """Records between inside hosts stored before 1.7.0 run source -> destination; since 1.7.0 int_* is the client
+    and ext_* the server (common.server_is_src). The stored server answers are turned round once: int/ext swapped,
+    dir 'internal_back', the L7 protocol and service from the server's port. Everything received from the hour after
+    the upgrade on is new already; that hour boundary (+ `settle` for late exports) is waited for, so no old record
+    arrives after it. Steps are recorded in agg_state: a restart goes on where it stopped. Then the per-hour usage and
+    the rollups are summed again for the inside traffic of that period. -> False when stopped."""
+    st = _get_state()
+    if st.get('reorient:done'):
+        return True
+    cond = f"dir = 'internal' AND {server_is_src_sql()}"
+    t2 = st.get('reorient:t2')
+    if not t2:
+        if not int(ch(f"SELECT count() AS n FROM flows WHERE {cond}", fmt='JSON')[0]['n']):
+            _set('reorient:done', 1)
+            return True
+        t2 = (int(time.time()) // 3600 + 1) * 3600
+        _set('reorient:t2', t2)
+    log(f"inside traffic: turning stored server answers round (client -> server) at {time.strftime('%H:%M', time.gmtime(t2 + settle))} UTC")
+    if not _wait(t2 + settle, stop):
+        return False
+    phase, sync = st.get('reorient:phase', 0), {'mutations_sync': 2}
+    old = f'ts < toDateTime({t2}) AND {cond}'
+    if phase < 1:
+        new_ext = 'int_ip'
+        private = f"arrayExists(n -> isIPAddressInRange({new_ext}, n), [{', '.join(repr(n) for n in _PRIVATE)}])"
+        ps = port_service_sql('proto', 'int_port')
+        ch(f'DROP TABLE IF EXISTS {REORIENT_TMP}')
+        ch(f'CREATE TABLE {REORIENT_TMP} AS flows')
+        ch(f"""INSERT INTO {REORIENT_TMP} SELECT * REPLACE (ext_ip AS int_ip, int_ip AS ext_ip, ext_port AS int_port, int_port AS ext_port,
+                CAST('internal_back' AS {DIR}) AS dir, {classify_l7_sql('proto', 'int_port')} AS l7,
+                if({ps} != '', {ps}, if({private}, 'Local network', service)) AS service)
+            FROM flows WHERE {old}""", timeout=3600)
+        _set('reorient:phase', 1)
+    if phase < 2:
+        ch(f'ALTER TABLE flows DELETE WHERE {old}', timeout=3600, settings=sync)
+        _set('reorient:phase', 2)
+    if phase < 3:
+        key = 'cityHash64(ts, ts_start, exporter, int_ip, ext_ip, int_port, ext_port, proto, bytes, packets)'
+        if phase == 2:           # stopped while moving them back: what arrived of it is removed first
+            ch(f"ALTER TABLE flows DELETE WHERE ts < toDateTime({t2}) AND dir = 'internal_back' AND {key} IN (SELECT {key} FROM {REORIENT_TMP})",
+               timeout=3600, settings=sync)
+        ch(f'INSERT INTO flows SELECT * FROM {REORIENT_TMP}', timeout=3600)
+        _set('reorient:phase', 3)
+    if phase < 4:
+        inside = "dir IN ('internal', 'internal_back')"
+        first = int(ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')[0]['t'])
+        lo = first // 3600 * 3600        # from the oldest hour on (its records the TTL already took are not summed again)
+        if lo < t2:
+            ch(f'ALTER TABLE usage_1h DELETE WHERE ts >= toDateTime({lo}) AND ts < toDateTime({t2}) AND {inside}', timeout=3600, settings=sync)
+            ch(f"""INSERT INTO usage_1h SELECT toStartOfHour(ts) AS ts, exporter, int_ip, dir, sum(bytes), sum(packets), count()
+                FROM flows WHERE ts >= toDateTime({lo}) AND ts < toDateTime({t2}) AND {inside} GROUP BY ts, exporter, int_ip, dir""", timeout=3600)
+        st = _get_state()
+        for name, r in ROLLUPS.items():
+            if f'ready_from:{name}' not in st:
+                continue
+            B = r['bucket']
+            a = max(first // B * B, st[f'ready_from:{name}'])     # what the table holds (the rest: backfill)
+            if a >= t2:
+                continue
+            part = f'ts >= toDateTime({a}) AND ts < toDateTime({t2})'
+            ch(f'ALTER TABLE {name} DELETE WHERE {part} AND {inside}', timeout=3600, settings=sync)
+            ch(f'INSERT INTO {name} ' + _select(r, f'{part} AND {inside}'), timeout=3600)
+        _set('reorient:phase', 4)
+    ch(f'DROP TABLE IF EXISTS {REORIENT_TMP}')
+    n = int(ch(f"SELECT count() AS n FROM flows WHERE ts < toDateTime({t2}) AND dir = 'internal_back'", fmt='JSON')[0]['n'])
+    _set('reorient:done', 1)
+    log(f'inside traffic: {n:,} stored server answers turned round (client -> server)')
     return True
 
 

@@ -25,6 +25,20 @@ in Settings → General, at the bottom of every page, in the collector log and b
   configuration; an upgrade prints how to open it.
 - Path analysis: a device that sends data without a description no longer breaks the page (it is named by its
   address).
+- **Who connects to whom inside the network.** Traffic between inside hosts is kept client -> server: the host that
+  started the session (by the ports: the server is on a well-known port, otherwise on the lower one) and the server
+  with its service port, both directions of the session in one conversation. Upload = what the client sent to the
+  server, download = what the server answered — before, every inside record counted as upload of its sender, so the
+  Internal view showed no download at all, and a server's answers were named by the client's random port
+  ("TCP other" instead of SSH, SMB …). Flows → Internal: clients on the left, the servers they connect to on the
+  right, both directions in the ribbons; Top conversations show client, server, sent and answered.
+- **Connections per host.** Top hosts → Internal: what each host sent and received, how many inside hosts it
+  connected to (→) and how many connected to it (←) — a host that suddenly reaches many others is how malware
+  spreads (also in the CSV export).
+- Records stored before the upgrade are turned client -> server once, after the first full hour on the new version
+  (the collector log says when; the per-hour usage and pre-aggregated tables are summed again for that period).
+  The lateral-scan detection is unchanged: it still judges each probe by its own packets.
+- Charts: the sparklines of the Internal view no longer count inside traffic twice; Unique hosts counts both ends.
 
 ## 1.6.6 — 2026-10-13
 

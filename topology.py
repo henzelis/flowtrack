@@ -320,7 +320,7 @@ def path(topo, cfg, rows):
 def path_query(ch, where, p, src, dst):
     """Rows for path(): the records of packets sent from `src` to `dst` (an address or a network each; the inside
     source also by its address after NAT) per device and interface pair."""
-    sender, receiver = "if(dir = 'down', ext_ip, int_ip)", "if(dir = 'down', int_ip, ext_ip)"
+    sender, receiver = "if(dir IN ('down', 'internal_back'), ext_ip, int_ip)", "if(dir IN ('down', 'internal_back'), int_ip, ext_ip)"
     key = "cityHash64(int_ip, ext_ip, int_port, ext_port, proto)"
     p = dict(p, src=str(ipaddress.ip_network(src, strict=False)), dst=str(ipaddress.ip_network(dst, strict=False)))
     return ch(f"""SELECT exporter, in_if, out_if, sum(bytes) AS b, count() AS records, uniqExact({key}) AS convs,
@@ -335,8 +335,8 @@ def query(ch, where, p, known):
     """Rows for build() from the records of the period: near-end addresses per interface (inside addresses and the
     devices' own `known` addresses only — outside addresses are many and say nothing about neighbours) and the
     traffic in and out of every interface."""
-    src = "if(dir = 'down', ext_ip, int_ip)"     # who sent the packet
-    dst = "if(dir = 'down', int_ip, ext_ip)"     # who received it
+    src = "if(dir IN ('down', 'internal_back'), ext_ip, int_ip)"     # who sent the packet
+    dst = "if(dir IN ('down', 'internal_back'), int_ip, ext_ip)"     # who received it
     p = dict(p, known=sorted(known))
     keep = ("(has({{known:Array(String)}}, {x}) OR isIPAddressInRange({x}, '10.0.0.0/8') OR isIPAddressInRange({x}, '172.16.0.0/12')"
             " OR isIPAddressInRange({x}, '192.168.0.0/16') OR isIPAddressInRange({x}, '100.64.0.0/10') OR isIPAddressInRange({x}, 'fc00::/7'))")
@@ -357,8 +357,8 @@ def query(ch, where, p, known):
     # so every device keeps all records of a conversation in the sample)
     total = sum(1 for _ in ifaces) and int(ch(f"SELECT count() AS n FROM flows WHERE {where}", p, fmt='JSON')[0]['n'])
     p['every'] = max(1, total // 2_000_000)
-    key = ("cityHash64(if(dir = 'down', ext_ip, int_ip), if(dir = 'down', int_ip, ext_ip), if(dir = 'down', ext_port, int_port), "
-           "if(dir = 'down', int_port, ext_port), proto)")
+    key = ("cityHash64(if(dir IN ('down', 'internal_back'), ext_ip, int_ip), if(dir IN ('down', 'internal_back'), int_ip, ext_ip), if(dir IN ('down', 'internal_back'), ext_port, int_port), "
+           "if(dir IN ('down', 'internal_back'), int_port, ext_port), proto)")
     pairs = ch(f"""SELECT h1.1 AS a, h1.2 AS ai, h1.3 AS ao, h2.1 AS b, h2.2 AS bi, h2.3 AS bo, count() AS n FROM (
             SELECT groupUniqArray((exporter, in_if, out_if)) AS hops FROM flows WHERE {where} AND {key} % {{every:UInt32}} = 0
             GROUP BY {key} HAVING uniqExact(exporter) > 1 LIMIT 200000)
