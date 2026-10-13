@@ -772,6 +772,7 @@ ${D}flow record FT-REC
 flow exporter FLOWTRACK
  destination $CIP
  transport udp $NF_PORT
+ export-protocol netflow-v9
  template data timeout 60
 flow monitor FT-MON
  exporter FLOWTRACK
@@ -782,9 +783,10 @@ interface GigabitEthernet0/0/0
  ip flow monitor FT-MON output${N}
 CFG
     ;;
-    MikroTik) say "${D}/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m"; say "/ip traffic-flow target add dst-address=$CIP port=$NF_PORT version=ipfix${N}" ;;
-    *) say "  ${D}$(t 'The web interface shows snippets for each vendor: Devices → Connect device.' 'Готові налаштування для кожного виробника — у вебінтерфейсі: Пристрої → Підключити пристрій.')${N}" ;;
+    MikroTik) say "${D}/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m"; say "/ip traffic-flow target add dst-address=$CIP port=$NF_PORT version=9${N}" ;;
   esac
+  # the web form has the full set: 13 vendors and Other, each export protocol they offer (NetFlow v5 / v9, IPFIX)
+  say "  ${D}$(t 'Other vendors and protocols (NetFlow v5 / v9, IPFIX): Settings → Devices → Connect a device in the web interface.' 'Інші виробники й протоколи (NetFlow v5 / v9, IPFIX): «Налаштування → Пристрої → Підключити пристрій» у вебінтерфейсі.')${N}"
   say ""
 fi
 say "${D}$(t 'Status:' 'Стан:') flowtrack status"
