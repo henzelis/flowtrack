@@ -496,3 +496,6 @@ table.evr a{color:var(--blue-hi);font-weight:700;text-decoration:none}
 .tgchat input{flex:1}
 .tgchats{display:flex;flex-wrap:wrap;gap:8px}
 .tgchats:empty{display:none}
+.ntseg{margin-bottom:14px}
+.ntshared{margin-top:16px;padding-top:16px;border-top:1px solid var(--edge)}
+.form .chk:has(input:disabled){opacity:.45}

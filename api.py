@@ -1134,16 +1134,20 @@ def post_notify(body):
 
 def _notify_form(body):
     """The typed settings (not saved) over the stored ones: for Test and Find chat before saving."""
-    t = dict(body.get('telegram') or {}, on=False)
+    form = dict(body, telegram=dict(body.get('telegram') or {}, on=False))
+    if 'email' in body:
+        form['email'] = dict(body.get('email') or {}, on=False)
     try:
-        return notify.validate(dict(body, telegram=t), notify.load())
+        return notify.validate(form, notify.load())
     except ValueError as e:
         raise BadRequest(str(e)) from None
 
 
 def post_notify_test(body):
+    """A test message on one channel: 'telegram' (default) or 'email'."""
+    cfg = _notify_form(body)
     try:
-        notify.test(_notify_form(body))
+        notify.test_mail(cfg) if body.get('channel') == 'email' else notify.test(cfg)
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return {'ok': True}

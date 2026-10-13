@@ -1,28 +1,40 @@
-"""Notifications (FlowTrack 1.6.2): new events go to Telegram through the user's own bot.
+"""Notifications: new events go to Telegram through the user's own bot (1.6.2) and by e-mail over SMTP (1.6.4).
 
 Only an event's first appearance is sent — an activity that goes on extends its event quietly; looking back over the
 past at the first start sends nothing. What goes out: the kinds ticked for it, at or above a minimum priority, at most
-`per_hour` messages an hour (the rest are counted in the next message); several events of one 10-minute check go as
-one message. Sending runs in its own thread with retries, so an unreachable Telegram never holds up the detections.
+`per_hour` messages an hour per channel (the rest are counted in the next message); several events of one 10-minute
+check go as one message. Each channel sends from its own thread with retries, so an unreachable Telegram or mail
+server never holds up the detections or the other channel.
 
-The bot token is a secret: kept in STATE_DIR/notify.json (0600, the service user only), never sent to the browser and
-never written to the log."""
+The bot token and the SMTP password are secrets: kept in STATE_DIR/notify.json (0600, the service user only), never
+sent to the browser and never written to the log."""
 import html
 import json
 import os
 import queue
 import re
+import smtplib
+import socket
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 
-from common import STATE_DIR, known_lang, set_lang, tr, trn
+from common import STATE_DIR, get_lang, known_lang, set_lang, tr, trn
 
 CONFIG = os.path.join(STATE_DIR, 'notify.json')
 SEVERITIES = ('info', 'warn', 'crit')
 TOKEN_RE = re.compile(r'^\d{5,15}:[A-Za-z0-9_-]{30,50}$')
 CHAT_RE = re.compile(r'^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$')
+MAIL_RE = re.compile(r'^[^@\s<>"(),;:\\]{1,64}@[A-Za-z0-9.-]{1,253}$')
+HOST_RE = re.compile(r'^([A-Za-z0-9_-]{1,63}\.)*[A-Za-z0-9_-]{1,63}$|^[0-9a-fA-F:]{2,39}$')
+SECURITY = ('starttls', 'ssl', 'none')
+CHANNELS = ('telegram', 'email')
+KINDS = {'telegram': 'kinds', 'email': 'email_kinds'}      # per channel: which kinds go out (absent = yes)
+SEV_COLOR = {'crit': '#e5484d', 'warn': '#f5a524', 'info': '#3e8ed0'}
 RECENT = 1800              # only windows that ended this recently are notified (not the look back at the first start)
 ICON = {'crit': '🔴', 'warn': '🟠', 'info': '🔵'}
 
@@ -32,8 +44,10 @@ def api_base():
 
 
 def defaults():
-    return {'telegram': {'on': False, 'token': '', 'chat': '', 'min_sev': 'warn', 'lang': 'uk', 'link': ''},
-            'kinds': {}, 'per_hour': 20}
+    return {'telegram': {'on': False, 'token': '', 'chat': '', 'min_sev': 'warn', 'lang': 'uk'},
+            'email': {'on': False, 'host': '', 'port': 587, 'security': 'starttls', 'verify': True, 'user': '', 'password': '',
+                      'sender': '', 'to': [], 'min_sev': 'warn', 'lang': 'uk'},
+            'kinds': {}, 'email_kinds': {}, 'link': '', 'per_hour': 20}
 
 
 def load():
@@ -43,8 +57,10 @@ def load():
             saved = json.load(f)
     except (FileNotFoundError, ValueError):
         return cfg
-    cfg['telegram'].update({k: v for k, v in (saved.get('telegram') or {}).items() if k in cfg['telegram']})
-    cfg['kinds'] = {k: bool(v) for k, v in (saved.get('kinds') or {}).items()}
+    for ch in CHANNELS:
+        cfg[ch].update({k: v for k, v in (saved.get(ch) or {}).items() if k in cfg[ch]})
+        cfg[KINDS[ch]] = {k: bool(v) for k, v in (saved.get(KINDS[ch]) or {}).items()}
+    cfg['link'] = str(saved.get('link', (saved.get('telegram') or {}).get('link', '')) or '')     # in telegram up to 1.6.3
     if isinstance(saved.get('per_hour'), int):
         cfg['per_hour'] = saved['per_hour']
     return cfg
@@ -59,9 +75,11 @@ def save(cfg):
 
 
 def public(cfg):
-    """The settings for the browser: the token only as 'set or not'."""
+    """The settings for the browser: the token and the password only as 'set or not'."""
     t = dict(cfg['telegram'], token='', token_set=bool(cfg['telegram']['token']))
-    return {'telegram': t, 'kinds': cfg['kinds'], 'per_hour': cfg['per_hour']}
+    m = dict(cfg['email'], password='', password_set=bool(cfg['email']['password']))
+    return {'telegram': t, 'email': m, 'kinds': cfg['kinds'], 'email_kinds': cfg['email_kinds'], 'link': cfg['link'],
+            'per_hour': cfg['per_hour']}
 
 
 def validate(body, old):
@@ -81,18 +99,65 @@ def validate(body, old):
         t['min_sev'] = src['min_sev']
     if known_lang(src.get('lang')):
         t['lang'] = src['lang']
-    link = str(src.get('link') or '').strip().rstrip('/')
+    link = str(body.get('link', src.get('link')) or '').strip().rstrip('/')
     if link and not re.match(r'^https?://[^\s<>"]+$', link):
         raise ValueError(tr('The FlowTrack address must start with https:// or http://.'))
-    t['link'] = link
+    cfg['link'] = link
     if t['on'] and not (t['token'] and t['chat']):
         raise ValueError(tr('Enter the bot token and the chat ID to switch Telegram on.'))
     cfg['kinds'] = {str(k): bool(v) for k, v in (body.get('kinds') or {}).items()}
+    if 'email' in body:
+        cfg['email'] = _validate_email(body.get('email') or {}, old['email'])
+        cfg['email_kinds'] = {str(k): bool(v) for k, v in (body.get('email_kinds') or {}).items()}
+    else:                                         # a client that knows only Telegram keeps the e-mail settings
+        cfg['email'], cfg['email_kinds'] = dict(old['email']), dict(old['email_kinds'])
     try:
         cfg['per_hour'] = max(1, min(600, int(body.get('per_hour', 20))))
     except (TypeError, ValueError):
         raise ValueError(tr('Messages an hour must be a number.')) from None
     return cfg
+
+
+def _validate_email(src, old):
+    m = defaults()['email']
+    m['on'] = bool(src.get('on'))
+    host = str(src.get('host') or '').strip()
+    if host and not HOST_RE.match(host):
+        raise ValueError(tr('The mail server is a host name or an IP address, e.g. smtp.example.com.'))
+    m['host'] = host
+    try:
+        m['port'] = int(src.get('port') or 587)
+        assert 1 <= m['port'] <= 65535
+    except (TypeError, ValueError, AssertionError):
+        raise ValueError(tr('The mail server port is a number 1–65535.')) from None
+    if src.get('security') in SECURITY:
+        m['security'] = src['security']
+    m['verify'] = bool(src.get('verify', True))
+    user = str(src.get('user') or '').strip()
+    pw = str(src.get('password') or '')
+    if len(user) > 256 or len(pw) > 256 or any(ord(c) < 32 for c in user + pw):
+        raise ValueError(tr('The login and the password: up to 256 characters each, no control characters.'))
+    m['user'] = user
+    m['password'] = (pw or old['password']) if user else ''      # an empty field keeps the saved password
+    sender = str(src.get('sender') or '').strip()
+    if sender and not MAIL_RE.match(sender):
+        raise ValueError(tr('The sender is one e-mail address, e.g. flowtrack@example.com.'))
+    m['sender'] = sender
+    to = src.get('to') or []
+    to = [str(x).strip() for x in (to if isinstance(to, list) else re.split(r'[\s,;]+', str(to))) if str(x).strip()]
+    bad = [x for x in to if not MAIL_RE.match(x)]
+    if bad:
+        raise ValueError(tr('Not an e-mail address: {addr}', addr=bad[0][:100]))
+    if len(to) > 20:
+        raise ValueError(tr('At most 20 recipients.'))
+    m['to'] = list(dict.fromkeys(to))
+    if src.get('min_sev') in SEVERITIES:
+        m['min_sev'] = src['min_sev']
+    if known_lang(src.get('lang')):
+        m['lang'] = src['lang']
+    if m['on'] and not (m['host'] and m['sender'] and m['to']):
+        raise ValueError(tr('Enter the mail server, the sender and at least one recipient to switch e-mail on.'))
+    return m
 
 
 class TelegramError(Exception):
@@ -162,6 +227,109 @@ def chats(cfg, token=''):
     return list(out.values())
 
 
+class MailError(Exception):
+    pass
+
+
+def smtp_send(m, msg, timeout=20):
+    """Sends one message through the configured server; errors are explained for people (never with the password)."""
+    ctx = ssl.create_default_context() if m['verify'] else ssl._create_unverified_context()
+    where = f"{m['host']}:{m['port']}"
+    try:
+        s = (smtplib.SMTP_SSL(m['host'], m['port'], timeout=timeout, context=ctx) if m['security'] == 'ssl'
+             else smtplib.SMTP(m['host'], m['port'], timeout=timeout))
+        with s:
+            s.ehlo()
+            if m['security'] == 'starttls':
+                if not s.has_extn('starttls'):
+                    raise MailError(tr('The mail server does not offer STARTTLS: choose SSL/TLS (usually port 465) or no encryption.'))
+                s.starttls(context=ctx)
+                s.ehlo()
+            if m['user']:
+                if not s.has_extn('auth'):
+                    raise MailError(tr('The mail server does not ask for a login here: leave the login empty, or turn on encryption.'))
+                s.login(m['user'], m['password'])
+            s.send_message(msg)
+    except MailError:
+        raise
+    except smtplib.SMTPAuthenticationError:
+        raise MailError(tr('The mail server did not accept the login or the password (some services need an app password).')) from None
+    except smtplib.SMTPRecipientsRefused as e:
+        raise MailError(tr('The mail server refused the recipients: {to}.', to=', '.join(e.recipients))) from None
+    except smtplib.SMTPSenderRefused:
+        raise MailError(tr('The mail server refused the sender address {sender}.', sender=m['sender'])) from None
+    except smtplib.SMTPServerDisconnected:
+        raise MailError(tr('{where} closed the connection — check the encryption and the port (465 is SSL/TLS, 587 is STARTTLS).',
+                           where=where)) from None
+    except smtplib.SMTPResponseException as e:
+        raise MailError(tr('The mail server answered: {code} {text}', code=e.smtp_code,
+                           text=e.smtp_error.decode(errors='replace')[:200] if isinstance(e.smtp_error, bytes) else str(e.smtp_error)[:200])) from None
+    except ssl.SSLCertVerificationError as e:
+        raise MailError(tr('The certificate of {where} is not trusted ({error}). Untick "Verify the certificate" only for your own server.',
+                           where=where, error=e.verify_message or e.reason)) from None
+    except ssl.SSLError as e:
+        raise MailError(tr('TLS with {where} failed ({error}) — check the encryption and the port (465 is SSL/TLS, 587 is STARTTLS).',
+                           where=where, error=e.reason or e)) from None
+    except (socket.timeout, TimeoutError):
+        raise MailError(tr('No answer from {where}.', where=where)) from None
+    except smtplib.SMTPException as e:
+        raise MailError('SMTP: ' + str(e)[:200]) from None
+    except OSError as e:
+        raise MailError(tr('No connection to {where} ({error}).', where=where, error=e.strerror or e)) from None
+
+
+def _mail(m, subject, text, body_html):
+    msg = EmailMessage()
+    msg['Subject'] = re.sub(r'[\r\n]+', ' ', subject)[:200]
+    msg['From'] = m['sender']
+    msg['To'] = ', '.join(m['to'])
+    msg['Date'] = formatdate(localtime=True)
+    msg['Message-ID'] = make_msgid(domain=m['sender'].rsplit('@', 1)[-1])
+    msg.set_content(text)
+    msg.add_alternative(f'<!doctype html><html><body style="margin:0;padding:16px;background:#f4f6fa;font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#1c2333">'
+                        f'<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:10px;padding:18px 20px">'
+                        f'<div style="font-weight:800;font-size:16px;margin-bottom:12px">FlowTrack</div>{body_html}</div></body></html>', subtype='html')
+    return msg
+
+
+def test_mail(cfg):
+    m = cfg['email']
+    if not (m['host'] and m['sender'] and m['to']):
+        raise ValueError(tr('Enter the mail server, the sender and at least one recipient first.'))
+    ui = get_lang()
+    set_lang(m['lang'])
+    t = tr('Test message: notifications reach this mailbox.')
+    msg = _mail(m, 'FlowTrack: ' + tr('test message'), t, f'<p>✅ {html.escape(t)}</p>')
+    set_lang(ui)                                  # errors in the language of the page
+    try:
+        smtp_send(m, msg)
+    except MailError as e:
+        raise ValueError(str(e)) from None
+
+
+def format_mail(events, more, m, link):
+    """One e-mail for the events of a check: subject, plain text and HTML."""
+    set_lang(m['lang'])
+    events = events[:10]
+    n = len(events) - 1 + more
+    subject = f"FlowTrack: {ICON.get(events[0]['sev'], '•')} {events[0]['title'][:120]}" + (f' +{n}' if n > 0 else '')
+    text, body = [], []
+    for e in events:
+        text.append(f"{ICON.get(e['sev'], '•')} {e['title'][:200]}\n{e['text'][:3000]}")
+        body.append(f'<div style="border-left:4px solid {SEV_COLOR.get(e["sev"], "#888")};padding:6px 0 6px 12px;margin:0 0 14px">'
+                    f'<b>{html.escape(e["title"][:200])}</b><br>{html.escape(e["text"][:3000])}</div>')
+    if more:
+        t = trn(more, '…and {n} more event (the hourly limit of messages).', '…and {n} more events (the hourly limit of messages).')
+        text.append(t)
+        body.append(f'<p style="color:#5b6478">{html.escape(t)}</p>')
+    if link:
+        t = tr('Open the events in FlowTrack')
+        text.append(f'{t}: {link}/#v=threats')
+        body.append(f'<p><a href="{html.escape(link)}/#v=threats" style="display:inline-block;background:#2f7bff;color:#fff;'
+                    f'text-decoration:none;padding:8px 14px;border-radius:7px;font-weight:700">{html.escape(t)}</a></p>')
+    return _mail(m, subject, '\n\n'.join(text), ''.join(body))
+
+
 def format_events(events, more, lang, link):
     """One message for the events of a check (HTML)."""
     set_lang(lang)
@@ -180,61 +348,81 @@ def format_events(events, more, lang, link):
     return '\n\n'.join(parts)
 
 
+def _ready(cfg, ch):
+    c = cfg[ch]
+    return bool(c['on'] and (c['token'] and c['chat'] if ch == 'telegram' else c['host'] and c['sender'] and c['to']))
+
+
 class Notifier:
-    """Takes the new events of each check, decides what goes out and sends it from its own thread."""
+    """Takes the new events of each check, decides what goes out on each channel and sends it from the channel's thread."""
 
     def __init__(self, log=print):
-        self.log, self.q, self.sent, self.held = log, queue.Queue(maxsize=200), [], 0
-        threading.Thread(target=self._worker, name='notify', daemon=True).start()
+        self.log = log
+        self.q = {ch: queue.Queue(maxsize=200) for ch in CHANNELS}
+        self.sent, self.held = {ch: [] for ch in CHANNELS}, {ch: 0 for ch in CHANNELS}
+        for ch in CHANNELS:
+            threading.Thread(target=self._worker, args=(ch,), name=f'notify-{ch}', daemon=True).start()
 
     def push(self, events, kinds_cfg, t1, now=None):
-        """events: dicts with kind, title, text (in the notification language) — the new events of the window ending t1."""
+        """events: dicts with kind (and row or title/text) — the new events of the window ending t1. Returns how many
+        events went to the queues, over all channels."""
         now = now or time.time()
         if t1 < now - RECENT or not events:
             return 0
         cfg = load()
-        t = cfg['telegram']
-        if not (t['on'] and t['token'] and t['chat']):
-            return 0
-        lo = SEVERITIES.index(t['min_sev'])
+        return sum(self._push(ch, cfg, events, kinds_cfg, now) for ch in CHANNELS if _ready(cfg, ch))
+
+    def _push(self, ch, cfg, events, kinds_cfg, now):
+        c = cfg[ch]
+        lo = SEVERITIES.index(c['min_sev'])
         pick = []
         for e in events:
             sev = kinds_cfg.get(e['kind'], {}).get('sev', 'info')
-            if cfg['kinds'].get(e['kind'], True) and SEVERITIES.index(sev) >= lo:
+            if cfg[KINDS[ch]].get(e['kind'], True) and SEVERITIES.index(sev) >= lo:
                 pick.append(dict(e, sev=sev))
         if not pick:
             return 0
-        self.sent = [x for x in self.sent if x > now - 3600]
-        room = cfg['per_hour'] - len(self.sent)
+        self.sent[ch] = [x for x in self.sent[ch] if x > now - 3600]
+        room = cfg['per_hour'] - len(self.sent[ch])
         if room <= 0:
-            self.held += len(pick)
+            self.held[ch] += len(pick)
             return 0
         pick.sort(key=lambda e: -SEVERITIES.index(e['sev']))
         go, more = pick[:max(1, min(room, 10))], len(pick) - min(len(pick), max(1, min(room, 10)))
-        self.sent.append(now)
+        self.sent[ch].append(now)
         try:
-            self.q.put_nowait((go, more + self.held, t, time.time()))
-            self.held = 0
+            self.q[ch].put_nowait((go, more + self.held[ch], dict(c, link=cfg['link']), time.time()))
+            self.held[ch] = 0
         except queue.Full:
-            self.log('WARN notifications: the queue is full, events not sent')
+            self.log(f'WARN notifications ({ch}): the queue is full, events not sent')
         return len(go)
 
-    def _worker(self):
+    def _send(self, ch, events, more, c):
+        texts = [render(e, c['lang']) for e in events]
+        if ch == 'telegram':
+            call(c['token'], 'sendMessage', {'chat_id': c['chat'], 'parse_mode': 'HTML', 'disable_web_page_preview': True,
+                                             'text': format_events(texts, more, c['lang'], c['link'])})
+        else:
+            msg = format_mail(texts, more, c, c['link'])
+            set_lang('en')                        # errors go to the log, in English
+            smtp_send(c, msg)
+
+    def _worker(self, ch):
         while True:
-            events, more, t, at = self.q.get()
+            events, more, c, at = self.q[ch].get()
             for attempt in range(5):
                 try:
-                    texts = [render(e, t['lang']) for e in events]
-                    call(t['token'], 'sendMessage', {'chat_id': t['chat'], 'parse_mode': 'HTML', 'disable_web_page_preview': True,
-                                                     'text': format_events(texts, more, t['lang'], t['link'])})
+                    self._send(ch, events, more, c)
                     break
-                except TelegramError as e:
-                    self.log(f'WARN telegram: {_explain(e)}' + (' — trying again' if attempt < 4 else ' — not sent'))
+                except (TelegramError, MailError) as e:
+                    set_lang('en')
+                    why = _explain(e) if ch == 'telegram' else str(e)
+                    self.log(f'WARN {ch}: {why}' + (' — trying again' if attempt < 4 else ' — not sent'))
                     if time.time() - at > 3600:
                         break
                     time.sleep(min(600, 20 * 3 ** attempt))
                 except Exception as e:            # a bug must not stop the thread
-                    self.log(f'WARN telegram: {str(e)[:200]}')
+                    self.log(f'WARN {ch}: {str(e)[:200]}')
                     break
 
 

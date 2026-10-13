@@ -1464,7 +1464,7 @@ function vThreats(){
 function vEventsCfg(){
   const v = document.getElementById('setBody');
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Detections'), T('on or off, the priority each event gets, and when it triggers'))}<div id="evkBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('M2 9l14-6-5 14-2-6zM9 11l7-8', T('Telegram notifications'), T('a new event goes to your chat once · what continues is not sent again'))}<div id="evtBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('M2 9l14-6-5 14-2-6zM9 11l7-8', T('Notifications'), T('a new event goes out once · what continues is not sent again'))}<div id="evtBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('globe', T('IP reputation'), T('public lists of malicious addresses · downloaded once a day by this server from their publishers · checked every 10 minutes, not per record'))}<div id="evrBox" class="loading"></div></section>
     <section class="glass panel s7">${ph('dev', T('Services on our side'), T('learned from the last day: what outside addresses call'))}<div id="evsBox" class="loading"></div></section>
     <section class="glass panel s5">${ph('list', T('Exceptions and ports'))}<div id="evxBox" class="loading"></div></section>
@@ -1474,24 +1474,52 @@ function vEventsCfg(){
   const show = res => {
     const cfg = res.config, kinds = EV_KINDS(), sevs = SEV();
     const box = (id, html) => { const el = document.getElementById(id); el.classList.remove('loading'); el.innerHTML = html; };
-    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On')}</th><th>${T('Event')}</th><th>${T('Priority')}</th><th title="${T('Send this kind to Telegram')}">Telegram</th><th>${T('Triggers at')}</th></tr></thead><tbody>
+    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On')}</th><th>${T('Event')}</th><th>${T('Priority')}</th><th title="${T('Send this kind to Telegram')}">Telegram</th><th title="${T('Send this kind by e-mail')}">E-mail</th><th>${T('Triggers at')}</th></tr></thead><tbody>
       ${Object.entries(kinds).map(([k, [name, desc, thr]]) => { const c = cfg.kinds[k] || {};
         return `<tr data-k="${k}"><td><label class="chk"><input type="checkbox" data-x="on" ${c.on ? 'checked' : ''} aria-label="${esc(name)}"></label></td><td class="wrap"><b>${name}</b><p class="note">${desc}</p></td>
         <td><select data-x="sev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${c.sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></td>
         <td><label class="chk"><input type="checkbox" data-n="${k}" ${res.notify.kinds[k] !== false ? 'checked' : ''} aria-label="Telegram: ${esc(name)}"></label></td>
+        <td><label class="chk"><input type="checkbox" data-m="${k}" ${res.notify.email_kinds[k] !== false ? 'checked' : ''} aria-label="E-mail: ${esc(name)}"></label></td>
         <td class="thr"><div>${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</div></td></tr>`; }).join('')}</tbody></table></div>`);
-    const tg = res.notify.telegram;
-    box('evtBox', `<div class="form tgform">
+    const tg = res.notify.telegram, ml = res.notify.email, sevSel = (id, v) => `<select id="${id}">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${v === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select>`;
+    const langSel = (id, v) => `<select id="${id}">${langs().map(([c, l]) => `<option value="${c}" lang="${c}" ${v === c ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+    const on = ch => res.notify[ch].on ? ` <span class="pill ok">${T('on')}</span>` : '';
+    const ntTab = state.ntTab || 'telegram';
+    box('evtBox', `<div class="seg ntseg" id="ntSeg" role="tablist">${[['telegram', 'Telegram'], ['email', 'E-mail']].map(([v, l]) =>
+        `<button type="button" role="tab" data-v="${v}" aria-pressed="${v === ntTab}" aria-selected="${v === ntTab}">${l}${on(v)}</button>`).join('')}</div>
+      <div class="form tgform" id="ntTelegram" ${ntTab === 'telegram' ? '' : 'hidden'}>
       <p class="note" style="margin:0">${T('1) In Telegram open <b>@BotFather</b>, send /newbot and copy the token. 2) Write any message to your new bot (or add it to a group). 3) Paste the token, press <b>Find chat</b>, pick the chat, Save, and Send a test.')}</p>
       <label class="chk"><input type="checkbox" id="tgOn" ${tg.on ? 'checked' : ''}>${T('Send new events to Telegram')}</label>
       <div class="two"><label>${T('Bot token')}<input id="tgTok" type="password" autocomplete="off" placeholder="${tg.token_set ? T('saved — leave empty to keep') : '123456789:AA…'}"></label>
         <label>${T('Chat ID')}<span class="tgchat"><input id="tgChat" value="${esc(tg.chat)}" placeholder="123456789 / -100… / @channel"><button class="btn" type="button" id="tgFind">${T('Find chat')}</button></span></label></div>
       <div id="tgChats" class="tgchats"></div>
-      <div class="two"><label>${T('Send from priority')}<select id="tgSev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${tg.min_sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></label>
-        <label>${T('Language of the messages')}<select id="tgLang">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${tg.lang === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
-      <div class="two"><label>${T('FlowTrack address for the link in messages (optional)')}<input id="tgLink" value="${esc(tg.link)}" placeholder="${esc(location.origin)}"></label>
-        <label>${T('At most messages an hour')}<input id="tgHour" type="number" min="1" max="600" value="${esc(res.notify.per_hour)}"></label></div>
-      <div><button class="btn" type="button" id="tgTest">${T('Send a test')}</button> <span class="note" id="tgSay"></span></div></div>`);
+      <div class="two"><label>${T('Send from priority')}${sevSel('tgSev', tg.min_sev)}</label>
+        <label>${T('Language of the messages')}${langSel('tgLang', tg.lang)}</label></div>
+      <div><button class="btn" type="button" id="tgTest">${T('Send a test')}</button> <span class="note" id="tgSay"></span></div></div>
+      <div class="form tgform" id="ntEmail" ${ntTab === 'email' ? '' : 'hidden'}>
+      <p class="note" style="margin:0">${T('Any mail server or service that takes SMTP: your own, Gmail or Microsoft 365 (with an app password), a relay of your provider. One letter per 10-minute check, to all recipients.')}</p>
+      <label class="chk"><input type="checkbox" id="mlOn" ${ml.on ? 'checked' : ''}>${T('Send new events by e-mail')}</label>
+      <div class="two"><label>${T('Mail server (SMTP)')}<input id="mlHost" value="${esc(ml.host)}" placeholder="smtp.example.com" autocomplete="off"></label>
+        <div class="two"><label>${T('Port')}<input id="mlPort" type="number" min="1" max="65535" value="${esc(ml.port)}"></label>
+          <label>${T('Encryption')}<select id="mlSec">${[['starttls', 'STARTTLS'], ['ssl', 'SSL/TLS'], ['none', T('none')]].map(([v, l]) => `<option value="${v}" ${ml.security === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div></div>
+      <label class="chk"><input type="checkbox" id="mlVerify" ${ml.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
+      <div class="two"><label>${T('Login (empty: without a login)')}<input id="mlUser" value="${esc(ml.user)}" autocomplete="off"></label>
+        <label>${T('Password')}<input id="mlPass" type="password" autocomplete="new-password" placeholder="${ml.password_set ? T('saved — leave empty to keep') : ''}"></label></div>
+      <div class="two"><label>${T('From')}<input id="mlFrom" value="${esc(ml.sender)}" placeholder="flowtrack@example.com"></label>
+        <label>${T('To (several: comma-separated)')}<input id="mlTo" value="${esc(ml.to.join(', '))}" placeholder="admin@example.com, noc@example.com"></label></div>
+      <div class="two"><label>${T('Send from priority')}${sevSel('mlSev', ml.min_sev)}</label>
+        <label>${T('Language of the messages')}${langSel('mlLang', ml.lang)}</label></div>
+      <div><button class="btn" type="button" id="mlTest">${T('Send a test')}</button> <span class="note" id="mlSay"></span></div></div>
+      <div class="form tgform ntshared"><div class="two"><label>${T('FlowTrack address for the link in messages (optional)')}<input id="tgLink" value="${esc(res.notify.link)}" placeholder="${esc(location.origin)}"></label>
+        <label>${T('At most messages an hour, per channel')}<input id="tgHour" type="number" min="1" max="600" value="${esc(res.notify.per_hour)}"></label></div></div>`);
+    document.querySelectorAll('#ntSeg [data-v]').forEach(b => b.onclick = () => { state.ntTab = b.dataset.v;
+      document.querySelectorAll('#ntSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
+      document.getElementById('ntTelegram').hidden = b.dataset.v !== 'telegram'; document.getElementById('ntEmail').hidden = b.dataset.v !== 'email'; });
+    const mlTls = () => { document.getElementById('mlVerify').disabled = document.getElementById('mlSec').value === 'none'; };
+    document.getElementById('mlSec').onchange = mlTls; mlTls();
+    const msay = (m, bad) => { const e = document.getElementById('mlSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
+    document.getElementById('mlTest').onclick = async () => { msay(T('Sending…'));
+      try { await apiPost('notify/test', {...collectNotify(), channel:'email'}); msay(T('Sent — check the mailbox (and the spam folder).')); } catch (e) { msay(e.message, true); } };
     const say = (m, bad) => { const e = document.getElementById('tgSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
     document.getElementById('tgFind').onclick = async () => { say(T('Asking Telegram…'));
       try { const r = await apiPost('notify/chats', collectNotify()); const box2 = document.getElementById('tgChats');
@@ -1530,10 +1558,13 @@ function vEventsCfg(){
     return {kinds, roles, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
       sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value};
   };
-  const collectNotify = () => { const kinds = {}; document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
-    return {telegram:{on:document.getElementById('tgOn').checked, token:document.getElementById('tgTok').value.trim(), chat:document.getElementById('tgChat').value.trim(),
-      min_sev:document.getElementById('tgSev').value, lang:document.getElementById('tgLang').value, link:document.getElementById('tgLink').value.trim()},
-      kinds, per_hour:Number(document.getElementById('tgHour').value)}; };
+  const collectNotify = () => { const kinds = {}, email_kinds = {}, v = id => document.getElementById(id);
+    document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
+    document.querySelectorAll('table.evk [data-m]').forEach(i => { email_kinds[i.dataset.m] = i.checked; });
+    return {telegram:{on:v('tgOn').checked, token:v('tgTok').value.trim(), chat:v('tgChat').value.trim(), min_sev:v('tgSev').value, lang:v('tgLang').value},
+      email:{on:v('mlOn').checked, host:v('mlHost').value.trim(), port:Number(v('mlPort').value), security:v('mlSec').value, verify:v('mlVerify').checked,
+        user:v('mlUser').value.trim(), password:v('mlPass').value, sender:v('mlFrom').value.trim(), to:v('mlTo').value, min_sev:v('mlSev').value, lang:v('mlLang').value},
+      kinds, email_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
   const err = document.getElementById('evErr'), ok = document.getElementById('evOk');
   load().then(show).catch(e => { err.textContent = e.message; });
   document.getElementById('evSave').onclick = async () => { err.textContent = ''; ok.hidden = true;

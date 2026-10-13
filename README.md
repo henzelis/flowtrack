@@ -74,7 +74,8 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   sustained upload, bursts, new countries and export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
   goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
-  ignored (Settings → Events). New events can go to Telegram through your own bot — once each, by priority and kind.
+  ignored (Settings → Events). New events can go to Telegram through your own bot and by e-mail through any SMTP server (STARTTLS, SSL/TLS) —
+  once each, by priority and kind, per channel.
 - *Settings* — tabs for language and version, devices (exporters and interfaces), users, events, and the edition /
   license.
 - Any period within the kept flow details (30 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
@@ -283,6 +284,8 @@ the browser. Use the same `ifIndex` for SNMP and NetFlow — on Cisco IOS keep `
   `key.pem` (readable by group `flowtrack`) and restart `flowtrack-web`; the installer keeps it.
   `FT_TLS=no` at install time keeps plain HTTP (e.g. behind a TLS reverse proxy — then set
   `X-Forwarded-Proto: https` there).
+- The Telegram bot token and the SMTP password are kept in `/var/lib/flowtrack/notify.json` (readable by the service
+  only), never sent to the browser and never written to the log.
 - ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.
 - Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
   users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`.
@@ -410,7 +413,7 @@ The installer's own messages (English and Ukrainian) are in `install.sh`.
 - Automated tests and CI (GitHub Actions), API tokens for scripts and monitoring
 
 **Features**
-- Notifications: e-mail, webhook
+- Notifications: webhook
 - Host names from DHCP leases (FortiGate API) and SNMP interface names / counter cross-checks
 - sFlow v5
 - FortiGate application names from `APPLICATION_TAG`
