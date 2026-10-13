@@ -3,6 +3,19 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.6.4 — 2026-10-13
+
+- **E-mail notifications.** Settings → Events → *Notifications* now has tabs Telegram | E-mail. Any SMTP server or
+  service: STARTTLS, SSL/TLS or none, the server certificate verified by default, an optional login, several
+  recipients. One letter per 10-minute check (HTML with a plain-text part), critical first, with a link to the
+  Events page; *Send a test* checks the way and explains what went wrong (login, recipients, STARTTLS, certificate,
+  port).
+- Each channel has its own switch, minimum priority, language, hourly limit and kinds (an *E-mail* column next to the
+  *Telegram* one in the detections table), and sends from its own thread: a mail server that does not answer never
+  holds up the detections or Telegram. The FlowTrack address for links is shared by the channels.
+- The SMTP password is kept like the bot token: in /var/lib/flowtrack/notify.json (readable by the service only),
+  never sent to the browser (the field shows "saved") and never written to the log.
+
 ## 1.6.3 — 2026-10-13
 
 - **Languages are dictionaries.** The code now holds English only; every other language is one file,
