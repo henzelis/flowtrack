@@ -44,6 +44,7 @@ ROLLUPS = {
                           ('asn', 'UInt32'), ('as_org', 'LowCardinality(String)')]},
 }
 CUT = max(r['bucket'] for r in ROLLUPS.values())    # the longest bucket (a day is a multiple of every bucket)
+LATE = 2 * 3600     # records may reach the collector this late (a multiple of every bucket): see _late()
 # columns a query may filter or group by in each rollup (besides ts, exporter, dir); attributes may only be shown
 COLUMNS = {name: {'exporter', 'dir'} | {k[0] for k in r['keys']} for name, r in ROLLUPS.items()}
 ATTRS = {name: {a[0] for a in r['attrs']} for name, r in ROLLUPS.items()}
@@ -130,11 +131,12 @@ def _wait(until, stop):
     return not (stop and stop.is_set())
 
 
-def backfill(log=print, settle=600, stop=None):
+def backfill(log=print, settle=600, stop=None, late=LATE):
     """Fill the rollups with the records from before their cutover, newest day first (the API uses each day as soon as
     it is in). Tables with the same cutover are filled together, the earliest first: the 5-minute ones do not wait
     for the hourly ones. Waits `settle` seconds after a cutover first: records of the last minutes before it may
-    still arrive (exporters send flows a little late), and they must not be missed."""
+    still arrive (exporters send flows a little late), and they must not be missed. The few that come later still
+    are taken in by _late() (late=None: not, for checks in a scratch DB that gets no new records)."""
     st = _get_state()
     todo = {name: st[f'ready_from:{name}'] for name in ROLLUPS if st.get(f'ready_from:{name}', 0) > 0}
     mutations_checked = False
@@ -151,6 +153,32 @@ def backfill(log=print, settle=600, stop=None):
         mutations_checked = True
         if not _fill({name: v for name, v in todo.items() if st[f'cutover:{name}'] == cut}, log, stop):
             return
+    if late is not None:
+        _late(log, stop, late)
+
+
+def _late(log, stop, late):
+    """A record that ends before a table's cutover but reaches the collector after its history was filled is in
+    neither (the view takes only records from the cutover on): seen once on 2026-10-08, a record 20 minutes late.
+    `late` seconds after the cutover the buckets of the last `late` seconds before it are summed up again when they
+    differ from the records. Once per table — installs that filled their history before 1.7.1 get it at the next
+    start."""
+    st = _get_state()
+    for cut in sorted({st[f'cutover:{name}'] for name in ROLLUPS if not st.get(f'late:{name}')}):
+        if not _wait(cut + late, stop):
+            return
+        part = f'ts >= toDateTime({cut - late}) AND ts < toDateTime({cut})'
+        for name in ROLLUPS:
+            if st[f'cutover:{name}'] != cut or st.get(f'late:{name}'):
+                continue
+            n = int(ch(f'SELECT count() AS n FROM flows WHERE {part}', fmt='JSON')[0]['n'])
+            have = int(ch(f'SELECT sum(flows) AS n FROM {name} WHERE {part}', fmt='JSON')[0]['n'])
+            if n != have:
+                ch(f'ALTER TABLE {name} DELETE WHERE {part}', timeout=3600, settings={'mutations_sync': 2})
+                ch(f'INSERT INTO {name} ' + _select(ROLLUPS[name], part), timeout=3600,
+                   settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000})
+                log(f'rollups: {name}: {n - have:,} records that came after the history was filled added')
+            _set(f'late:{name}', 1)
 
 
 def _fill(ready, log, stop):

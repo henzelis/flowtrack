@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.7.1 — 2026-10-14
+
+- Pre-aggregated tables: a record that reached the collector more than ten minutes late, just before the moment an
+  upgrade to 1.3.3 or later switched the tables on, was summed up nowhere (seen as two records missing on long
+  periods). Two hours after that moment the last two hours before it are now summed up again when they differ from
+  the records; installs upgraded earlier get it once at the next start.
+
 ## 1.7.0 — 2026-10-14
 
 - **sFlow v5.** Switches, firewalls and Linux hosts that send sFlow are received on UDP 6343 (`FT_SFLOW_PORT`; sFlow
