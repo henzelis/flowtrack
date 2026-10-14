@@ -994,5 +994,12 @@
  "…and {n} more events (the hourly limit of messages).": "…і ще подій: {n} (ліміт повідомлень на годину).",
  "→ inside hosts it connected to · ← inside hosts that connected to it": "→ до скількох внутрішніх хостів підключався · ← скільки внутрішніх хостів підключалися до нього",
  "✓ {name} · {kind} — the chat ID is right.": "✓ {name} · {kind} — ID чату правильний.",
- "sampling 1:{n}: set the same rate on the device — FlowTrack scales the records that do not carry their rate by it": "вибірка 1:{n}: встановіть таку саму частоту на пристрої — FlowTrack множить на неї записи, які не містять своєї частоти"
+ "sampling 1:{n}: set the same rate on the device — FlowTrack scales the records that do not carry their rate by it": "вибірка 1:{n}: встановіть таку саму частоту на пристрої — FlowTrack множить на неї записи, які не містять своєї частоти",
+ "interfaces to watch: {names}": "інтерфейси для спостереження: {names}",
+ "Interfaces in the configuration (names on the device, comma-separated)": "Інтерфейси в конфігурації (імена на пристрої, через кому)",
+ "Test SNMP to choose from the interfaces of the device.": "Натисніть «Перевірити SNMP», щоб вибрати з інтерфейсів пристрою.",
+ "not on the device": "немає на пристрої",
+ "Interfaces in the configuration (from SNMP)": "Інтерфейси в конфігурації (з SNMP)",
+ "one interface per process: run one more for each of {names}": "один інтерфейс на процес: запустіть ще по одному для {names}",
+ "Interface names: up to 64, each up to 64 characters, no quotes": "Імена інтерфейсів: до 64, кожне до 64 символів, без лапок"
 }

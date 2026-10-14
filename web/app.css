@@ -247,6 +247,12 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .snmpbox[hidden]{display:none}
 .snmpbox .note{margin:0}
 .snmptest{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#fIfs{display:grid;gap:5px}
+#fIfs .lbl{font-size:12px;color:var(--ink2);font-weight:700}
+#fIfs .note{margin:0}
+.iflist{display:grid;gap:6px;max-height:220px;overflow:auto;padding:10px 12px;border:1px solid var(--hair);border-radius:12px;background:rgba(0,0,0,.15)}
+.iflist label.chk{font-weight:400;flex-wrap:wrap;row-gap:2px}
+.iflist label.chk .nat{font-size:12px;overflow-wrap:anywhere}
 .ifsnmp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;font-size:12px}
 .vendors{display:flex;flex-wrap:wrap;gap:6px}
 .vendors button{all:unset;cursor:pointer;font-size:12px;font-weight:700;padding:4px 10px;border-radius:9px;border:1px solid var(--edge);color:var(--ink2)}

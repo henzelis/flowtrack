@@ -1595,25 +1595,31 @@ const PROTO_READY = ['netflow5', 'netflow9', 'ipfix', 'sflow'];      // what the
 const sampleRate = v => { const n = parseInt(String(v || '').split(':').pop(), 10); return n >= 1 ? n : 1; };
 const sfRate = (o, d) => o.rate > 1 ? o.rate : d;        // sFlow: the vendor's usual rate until one is entered
 const rated = f => Object.assign(f, {rated:true});
-const ciscoFnf = proto => rated((ip, port, o) => `${o.rate > 1 ? `sampler FT-SAMP\n mode random 1 out-of ${o.rate}\n` : ''}flow record FT-REC\n match ipv4 source address\n match ipv4 destination address\n match ipv4 protocol\n match transport source-port\n match transport destination-port\n match interface input\n match flow direction\n collect interface output\n collect counter bytes long\n collect counter packets long\n collect timestamp sys-uptime first\n collect timestamp sys-uptime last\nflow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n export-protocol ${proto}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record FT-REC\n cache timeout active 60\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow monitor FT-MON${o.rate > 1 ? ' sampler FT-SAMP' : ''} input\n ip flow monitor FT-MON${o.rate > 1 ? ' sampler FT-SAMP' : ''} output`);
-const juniper = (tpl, kw) => rated((ip, port, o) => `set services flow-monitoring ${tpl} template FT ipv4-template\nset forwarding-options sampling instance FT input rate ${o.rate}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} ${kw} template FT`);
-const vyos = v => rated((ip, port, o) => `set system flow-accounting netflow version ${v}\nset system flow-accounting netflow server ${ip} port ${port}\n${o.rate > 1 ? `set system flow-accounting netflow sampling-rate ${o.rate}\n` : ''}set system flow-accounting netflow timeout expiry-interval 60\nset system flow-accounting interface eth0\n# ${T('VyOS 1.4 and newer: set system flow-accounting netflow interface eth0')}\ncommit; save`);
-const huawei = v => (ip, port) => `ip netstream timeout active 1\nip netstream export version ${v}\nip netstream export source <${T('address of this device')}>\nip netstream export host ${ip} ${port}\n# ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/1\n ip netstream inbound\n ip netstream outbound`;
+// the interfaces of the form (chosen from SNMP or typed): the snippets that name interfaces are marked named() and use
+// these instead of their examples; for the others the configuration lists them
+const named = f => Object.assign(f, {named:true});
+const mtIfs = o => o.ifs.length ? o.ifs.join(',') : 'all';     // RouterOS: a list or all
+const each = (o, examples, fn) => (o.ifs.length ? o.ifs : examples).map(fn).join('');
+const ciscoFnf = proto => named(rated((ip, port, o) => `${o.rate > 1 ? `sampler FT-SAMP\n mode random 1 out-of ${o.rate}\n` : ''}flow record FT-REC\n match ipv4 source address\n match ipv4 destination address\n match ipv4 protocol\n match transport source-port\n match transport destination-port\n match interface input\n match flow direction\n collect interface output\n collect counter bytes long\n collect counter packets long\n collect timestamp sys-uptime first\n collect timestamp sys-uptime last\nflow exporter FLOWTRACK\n destination ${ip}\n transport udp ${port}\n export-protocol ${proto}\n template data timeout 60\nflow monitor FT-MON\n exporter FLOWTRACK\n record FT-REC\n cache timeout active 60\n! ${T('on every interface to watch (WAN and LAN)')}${each(o, ['GigabitEthernet0/0/0'], n => `\ninterface ${n}\n ip flow monitor FT-MON${o.rate > 1 ? ' sampler FT-SAMP' : ''} input\n ip flow monitor FT-MON${o.rate > 1 ? ' sampler FT-SAMP' : ''} output`)}`));
+const juniper = (tpl, kw) => named(rated((ip, port, o) => `set services flow-monitoring ${tpl} template FT ipv4-template\nset forwarding-options sampling instance FT input rate ${o.rate}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} port ${port}\nset forwarding-options sampling instance FT family inet output flow-server ${ip} ${kw} template FT\n# ${T('on every interface to watch (WAN and LAN)')}${each(o, ['ge-0/0/0.0'], n => { const [ifd, unit = '0'] = n.split('.');
+    return `\nset interfaces ${ifd} unit ${unit} family inet sampling input\nset interfaces ${ifd} unit ${unit} family inet sampling output`; })}`));
+const vyos = v => named(rated((ip, port, o) => `set system flow-accounting netflow version ${v}\nset system flow-accounting netflow server ${ip} port ${port}\n${o.rate > 1 ? `set system flow-accounting netflow sampling-rate ${o.rate}\n` : ''}set system flow-accounting netflow timeout expiry-interval 60\n${each(o, ['eth0'], n => `set system flow-accounting interface ${n}\n`)}# ${T('VyOS 1.4 and newer: set system flow-accounting netflow interface eth0')}\ncommit; save`));
+const huawei = v => named((ip, port, o) => `ip netstream timeout active 1\nip netstream export version ${v}\nip netstream export source <${T('address of this device')}>\nip netstream export host ${ip} ${port}\n# ${T('on every interface to watch (WAN and LAN)')}${each(o, ['GigabitEthernet0/0/1'], n => `\ninterface ${n}\n ip netstream inbound\n ip netstream outbound`)}`);
 const steps = list => (ip, port) => list(ip, port).map((x, i) => `${i + 1}. ${x}`).join('\n');
 // sFlow: a switch samples what comes IN on every port (both directions everywhere counts traffic twice); a router or
 // firewall doing NAT samples its LAN side in both directions — on the WAN the packets carry its public address, not the host's
 const SFLOW_NOTE = () => T('switches: sample incoming traffic (ingress) on every port — both directions everywhere counts the traffic twice; a router or firewall doing NAT: sample the LAN-side interfaces in both directions and not the WAN, where packets carry the public address instead of the inside host');
 const VENDORS = {
-  Fortinet:{netflow9:(ip, port) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}\nconfig system interface\n    edit "wan1"\n        set netflow-sampler both\n    next\n    edit "internal"\n        set netflow-sampler both\n    next\nend`,
-    sflow:rated((ip, port, o) => `config system sflow\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('FortiOS 7.0 and older: set collector-ip / set collector-port directly under config system sflow')}\n# ${T('the LAN-side interfaces in both directions, not the WAN: on the WAN sFlow sees the public address instead of the inside host (FortiOS samples before NAT)')}\n# ${T('Wi-Fi through FortiAPs in tunnel mode shows as the access point\'s CAPWAP traffic (UDP 5247), not as its clients; for per-host traffic use NetFlow v9')}\nconfig system interface\n    edit "internal"\n        set sflow-sampler enable\n        set sample-rate ${sfRate(o, 1000)}\n        set sample-direction both\n        set polling-interval 20\n    next\nend`)},
+  Fortinet:{netflow9:named((ip, port, o) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}\nconfig system interface${each(o, ['wan1', 'internal'], n => `\n    edit "${n}"\n        set netflow-sampler both\n    next`)}\nend`),
+    sflow:named(rated((ip, port, o) => `config system sflow\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('FortiOS 7.0 and older: set collector-ip / set collector-port directly under config system sflow')}\n# ${T('the LAN-side interfaces in both directions, not the WAN: on the WAN sFlow sees the public address instead of the inside host (FortiOS samples before NAT)')}\n# ${T('Wi-Fi through FortiAPs in tunnel mode shows as the access point\'s CAPWAP traffic (UDP 5247), not as its clients; for per-host traffic use NetFlow v9')}\nconfig system interface${each(o, ['internal'], n => `\n    edit "${n}"\n        set sflow-sampler enable\n        set sample-rate ${sfRate(o, 1000)}\n        set sample-direction both\n        set polling-interval 20\n    next`)}\nend`))},
   Cisco:{netflow9:ciscoFnf('netflow-v9'), ipfix:ciscoFnf('ipfix'),
-    sflow:rated((ip, port, o) => `! ${T('Cisco Nexus (NX-OS); IOS routers export NetFlow / IPFIX')}\nfeature sflow\nsflow sampling-rate ${sfRate(o, 1024)}\nsflow counter-poll-interval 20\nsflow collector-ip ${ip} vrf default\nsflow collector-port ${port}\nsflow agent-ip <${T('address of this device')}>\n! ${SFLOW_NOTE()}\nsflow data-source interface ethernet 1/1`),
-    netflow5:(ip, port) => `! ${T('classic NetFlow (older IOS): IPv4 only')}\nip flow-export version 5\nip flow-export destination ${ip} ${port}\nip flow-cache timeout active 1\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface GigabitEthernet0/0/0\n ip flow ingress\n ip flow egress`},
-  MikroTik:{netflow9:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=9`,
-    ipfix:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=ipfix`,
-    netflow5:(ip, port) => `/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=5`},
+    sflow:named(rated((ip, port, o) => `! ${T('Cisco Nexus (NX-OS); IOS routers export NetFlow / IPFIX')}\nfeature sflow\nsflow sampling-rate ${sfRate(o, 1024)}\nsflow counter-poll-interval 20\nsflow collector-ip ${ip} vrf default\nsflow collector-port ${port}\nsflow agent-ip <${T('address of this device')}>\n! ${SFLOW_NOTE()}${each(o, ['ethernet 1/1'], n => `\nsflow data-source interface ${n}`)}`)),
+    netflow5:named((ip, port, o) => `! ${T('classic NetFlow (older IOS): IPv4 only')}\nip flow-export version 5\nip flow-export destination ${ip} ${port}\nip flow-cache timeout active 1\n! ${T('on every interface to watch (WAN and LAN)')}${each(o, ['GigabitEthernet0/0/0'], n => `\ninterface ${n}\n ip flow ingress\n ip flow egress`)}`)},
+  MikroTik:{netflow9:named((ip, port, o) => `/ip traffic-flow set enabled=yes interfaces=${mtIfs(o)} active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=9`),
+    ipfix:named((ip, port, o) => `/ip traffic-flow set enabled=yes interfaces=${mtIfs(o)} active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=ipfix`),
+    netflow5:named((ip, port, o) => `/ip traffic-flow set enabled=yes interfaces=${mtIfs(o)} active-flow-timeout=1m\n/ip traffic-flow target add dst-address=${ip} port=${port} version=5`)},
   Juniper:{ipfix:juniper('version-ipfix', 'version-ipfix'), netflow9:juniper('version9', 'version9'),
-    sflow:rated((ip, port, o) => `# ${T('EX / QFX switches')}\nset protocols sflow collector ${ip} udp-port ${port}\nset protocols sflow sample-rate ingress ${sfRate(o, 1000)}\nset protocols sflow polling-interval 20\n# ${SFLOW_NOTE()}\nset protocols sflow interfaces ge-0/0/0`)},
+    sflow:named(rated((ip, port, o) => `# ${T('EX / QFX switches')}\nset protocols sflow collector ${ip} udp-port ${port}\nset protocols sflow sample-rate ingress ${sfRate(o, 1000)}\nset protocols sflow polling-interval 20\n# ${SFLOW_NOTE()}${each(o, ['ge-0/0/0'], n => `\nset protocols sflow interfaces ${n}`)}`))},
   'Palo Alto':{netflow9:steps((ip, port) => [T('Device → Server Profiles → NetFlow → Add: name FlowTrack, active timeout 1 min, template refresh 1 min.'),
     T('Servers → Add: address {ip}, port {port}.', {ip, port}), T('Network → Interfaces → each interface to watch → Advanced → NetFlow Profile: FlowTrack.'), T('Commit.')])},
   'Check Point':{netflow9:(ip, port) => `# Gaia clish\nadd netflow collector ip ${ip} port ${port} export-format Netflow_V9\nsave config`,
@@ -1622,24 +1628,24 @@ const VENDORS = {
     T('Device → AppFlow → Flow Reporting (older SonicOS: Log → Flow Reporting).'), T('Send flows to an external collector: on; protocol: {proto}.', {proto: l}),
     T('External collector: {ip}, port {port}.', {ip, port}), T('Report on the interfaces to watch (WAN and LAN), then Accept.')])])),
   Huawei:{netflow9:huawei(9), netflow5:huawei(5),
-    sflow:rated((ip, port, o) => `sflow agent ip <${T('address of this device')}>\nsflow collector 1 ip ${ip} udp-port ${port}\n# ${SFLOW_NOTE()}\ninterface GigabitEthernet0/0/1\n sflow flow-sampling collector 1\n sflow flow-sampling rate ${sfRate(o, 1000)}\n sflow flow-sampling inbound\n sflow counter-sampling collector 1\n sflow counter-sampling interval 20`)},
+    sflow:named(rated((ip, port, o) => `sflow agent ip <${T('address of this device')}>\nsflow collector 1 ip ${ip} udp-port ${port}\n# ${SFLOW_NOTE()}${each(o, ['GigabitEthernet0/0/1'], n => `\ninterface ${n}\n sflow flow-sampling collector 1\n sflow flow-sampling rate ${sfRate(o, 1000)}\n sflow flow-sampling inbound\n sflow counter-sampling collector 1\n sflow counter-sampling interval 20`)}`))},
   Arista:{sflow:rated((ip, port, o) => `sflow sample ${sfRate(o, 1024)}\nsflow polling-interval 20\nsflow destination ${ip} ${port}\nsflow source-interface Management1\nsflow run`),
-    ipfix:rated((ip, port, o) => `flow tracking sampled\n   sample ${sfRate(o, 1024)}\n   tracker FT\n      exporter FT\n         collector ${ip} port ${port}\n         local interface Management1\n   no shutdown\n! ${T('on every interface to watch (WAN and LAN)')}\ninterface Ethernet1\n   flow tracker sampled FT`)},
+    ipfix:named(rated((ip, port, o) => `flow tracking sampled\n   sample ${sfRate(o, 1024)}\n   tracker FT\n      exporter FT\n         collector ${ip} port ${port}\n         local interface Management1\n   no shutdown\n! ${T('on every interface to watch (WAN and LAN)')}${each(o, ['Ethernet1'], n => `\ninterface ${n}\n   flow tracker sampled FT`)}`))},
   'VyOS / EdgeOS':{netflow9:vyos(9), ipfix:vyos(10), netflow5:vyos(5),
-    sflow:rated((ip, port, o) => `# VyOS 1.4+\nset system sflow server ${ip} port ${port}\nset system sflow sampling-rate ${sfRate(o, 1000)}\nset system sflow interface eth0\n# ${T('EdgeOS: set system flow-accounting sflow server {ip} port {port}; set system flow-accounting interface eth0', {ip, port})}\ncommit; save`)},
+    sflow:named(rated((ip, port, o) => `# VyOS 1.4+\nset system sflow server ${ip} port ${port}\nset system sflow sampling-rate ${sfRate(o, 1000)}\n${each(o, ['eth0'], n => `set system sflow interface ${n}\n`)}# ${T('EdgeOS: set system flow-accounting sflow server {ip} port {port}; set system flow-accounting interface eth0', {ip, port})}\ncommit; save`))},
   'pfSense / OPNsense':Object.fromEntries([['netflow9', 'v9', '9'], ['ipfix', null, '10'], ['netflow5', 'v5', '5']].map(([k, opn, pf]) => [k, steps((ip, port) => [
     ...(opn ? [T('OPNsense: Reporting → NetFlow: listening interfaces (WAN and LAN), version {v}, destination {ip}:{port}, Apply.', {v: opn, ip, port})] : []),
     T('pfSense: install the softflowd package; Services → softflowd: interfaces (WAN and LAN), host {ip}, port {port}, NetFlow version {v}, Save.', {ip, port, v: pf})])])),
-  'Linux / pmacct':Object.fromEntries([['ipfix', 10], ['netflow9', 9], ['netflow5', 5]].map(([k, v]) => [k, (ip, port, o) =>
-    `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: ${v}\n${o.rate > 1 ? `sampling_rate: ${o.rate}\n` : ''}pcap_interface: eth0\n# ${T('or softflowd')}: softflowd -i eth0 -n ${ip}:${port} -v ${v} -t maxlife=60`]).concat([['sflow',
-    rated((ip, port, o) => `# /etc/hsflowd.conf (host-sflow)\nsflow {\n  collector { ip = ${ip} udpport = ${port} }\n  sampling = ${sfRate(o, 1000)}\n  polling = 20\n  pcap { dev = eth0 }\n}\n# ${T('or pmacct')}: plugins: sfprobe · sfprobe_receiver: ${ip}:${port} · sampling_rate: ${sfRate(o, 1000)}`)]])),
+  'Linux / pmacct':Object.fromEntries([['ipfix', 10], ['netflow9', 9], ['netflow5', 5]].map(([k, v]) => [k, named((ip, port, o) =>
+    `# /etc/pmacct/pmacctd.conf\nplugins: nfprobe\nnfprobe_receiver: ${ip}:${port}\nnfprobe_version: ${v}\n${o.rate > 1 ? `sampling_rate: ${o.rate}\n` : ''}pcap_interface: ${(o.ifs[0] || 'eth0')}\n# ${T('or softflowd')}: softflowd -i ${(o.ifs[0] || 'eth0')} -n ${ip}:${port} -v ${v} -t maxlife=60${o.ifs.length > 1 ? `\n# ${T('one interface per process: run one more for each of {names}', {names: o.ifs.slice(1).join(', ')})}` : ''}`)]).concat([['sflow',
+    named(rated((ip, port, o) => `# /etc/hsflowd.conf (host-sflow)\nsflow {\n  collector { ip = ${ip} udpport = ${port} }\n  sampling = ${sfRate(o, 1000)}\n  polling = 20\n${each(o, ['eth0'], n => `  pcap { dev = ${n} }\n`)}}\n# ${T('or pmacct')}: plugins: sfprobe · sfprobe_receiver: ${ip}:${port} · sampling_rate: ${sfRate(o, 1000)}`))]])),
   Other:Object.fromEntries(['netflow9', 'ipfix', 'netflow5'].map(k => [k, steps((ip, port) => [
     T('Flow export ({proto}) to {ip}, UDP port {port}.', {proto: PROTO_NAME[k], ip, port}), T('Active timeout 60 s, inactive timeout 15 s; templates resent at least every minute.'),
     T('On every interface to watch (WAN and LAN), ingress — or ingress and egress when the record carries the flow direction.'),
     T('Fields: addresses, ports, protocol, input and output interface, bytes, packets, first and last time.')])]).concat([['sflow', steps((ip, port) => [
     T('sFlow version 5 to {ip}, UDP port {port}.', {ip, port}), T('Sampling 1 of 1000 packets on fast links (1 of 100–500 on slower ones), counter polling every 20 s.'),
     SFLOW_NOTE()])]])),
-  'HPE Aruba':{sflow:rated((ip, port, o) => `! AOS-CX\nsflow\nsflow collector ${ip} port ${port}\nsflow sampling ${sfRate(o, 1024)}\nsflow polling 20\n! ${SFLOW_NOTE()}\ninterface 1/1/1\n    sflow\n! ${T('AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20', {ip, port, rate: sfRate(o, 1024)})}`)},
+  'HPE Aruba':{sflow:named(rated((ip, port, o) => `! AOS-CX\nsflow\nsflow collector ${ip} port ${port}\nsflow sampling ${sfRate(o, 1024)}\nsflow polling 20\n! ${SFLOW_NOTE()}${each(o, ['1/1/1'], n => `\ninterface ${n}\n    sflow`)}\n! ${T('AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20', {ip, port, rate: sfRate(o, 1024)})}`))},
 };
 // the protocols FlowTrack takes from this vendor now, recommended first; vendors with none are not offered yet
 const vendorProtos = v => Object.keys(VENDORS[v] || {}).filter(p => PROTO_READY.includes(p) && VENDORS[v][p]);
@@ -1978,12 +1984,30 @@ function openDevice(dev){
   const sn = {enabled:!!st.enabled, version:st.version || '2c', host:st.host || '', port:st.port || 161, community:'', user:st.user || '', level:st.level || 'authPriv',
               auth_proto:st.auth_proto || snmpDefaults(vendor)[0], auth_pass:'', priv_proto:st.priv_proto || snmpDefaults(vendor)[1], priv_pass:''};
   let picked = !!st.auth_proto;           // stored or chosen by hand: a vendor tab no longer resets the protocols
+  // the interfaces the device configuration names: ticked from what SNMP found (with SNMP on), else typed by hand
+  let ifSel = [...(c.export_ifs || [])], snIfs = st.ok && st.ifs ? st.ifs : null;
+  const exportIfs = () => ifSel;
+  const pickIfs = () => { if (!ifSel.length && snIfs) ifSel = snIfs.filter(i => i.up && i.addrs.length && !/^(lo|loopback)/i.test(i.name)).map(i => i.name); };
+  pickIfs();
+  const wanIdx = () => new Set(String((document.getElementById('fWan') || {}).value ?? (c.wan_ifs || []).join(',')).split(',').map(x => parseInt(x, 10)));
+  const IF_EXAMPLE = {Fortinet:'wan1, internal', Cisco:'GigabitEthernet0/0/0', MikroTik:'ether1, bridge', Juniper:'ge-0/0/0.0', Huawei:'GigabitEthernet0/0/1',
+                      Arista:'Ethernet1', 'HPE Aruba':'1/1/1'};
+  const ifBox = () => {
+    const list = sn.enabled && snIfs && snIfs.length ? snIfs : null;
+    if (!list) return `<label>${T('Interfaces in the configuration (names on the device, comma-separated)')}<input id="fIfsTxt" value="${esc(ifSel.join(', '))}" placeholder="${esc(IF_EXAMPLE[vendor] || 'eth0')}"></label>`
+      + (sn.enabled ? `<p class="note">${T('Test SNMP to choose from the interfaces of the device.')}</p>` : '');
+    const wan = wanIdx(), have = new Set(list.map(i => i.name));
+    const row = (n, i) => `<label class="chk"><input type="checkbox" data-n="${esc(n)}"${ifSel.includes(n) ? ' checked' : ''}> <b class="mono">${esc(n)}</b>`
+      + (i && wan.has(i.index) ? ' <span class="tag">WAN</span>' : '') + `<span class="nat"> ${esc(i ? [i.alias, ...i.addrs].filter(Boolean).join(' · ') : T('not on the device'))}${i && !i.up ? ' · ' + T('down') : ''}</span></label>`;
+    return `<span class="lbl">${T('Interfaces in the configuration (from SNMP)')}</span><div class="iflist">${list.map(i => row(i.name, i)).join('')}${ifSel.filter(n => !have.has(n)).map(n => row(n, null)).join('')}</div>`;
+  };
   const SN_IDS = {sHost:'host', sPort:'port', sComm:'community', sUser:'user', sAuthP:'auth_pass', sPrivP:'priv_pass', sVer:'version', sLevel:'level', sAuth:'auth_proto', sPriv:'priv_proto'};
   const syncSn = () => { const on = document.getElementById('sOn'); if (!on) return; sn.enabled = on.checked;
     Object.entries(SN_IDS).forEach(([id, k]) => { const el = document.getElementById(id); if (el) sn[k] = k.endsWith('pass') || k === 'community' ? el.value : el.value.trim(); }); };
   const code = () => { const rem = ['Cisco', 'Arista', 'HPE Aruba'].includes(vendor) ? '!' : '#';
-    const el = document.getElementById('fSamp'), o = {rate: sampleRate(el ? el.value : c.sampling)}, f = VENDORS[vendor][proto];
+    const el = document.getElementById('fSamp'), o = {rate: sampleRate(el ? el.value : c.sampling), ifs: exportIfs()}, f = VENDORS[vendor][proto];
     return f(me, proto === 'sflow' ? sfPort : nfPort, o)
+      + (o.ifs.length && !f.named ? `\n${rem} ${T('interfaces to watch: {names}', {names: o.ifs.join(', ')})}` : '')
       + (o.rate > 1 && !f.rated ? `\n${rem} ${T('sampling 1:{n}: set the same rate on the device — FlowTrack scales the records that do not carry their rate by it', {n: o.rate})}` : '')
       + (sn.enabled ? `\n\n${rem} ---- SNMP ${sn.version === '3' ? 'v3' : 'v2c'} ----\n` + (SNMP_VENDORS[vendor] || SNMP_VENDORS.Other)(me, sn) : ''); };
   const protoNote = () => !editing || !dev.detected ? '' : dev.detected === proto ? `<span class="nat">${T('the device sends it now')}</span>`
@@ -2003,6 +2027,7 @@ function openDevice(dev){
       <div class="snmptest"><button class="btn" type="button" id="sTest">${T('Test SNMP')}</button><span class="nat" id="sMsg" role="status"></span></div>
       ${window.__snmpTools === false ? `<p class="err">${T('The server has no net-snmp tools (package snmp) yet: run sudo flowtrack upgrade.')}</p>` : ''}
       <p class="note">${T('FlowTrack polls the device when you save and then every hour. Names and addresses entered by hand under Interfaces take priority.')}</p>`;
+  let drawIfs = () => {};
   const draw = () => {
     if (!picked) [sn.auth_proto, sn.priv_proto] = snmpDefaults(VENDORS[vendor] ? vendor : 'Fortinet');
     snmpFit(VENDORS[vendor] ? vendor : 'Fortinet', sn);
@@ -2014,6 +2039,7 @@ function openDevice(dev){
         <div class="two"><label>${T('IP the export comes from')}<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>${T('Name')}<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
         <div class="two"><label>${T('Model')}<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>${T('form::Sampling')}<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
         <div class="two"><label>${T('snmp-index of WAN interfaces (comma-separated)')}<input id="fWan" value="${esc((c.wan_ifs || []).join(', '))}" placeholder="1"></label><label>${T('Index of «the device itself» (FortiOS: 0)')}<input id="fLocal" value="${c.local_if ?? ''}" placeholder="0"></label></div>
+        <div id="fIfs">${ifBox()}</div>
         <label>${T('Public IPs of the device (comma-separated)')}<input id="fPub" value="${esc((c.public_ips || []).join(', '))}" placeholder="198.51.100.10"></label>
         <div class="two"><label>${T('City')}<input id="fCity" value="${esc(c.city || '')}" placeholder="Amsterdam"></label><label>${T('Country code')}<input id="fCc" value="${esc(c.country || '')}" maxlength="2" placeholder="NL"></label></div>
         <div class="two"><label>${T('Latitude')}<input id="fLat" value="${c.lat ?? ''}" placeholder="52.37"></label><label>${T('Longitude')}<input id="fLon" value="${c.lon ?? ''}" placeholder="4.90"></label></div>
@@ -2035,17 +2061,22 @@ function openDevice(dev){
         if (!ip) { msg.textContent = T('Enter the export IP first'); msg.style.color = 'var(--crit)'; return; }
         msg.textContent = T('Polling…'); msg.style.color = '';
         try { const r = await apiPost('devices/snmp_test', {ip, snmp:sn});
-          if (r.ok) { msg.textContent = `✓ ${r.sys.name || ''} · ${T('{ifs} interfaces, {addrs} addresses', {ifs: r.interfaces, addrs: r.addresses})}`; msg.style.color = 'var(--ok)'; msg.title = r.sys.descr || ''; }
+          if (r.ok) { snIfs = r.ifs || []; pickIfs(); drawIfs(); redraw(); msg.textContent = `✓ ${r.sys.name || ''} · ${T('{ifs} interfaces, {addrs} addresses', {ifs: r.interfaces, addrs: r.addresses})}`; msg.style.color = 'var(--ok)'; msg.title = r.sys.descr || ''; }
           else { msg.textContent = r.error_text; msg.style.color = 'var(--crit)'; msg.title = r.detail || ''; }
         } catch (err) { msg.textContent = err.message; msg.style.color = 'var(--crit)'; } };
     };
-    wireSnmp();
+    const wireIfs = () => { const b = document.getElementById('fIfs');
+      b.querySelectorAll('input[type=checkbox]').forEach(el => el.onchange = () => { ifSel = [...b.querySelectorAll('input[type=checkbox]:checked')].map(x => x.dataset.n); redraw(); });
+      const t = document.getElementById('fIfsTxt'); if (t) t.oninput = () => { ifSel = t.value.split(',').map(x => x.trim()).filter(Boolean); redraw(); }; };
+    drawIfs = () => { document.getElementById('fIfs').innerHTML = ifBox(); wireIfs(); };
+    wireSnmp(); wireIfs();
     document.getElementById('fSamp').oninput = redraw;
-    document.getElementById('sOn').onchange = e => { syncSn(); box.hidden = !e.target.checked; redraw(); };
+    document.getElementById('fWan').addEventListener('input', () => drawIfs());
+    document.getElementById('sOn').onchange = e => { syncSn(); box.hidden = !e.target.checked; drawIfs(); redraw(); };
     document.getElementById('devForm').addEventListener('submit', async e => { e.preventDefault(); formErr('fErr'); syncSn();
       try {
         await apiPost('devices/save', {ip:document.getElementById('fIp').value.trim(), name:document.getElementById('fName').value, vendor, protocol:proto, model:document.getElementById('fModel').value,
-          sampling:document.getElementById('fSamp').value, wan_ifs:list('fWan'), local_if:document.getElementById('fLocal').value.trim(), public_ips:list('fPub'),
+          sampling:document.getElementById('fSamp').value, export_ifs:ifSel, wan_ifs:list('fWan'), local_if:document.getElementById('fLocal').value.trim(), public_ips:list('fPub'),
           city:document.getElementById('fCity').value, country:document.getElementById('fCc').value, lat:document.getElementById('fLat').value.trim(), lon:document.getElementById('fLon').value.trim(),
           snmp:sn});
         m.close(); META = await fetch('api/meta').then(r => r.json()); render();

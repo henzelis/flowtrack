@@ -3,6 +3,14 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.7.2 — 2026-10-14
+
+- Connect a device: the configuration names the device's own interfaces instead of examples. With SNMP on, the form
+  lists the interfaces SNMP found (name, description, addresses, down, WAN) to tick — after Test SNMP for a new device,
+  from the last poll when editing; up interfaces with an address are ticked at first. With SNMP off the names are typed
+  (comma-separated). The choice is kept with the device; a vendor whose configuration has no interface commands lists
+  them as a note.
+
 ## 1.7.1 — 2026-10-14
 
 - Pre-aggregated tables: a record that reached the collector more than ten minutes late, just before the moment an

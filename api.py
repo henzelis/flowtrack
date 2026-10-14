@@ -920,7 +920,7 @@ def snmp_status(ip, settings, data):
     d = data.get(ip) if e.get('enabled') else None
     if d:
         out.update({'polled': d.get('t', 0), 'ok': d.get('ok', False), 'last_ok': d.get('t_ok', 0), 'sys': d.get('sys', {}),
-                    'interfaces': len(d.get('ifs', {})), 'addresses': sum(len(v) for v in d.get('addrs', {}).values())})
+                    'ifs': snmp_ifs(d), 'interfaces': len(d.get('ifs', {})), 'addresses': sum(len(v) for v in d.get('addrs', {}).values())})
         if not d.get('ok'):
             out.update({'error': d.get('error'), 'error_text': snmp_error_text(d.get('error'), e, ip), 'detail': d.get('detail', '')})
     return out
@@ -995,7 +995,7 @@ def api_devices(q):
                     'direction_field': bool(s['exporter'] in dups and int(dups[s['exporter']]['with_dir'])),
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 and int(s['last']) > cfg_changed + 120 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
-                    'config': {k: c.get(k) for k in ('name', 'vendor', 'protocol', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling')},
+                    'config': {k: c.get(k) for k in ('name', 'vendor', 'protocol', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling', 'export_ifs')},
                     'snmp': snmp_status(s['exporter'], sset, sdata),
                     'interfaces': interfaces_of(c, [r for r in ifs if r['exporter'] == s['exporter']], seen_addrs.get(s['exporter'], {}),
                                                 sdata.get(s['exporter']) if sset.get(s['exporter'], {}).get('enabled') else None,
@@ -1258,11 +1258,33 @@ def device_from_body(b):
         except ValueError:
             raise BadRequest(tr('Invalid public IP: {ip}', ip=x))
     cfg['public_ips'] = pubs
+    cfg['export_ifs'] = export_ifs(b.get('export_ifs'))
     old = exporters_cfg(raw=True).get(ip, {})
     for k in ('if_names', 'if_addrs'):
         if old.get(k):
             cfg[k] = old[k]
     return ip, cfg
+
+
+def export_ifs(v):
+    """Interface names for the device configuration of the form (chosen from SNMP or typed): they go into commands
+    in quotes on some devices, so no quotes, spaces at the ends or control characters."""
+    out = []
+    for x in (v or [])[:64]:
+        x = str(x).strip() if isinstance(x, (str, int)) else ''
+        if not x or len(x) > 64 or any(ch in x for ch in '"\'`\\') or any(ord(ch) < 32 or ord(ch) == 127 for ch in x):
+            raise BadRequest(tr('Interface names: up to 64, each up to 64 characters, no quotes'))
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def snmp_ifs(d):
+    """The interfaces an SNMP poll found, for choosing those the device configuration names."""
+    addrs = d.get('addrs', {})
+    return [{'index': int(k), 'name': v.get('name') or v.get('descr') or '', 'alias': v.get('alias', ''), 'up': v.get('oper') == 1,
+             'addrs': addrs.get(k, [])} for k, v in sorted(d.get('ifs', {}).items(), key=lambda kv: int(kv[0]))[:500]
+            if v.get('name') or v.get('descr')]
 
 
 SNMP_FIELDS = {'version': N_('SNMP version'), 'host': N_('SNMP address'), 'port': N_('SNMP port'),
@@ -1304,7 +1326,8 @@ def post_snmp_test(body, user):
     ip = device_ip(body)
     e = snmp_from_body(ip, {**(body.get('snmp') or {}), 'enabled': True})
     try:
-        return {'ok': True, **snmp.summary(snmp.poll(ip, e))}
+        found = snmp.poll(ip, e)
+        return {'ok': True, **snmp.summary(found), 'ifs': snmp_ifs(found)}
     except snmp.SnmpError as x:
         return {'ok': False, 'error': x.code, 'error_text': snmp_error_text(x.code, e, ip), 'detail': x.detail[:300]}
 
