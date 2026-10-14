@@ -1155,7 +1155,7 @@ function vNetwork(){
       + seg('nLiveSeg', [['live', T('Live')], ['period', T('toggle::Period')]], live ? 'live' : 'period'))}
       <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>${T('from the internet')}</span><span><i class="bar" style="background:${C.up}"></i>${T('to the internet')}</span><span><i class="bar" style="background:${C.int}"></i>${T('internal')}</span><span><i class="bar dash" style="border-color:${RED}"></i>${T('no observation / gap')}</span><span><i class="bar dash" style="border-color:#AABEE6"></i>${T('L3 adjacency, no traffic')}</span></div>
       <div class="river netmap" id="cNet"></div>
-      <p class="note">${T('Devices are neighbours when their interfaces share a subnet (Settings → Devices → Interfaces) or when one records the other’s addresses on an interface. All traffic regardless of the Internet / Internal selector and the device filter.')}</p></section>
+      <p class="note">${T('Devices are neighbours when their interfaces share a subnet (Settings → Devices → Interfaces) or when one records the other’s addresses on an interface. The volumes on the links follow the selector at the top (Internet, Internal or All traffic); neighbours, gaps and the path search always use all traffic, and the device filter does not apply — choose the Point of View instead.')}</p></section>
     <div class="col s3">
       <div id="nKpi" class="col"></div>
       <section class="glass panel">${ph('search', T('Path'), T('the hops from a source to a destination'))}
@@ -1169,7 +1169,7 @@ function vNetwork(){
   wireSeg('nScaleSeg', m => { if (m === state.scale) return; state.scale = m; render(); });
   lockLive('nLiveSeg');
   wireSeg('nLiveSeg', m => { const l = m === 'live'; if (l === !!state.netLive) return; state.netLive = l; render(); });
-  const seq = renderSeq, P = () => ({t:'all', live:live ? 1 : 0, win:120});
+  const seq = renderSeq, P = () => ({t:state.traffic, live:live ? 1 : 0, win:120});
   let topo = null, path = null;
   const hopIndex = () => { const m = new Map(); if (path) path.hops.forEach((h, k) => { if (!m.has(h.device) && h.state !== 'unplaced' && h.state !== 'branch') m.set(h.device, k + 1); }); return m; };
   const map = createTopoMap(document.getElementById('cNet'), {onNode:n => { if (n.ip === 'internet' || n.ip === state.netPov) return; state.netPov = n.ip; if (n.more) state.netDepth = Math.max(depth, 1); render(); },

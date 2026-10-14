@@ -703,7 +703,7 @@ def api_devmap(q):
 
 def network_q(q):
     """Path analysis looks at every device and all traffic: device filters are dropped (the Point of View is chosen
-    instead), the traffic scope defaults to all, and a host filter (ip / dst) takes the host's packets in both
+    instead), the traffic scope follows the selector (all when not given), and a host filter (ip / dst) takes the host's packets in both
     directions — in an internal record int_ip is the sender, so `ip` alone would keep only what the host sent."""
     q = dict(q)
     try:
@@ -717,12 +717,18 @@ def network_q(q):
 
 
 def network_topology(q):
-    where, p, rng, step = scope(network_q(q))
+    """Neighbours, link states and the hops of a path come from all the traffic; the traffic selector (t) narrows
+    only the volumes on the links (topology.set_volumes)."""
+    nq = network_q(q)
+    narrow = {'internet': "dir IN ('up', 'down')", 'internal': "dir IN ('internal', 'internal_back')"}.get(q1(nq, 't', 'all'))
+    where, p, rng, step = scope({**nq, 't': ['all']})
     where, live = live_window(q, where, p, default='0')
     cfg = exporters_cfg()
     known = {a.split('/')[0] for c in cfg.values() for v in c.get('if_addrs', {}).values() for a in v} | set(cfg) | \
         {a for c in cfg.values() for a in c.get('public_ips', [])}
     topo = topology.build(cfg, *topology.query(ch, where, p, known))
+    if narrow:
+        topology.set_volumes(topo, topology.iface_volumes(ch, f'{where} AND {narrow}', p))
     hints = iface_hints()
     for lk in topo['links']:
         seen = {}

@@ -331,6 +331,31 @@ def path_query(ch, where, p, src, dst):
         GROUP BY exporter, in_if, out_if ORDER BY b DESC LIMIT 500""", p, fmt='JSON')
 
 
+def iface_volumes(ch, where, p):
+    """Bytes out of and into every interface of every exporter, also split by direction (build() rows `ifaces`)."""
+    return ch(f"""SELECT exporter, iface, sum(o) AS out_bytes, sum(i) AS in_bytes, sum(u) AS up, sum(dn) AS down, sum(it) AS internal FROM (
+            SELECT exporter, out_if AS iface, bytes AS o, 0 AS i, if(dir = 'up', bytes, 0) AS u, if(dir = 'down', bytes, 0) AS dn,
+                   if(dir NOT IN ('up', 'down'), bytes, 0) AS it FROM flows WHERE {where}
+            UNION ALL
+            SELECT exporter, in_if, 0, bytes, if(dir = 'up', bytes, 0), if(dir = 'down', bytes, 0), if(dir NOT IN ('up', 'down'), bytes, 0)
+                FROM flows WHERE {where})
+        GROUP BY exporter, iface""", p, fmt='JSON')
+
+
+def set_volumes(topo, ifaces):
+    """Replace the traffic of every link with `ifaces` (iface_volumes() of a narrower traffic scope); neighbours and
+    link states stay as found in all the traffic — two devices may class the same packets differently (one sees
+    them go to the internet, the other between inside networks), so a narrower scope would show false gaps."""
+    vol = {(r['exporter'], int(r['iface'])): r for r in ifaces}
+    for lk in topo['links']:
+        for e in ('a', 'b'):
+            if lk[e + '_if'] is None or lk['b'] == INTERNET and e == 'b':
+                continue
+            v = vol.get((lk[e], lk[e + '_if']), {})
+            lk[e + '_out'], lk[e + '_in'] = int(v.get('out_bytes', 0)), int(v.get('in_bytes', 0))
+            lk[e + '_dir'] = {k: int(v.get(k, 0)) for k in ('up', 'down', 'internal')}
+
+
 def query(ch, where, p, known):
     """Rows for build() from the records of the period: near-end addresses per interface (inside addresses and the
     devices' own `known` addresses only — outside addresses are many and say nothing about neighbours) and the
@@ -345,13 +370,7 @@ def query(ch, where, p, known):
             UNION ALL
             SELECT exporter, out_if AS iface, {dst} AS addr, count() AS n FROM flows WHERE {where} AND {keep.format(x=dst)} GROUP BY exporter, iface, addr)
         GROUP BY exporter, iface, addr ORDER BY records DESC LIMIT 50000""", p, fmt='JSON')
-    ifaces = ch(f"""SELECT exporter, iface, sum(o) AS out_bytes, sum(i) AS in_bytes, sum(u) AS up, sum(dn) AS down, sum(it) AS internal FROM (
-            SELECT exporter, out_if AS iface, bytes AS o, 0 AS i, if(dir = 'up', bytes, 0) AS u, if(dir = 'down', bytes, 0) AS dn,
-                   if(dir NOT IN ('up', 'down'), bytes, 0) AS it FROM flows WHERE {where}
-            UNION ALL
-            SELECT exporter, in_if, 0, bytes, if(dir = 'up', bytes, 0), if(dir = 'down', bytes, 0), if(dir NOT IN ('up', 'down'), bytes, 0)
-                FROM flows WHERE {where})
-        GROUP BY exporter, iface""", p, fmt='JSON')
+    ifaces = iface_volumes(ch, where, p)
     exporting = {r['exporter'] for r in ifaces}
     # conversations recorded by more than one device (a busy network: a sample of them, chosen by the conversation,
     # so every device keeps all records of a conversation in the sample)

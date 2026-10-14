@@ -3,6 +3,14 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.7.3 — 2026-10-14
+
+- Through device follows the Internet / Internal / All traffic selector: the device map, the paths and interfaces
+  tables, the totals and the path inspector show the chosen traffic (before, always all of it).
+- Path analysis: the volumes on the links follow the selector too. Neighbours, link states (gaps) and the path search
+  still use all traffic — two devices may class the same packets differently (one as internet, the other as inside
+  traffic), so a narrower view would show gaps that are not there.
+
 ## 1.7.2 — 2026-10-14
 
 - Connect a device: the configuration names the device's own interfaces instead of examples. With SNMP on, the form
