@@ -429,6 +429,18 @@ been measured yet. Answers for 6 hours or more are kept on the server for 60 s, 
 same period get them at once. On a small office network (about 4 records/s, 330,000 records a day; real data) every
 Overview request for 24 hours or 7 days is answered in under 0.1 s.
 
+**A busy network (1.8.1).** 2,400 records/s — a day of about 207 million records (7.3 GiB) plus the live stream —
+in a VM with 4 vCPUs and 8 GB of RAM (ClickHouse 3.9 GiB). Requests the pages send for 24 hours, nothing cached:
+
+| Request | 1.8.0 | 1.8.1 |
+|---|---|---|
+| Devices list (Through device, Settings) | 30 s, failed | 2.1 s |
+| Through device: paths / path inspector | 10.9 s / 3.6 s | 0.7 s / 0.2 s |
+| Through device: device map | 43 s | 7.6 s |
+| Path analysis: neighbours and links | 30 s, failed | 0.2 s |
+| Path search | 30 s, failed | 17 s |
+| Live map: age of the newest arc | 120 s and growing | 0–1 s |
+
 ## Translations
 
 The code holds English only; every other language is one dictionary, `web/i18n/<code>.json` (`uk.json` is the

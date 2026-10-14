@@ -58,10 +58,19 @@ function api(path, params = {}, extraFilters = []){
   API_SHARED.set(url, e);
   return e.p;
 }
+// the server tags the queries of a page with this browser tab and this view of the page: when the tab moves on to
+// another page (or other filters), what the old one still runs is cancelled instead of holding up the new one
+const TAB_ID = (() => { try { const v = sessionStorage.getItem('ft-tab') || Math.random().toString(36).slice(2, 12); sessionStorage.setItem('ft-tab', v); return v; } catch (e) { return Math.random().toString(36).slice(2, 12); } })();
+let PAGE_ID = Math.random().toString(36).slice(2, 12), PAGE_AC = new AbortController();
+// a request of a page that is gone never answers it: its widgets were replaced (maybe by ones with the same ids)
+const NEVER = () => new Promise(() => {});
 async function apiFetch(url){
-  const r = await fetch(url);
+  let r;
+  try { r = await fetch(url, {headers:{'X-FT-Tab':TAB_ID, 'X-FT-Page':PAGE_ID}, signal:PAGE_AC.signal}); }
+  catch (e) { if (e.name === 'AbortError') return NEVER(); throw e; }
   if (r.status === 401) { showLogin(T('Session ended — sign in again')); throw new Error(T('login required')); }
   const body = await r.json().catch(() => ({}));
+  if (r.status === 409) return NEVER();          // cancelled by the server: the page changed
   if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
   return body;
 }
@@ -365,6 +374,9 @@ function createRiver(host, opts){
 // ===================== maps =====================
 const siteGeo = ip => { const d = META.devices.find(x => x.ip === ip); return d && d.lat != null ? [d.lon, d.lat] : null; };
 const siteCity = ip => { const d = META.devices.find(x => x.ip === ip); return d ? (d.city || d.name) : ip; };
+// lines on the map and the globe: the biggest places only (the rows come sorted by volume) — more are neither
+// readable nor drawable on a busy network; the regions and the city marks keep every place
+const MAP_LINES = 20;
 function flatMap(el, geo, onConn, arcs = !isCustom()){
   if (!echarts.getMap('world')) { el.innerHTML = '<div class="empty">' + T('Failed to load world map outlines') + '</div>'; return; }
   const c = mkChart(el);
@@ -379,7 +391,7 @@ function flatMap(el, geo, onConn, arcs = !isCustom()){
     const regions = [...byCountry].map(([cc, v]) => { let n = nameEn ? nameEn.of(cc) : cc; n = EN_FIX[n] || n; return {name:n, itemStyle:{areaColor:`rgba(47,123,255,${(0.18 + 0.42 * v / cmax).toFixed(2)})`}}; });
     const cities = new Map(); for (const r of rows) { const k = r.city + '|' + r.country; const g = cities.get(k) || {name:r.city || ccName(r.country), cc:r.country, lon:r.lo, lat:r.la, v:0}; g.v += tot(r); cities.set(k, g); }
     return {geo:{regions}, series:[
-      {id:'agg', data:rows.map(r => { const s = siteGeo(r.exporter); return s && {coords:[s, [r.lo, r.la]], lineStyle:{width:.6 + 3.4 * tot(r) / rmax, opacity:.22, color:r.up > r.dn ? C.up : C.down}}; }).filter(Boolean)},
+      {id:'agg', data:rows.slice(0, MAP_LINES).map(r => { const s = siteGeo(r.exporter); return s && {coords:[s, [r.lo, r.la]], lineStyle:{width:.6 + 3.4 * tot(r) / rmax, opacity:.22, color:r.up > r.dn ? C.up : C.down}}; }).filter(Boolean)},
       {id:'remotes', data:[...cities.values()].map(g => { const onSite = META.devices.some(d => d.lat != null && Math.abs(d.lat - g.lat) < 0.6 && Math.abs(d.lon - g.lon) < 0.9);
         return {name:g.name, full:`${g.name}, ${ccName(g.cc)}`, value:[g.lon, g.lat, g.v], v:g.v, label:onSite ? {show:false} : undefined}; })}]};
   };
@@ -405,10 +417,10 @@ function flatMap(el, geo, onConn, arcs = !isCustom()){
   if (window.ResizeObserver) { const ro = new ResizeObserver(() => requestAnimationFrame(pinTop)); ro.observe(el); onCleanup(() => ro.disconnect()); }
   // live arcs: poll new flows, then release them gradually so bursts from the exporter become a steady stream
   let since = Math.floor(Date.now() / 1000) - 120, queue = [], live = [];
-  const poll = async () => { try { const r = await api('live', {since}); since = r.rows.length ? r.rows[r.rows.length - 1].t : since; queue.push(...r.rows); if (queue.length > 400) queue = queue.slice(-400); } catch (e) {} };
+  const poll = async () => { try { const r = await api('live', {since}); since = r.upto || since; queue.push(...r.rows); if (queue.length > 120) queue = queue.slice(-120); } catch (e) {} };
   const tick = () => {
     const now = performance.now(); live = live.filter(e => now - e.born < 4500);
-    const n = Math.min(queue.length, Math.max(1, Math.ceil(queue.length / 4)), Math.max(0, 40 - live.length));
+    const n = Math.min(queue.length, Math.max(1, Math.ceil(queue.length / 4)), Math.max(0, MAP_LINES - live.length));
     for (const r of queue.splice(0, n)) {
       const s = siteGeo(r.exporter); if (!s || (s[0] === r.lon && s[1] === r.lat)) continue;
       const up = r.dir === 'up'; live.push({coords:up ? [s, [r.lon, r.lat]] : [[r.lon, r.lat], s], color:up ? C.up : C.down, born:now}); if (onConn) onConn(r);
@@ -426,7 +438,7 @@ function globe(el, geo){
     const tex = echarts.init(document.createElement('canvas'), null, {width:2048, height:1024});
     tex.setOption({backgroundColor:'#071431', animation:false, geo:{map:'world', silent:true, left:0, top:0, right:0, bottom:0, boundingCoords:[[-180, 90], [180, -90]], itemStyle:{areaColor:'#123072', borderColor:'#4C93FF', borderWidth:1.2}}});
     const c = mkChart(el); onCleanup(() => tex.dispose());
-    const arcs = geo => geo.rows.slice(0, 80).map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean);
+    const arcs = geo => geo.rows.slice(0, MAP_LINES).map(r => { const s = siteGeo(r.exporter); if (!s) return null; const up = r.up > r.dn; return {coords:up ? [s, [r.lo, r.la]] : [[r.lo, r.la], s], lineStyle:{color:up ? C.up : C.down}}; }).filter(Boolean);
     const places = geo => { const m = new Map(); for (const r of geo.rows.slice(0, 10)) m.set(r.city, {name:r.city || ccName(r.country), value:[r.lo, r.la, 0]}); return [...m.values()]; };
     const devs = [...new Map(META.devices.filter(d => d.lat != null).map(d => [d.city || d.name, {name:d.city || d.name, lon:d.lon, lat:d.lat}])).values()];   // one label per site
     c.setOption({globe:{baseTexture:tex, shading:'lambert', environment:'none', globeRadius:100, light:{ambient:{intensity:.55}, main:{intensity:1.1, alpha:30, beta:40}},
@@ -2415,7 +2427,11 @@ function renderShell(){
 }
 function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.view === 'settings') p.set('tab', state.setTab || 'general'); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
 function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') === 'devices' || p.get('v') === 'users') { state.view = 'settings'; state.setTab = p.get('v'); } else if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('tab')) state.setTab = p.get('tab'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
-function render(){ if (state.view === 'devices' || state.view === 'users') { state.setTab = state.view; state.view = 'settings'; } renderSeq++; cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
+function render(){ if (state.view === 'devices' || state.view === 'users') { state.setTab = state.view; state.view = 'settings'; } renderSeq++;
+  PAGE_ID = Math.random().toString(36).slice(2, 12);     // a new view: the server cancels what the old one still runs
+  PAGE_AC.abort(); PAGE_AC = new AbortController();       // and the browser stops waiting for it
+  for (const [k, v] of API_SHARED) if (!v.done) API_SHARED.delete(k);     // nor is a cancelled answer shared with it
+  cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }
 
 document.getElementById('devSel').onchange = e => { state.filters = state.filters.filter(f => f.k !== 'device'); if (e.target.value) putFilter({k:'device', v:e.target.value, neg:false}); render(); };
 document.getElementById('rangeSel').onchange = e => { const v = e.target.value; if (v === 'pick') { e.target.value = state.range; openPeriod(); return; } if (v !== 'custom') { state.range = v; render(); } };

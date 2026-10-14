@@ -4,6 +4,7 @@
 All user input reaches ClickHouse only as bound query parameters ({name:Type}),
 never by string interpolation; dimension names come from fixed whitelists.
 """
+import hashlib
 import ipaddress
 import json
 import os
@@ -27,7 +28,7 @@ import licensing  # noqa: E402
 import rollups  # noqa: E402
 import snmp  # noqa: E402
 import topology  # noqa: E402
-from common import (COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, license_refresh, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (web_query, COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, license_refresh, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr,
                     trn, N_, get_lang, languages)
 
@@ -636,58 +637,88 @@ def api_river(q):
             'more_left': more_l, 'more_right': more_r, 'links': out, 'window_end': p.get('wend'), 'window': win if live else rng, 'live': live, 'range': rng}
 
 
+def iface_from(p, where, live, cols):
+    """`FROM … WHERE …` of Through device / Path analysis (a caller may add `AND …`): the pre-aggregated totals per
+    interface pair (agg_iface*) over a period, or the records of a live window (cheap: two minutes). Rows have
+    `flows` (records)."""
+    if not live:
+        return src(p, cols)
+    rc = ', '.join(f'{rollups.RAW_EXPR[c]} AS {c}' if c in rollups.RAW_EXPR else c for c in cols)
+    return f"(SELECT ts, exporter, dir, {rc}, bytes, packets, toUInt64(1) AS flows FROM {p['_flows']} WHERE {where}) WHERE 1"
+
+
+def _live_window(q, where, p):
+    live = q1(q, 'live', '0') == '1' and not p['custom']
+    win = max(60, min(q1(q, 'win', '120', int), 900))
+    wend = None
+    if live:
+        wend = live_end(q)
+        p['wend'], p['win'] = wend, win
+        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
+    return where, live, win, wend
+
+
+def _path_hosts(p, where, live):
+    """{(in_if, out_if): inside hosts on the path}"""
+    rows = ch(f"SELECT in_if, out_if, uniqExact(int_ip) AS h FROM {iface_from(p, where, live, ['in_if', 'out_if', 'int_ip'])} GROUP BY in_if, out_if", p, fmt='JSON')
+    return {(int(r['in_if']), int(r['out_if'])): int(r['h']) for r in rows}
+
+
+METRIC = {'bytes': 'bytes', 'packets': 'packets', 'flows': 'flows'}
+
+
 def api_paths(q):
     """Traffic through an exporter: (input interface -> output interface) pairs with volume, hosts and services.
     The device comes from the 'device' filter; live = the last `win` seconds of data, otherwise the range."""
     where, p, rng, step = scope(q)
-    metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
-    live = q1(q, 'live', '0') == '1' and not p['custom']
-    win = max(60, min(q1(q, 'win', '120', int), 900))
-    wend = None
-    if live:
-        wend = live_end(q)
-        p['wend'], p['win'] = wend, win
-        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
-    rows = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sum(bytes) AS b, sum(packets) AS pk, count() AS fl,
-            uniqExact(cityHash64(int_ip)) AS hosts, topKWeighted(3)(service, bytes) AS services,
+    metric = METRIC.get(q1(q, 'metric', 'bytes'), 'bytes')
+    where, live, win, wend = _live_window(q, where, p)
+    rows = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sum(bytes) AS b, sum(packets) AS pk, sum(flows) AS fl,
+            topKWeighted(3)(service, bytes) AS services,
             sumIf(bytes, dir IN ('up', 'down')) AS internet, sumIf(bytes, dir IN ('internal', 'internal_back')) AS internal
-        FROM {p['_flows']} WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 80""", p, fmt='JSON')
+        FROM {iface_from(p, where, live, ['in_if', 'out_if', 'service'])} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 80""", p, fmt='JSON')
+    hosts = _path_hosts(p, where, live) if rows else {}
     for r in rows:
-        for k in ('in_if', 'out_if', 'b', 'pk', 'fl', 'hosts', 'internet', 'internal'):
+        for k in ('in_if', 'out_if', 'b', 'pk', 'fl', 'internet', 'internal'):
             r[k] = int(r[k])
         r['v'] = float(r['v'])
+        r['hosts'] = hosts.get((r['in_if'], r['out_if']), 0)
     return {'rows': rows, 'live': live, 'window_end': wend, 'window': win if live else rng, 'range': rng}
 
 
 def api_devmap(q):
-    """One exporter as a box with ports: interface pairs (paths through the box), the inside hosts behind each
-    inside interface and the outside addresses behind each WAN interface. Same time window rules as api_paths."""
+    """One exporter as a box with ports: interface pairs (paths through the box; the 20 biggest by the chosen
+    metric), the inside hosts behind each inside interface and the outside addresses behind each WAN interface. Same
+    time window rules as api_paths."""
     where, p, rng, step = scope(q)
-    metric = {'bytes': 'bytes', 'packets': 'packets', 'flows': '1'}.get(q1(q, 'metric', 'bytes'), 'bytes')
-    live = q1(q, 'live', '0') == '1' and not p['custom']
-    win = max(60, min(q1(q, 'win', '120', int), 900))
-    wend = None
-    if live:
-        wend = live_end(q)
-        p['wend'], p['win'] = wend, win
-        where += ' AND ts > toDateTime({wend:UInt32}) - toIntervalSecond({win:UInt32}) AND ts <= toDateTime({wend:UInt32})'
+    metric = METRIC.get(q1(q, 'metric', 'bytes'), 'bytes')
+    where, live, win, wend = _live_window(q, where, p)
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     paths = ch(f"""SELECT in_if, out_if, sum({metric}) AS v, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
-            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, count() AS fl, uniqExact(cityHash64(int_ip)) AS hosts,
-            topKWeighted(3)(service, toUInt64({metric})) AS services
-        FROM {p['_flows']} WHERE {where} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 60""", p, fmt='JSON')
+            sumIf({metric}, dir NOT IN ('up', 'down')) AS other, sum(flows) AS fl, topKWeighted(3)(service, toUInt64({metric})) AS services
+        FROM {iface_from(p, where, live, ['in_if', 'out_if', 'service'])} GROUP BY in_if, out_if ORDER BY v DESC LIMIT 20""", p, fmt='JSON')
+    hosts = _path_hosts(p, where, live) if paths else {}
     # an inside host enters the box through: in_if when it sends (up; between inside hosts 'internal' = int_ip sends,
-    # 'internal_back' = ext_ip sends), out_if when it receives (down; the other end of an inside record)
+    # 'internal_back' = ext_ip (peer_ip) sends), out_if when it receives (down; the other end of an inside record)
+    hs = lambda: iface_from(p, where, live, ['in_if', 'out_if', 'int_ip', 'peer_ip'])      # noqa: E731
     inside = ch(f"""SELECT host, iface, sum(u) AS up, sum(d) AS dn, sum(u) + sum(d) AS v FROM (
             SELECT int_ip AS host, if(dir IN ('down', 'internal_back'), out_if, in_if) AS iface, if(dir IN ('down', 'internal_back'), 0, {metric}) AS u,
                    if(dir IN ('down', 'internal_back'), {metric}, 0) AS d
-                FROM {p['_flows']} WHERE {where} AND dir IN ('up', 'down', 'internal', 'internal_back')
-            UNION ALL SELECT ext_ip, if(dir = 'internal', out_if, in_if), if(dir = 'internal', 0, {metric}), if(dir = 'internal', {metric}, 0)
-                FROM {p['_flows']} WHERE {where} AND dir IN ('internal', 'internal_back'))
+                FROM {hs()} AND dir IN ('up', 'down', 'internal', 'internal_back')
+            UNION ALL SELECT peer_ip, if(dir = 'internal', out_if, in_if), if(dir = 'internal', 0, {metric}), if(dir = 'internal', {metric}, 0)
+                FROM {hs()} AND dir IN ('internal', 'internal_back'))
         GROUP BY host, iface ORDER BY v DESC LIMIT {{n:UInt8}} BY iface LIMIT 60""", p, fmt='JSON')
-    outside = ch(f"""SELECT ext_ip AS host, if(dir = 'up', out_if, in_if) AS iface, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
+    # the outside addresses beyond the WAN ports: a busy network has hundreds of thousands a day — the biggest few per
+    # port are found approximately (constant memory; grouping them all with their names took 1.5 GiB on a day of
+    # 2,400 records/s), then counted exactly
+    ext = lambda: iface_from(p, where, live, ['in_if', 'out_if', 'out_ip', 'service', 'country', 'city'])      # noqa: E731
+    cand = ch(f"""SELECT if(dir = 'up', out_if, in_if) AS iface, topKWeighted({{k:UInt8}})(out_ip, toUInt64({metric})) AS top
+        FROM {ext()} AND dir IN ('up', 'down') GROUP BY iface""", {**p, 'k': 3 * p['n']}, fmt='JSON')
+    p['cand'] = sorted({h for r in cand for h in r['top']})
+    outside = ch(f"""SELECT out_ip AS host, if(dir = 'up', out_if, in_if) AS iface, sumIf({metric}, dir = 'up') AS up, sumIf({metric}, dir = 'down') AS dn,
             sum({metric}) AS v, any(service) AS service, any(country) AS country, any(city) AS city
-        FROM {p['_flows']} WHERE {where} AND dir IN ('up', 'down') GROUP BY host, iface ORDER BY v DESC LIMIT {{n:UInt8}}""", p, fmt='JSON')
+        FROM {ext()} AND dir IN ('up', 'down') AND has({{cand:Array(String)}}, out_ip)
+        GROUP BY host, iface ORDER BY v DESC LIMIT {{n:UInt8}}""", p, fmt='JSON') if p['cand'] else []
     num = ('in_if', 'out_if', 'iface', 'fl', 'hosts')
     for rows in (paths, inside, outside):
         for r in rows:
@@ -696,6 +727,8 @@ def api_devmap(q):
                     r[k] = int(val)
                 elif k in ('v', 'up', 'dn', 'other'):
                     r[k] = float(val)
+    for r in paths:
+        r['hosts'] = hosts.get((r['in_if'], r['out_if']), 0)
     for r in inside:
         r['name'] = NAMES.get(r['host'])
     return {'paths': paths, 'inside': inside, 'outside': outside, 'live': live, 'window_end': wend, 'window': win if live else rng, 'range': rng}
@@ -716,6 +749,41 @@ def network_q(q):
     return q
 
 
+# Path analysis (1.8.1): which devices are neighbours changes rarely, and finding it is the heaviest query FlowTrack
+# has (every conversation of the period, grouped by the devices that saw it). It is worked out in the background from
+# the last hour every 10 minutes (and at once when the devices' settings change); a page over a period then adds
+# only the volumes of its links, from the 5-minute totals per interface pair.
+TOPO_EVERY, TOPO_SPAN = 600, 3600
+_topo = {'key': None, 't': 0, 'data': None}
+_topo_lock = threading.Lock()
+
+
+def _known(cfg):
+    return {a.split('/')[0] for c in cfg.values() for v in c.get('if_addrs', {}).values() for a in v} | set(cfg) | \
+        {a for c in cfg.values() for a in c.get('public_ips', [])}
+
+
+def topo_structure(cfg, wait=True):
+    """(near, exporting, pairs) of the last hour, as topology.build() takes them; worked out again when older than
+    TOPO_EVERY or when the devices changed. wait=False (the background refresh) always works it out."""
+    key = (exporters_mtime(), snmp.data_mtime())
+    with _topo_lock:
+        if wait and _topo['data'] is not None and _topo['key'] == key and time.time() - _topo['t'] < TOPO_EVERY * 1.5:
+            return _topo['data']
+        p = {'span': TOPO_SPAN}
+        near, _, exporting, pairs = topology.query(ch, 'ts >= now() - toIntervalSecond({span:UInt32})', p, _known(cfg))
+        _topo.update(key=key, t=time.time(), data=(near, exporting, pairs))
+        return _topo['data']
+
+
+def topo_refresher(stop):
+    while not stop.wait(TOPO_EVERY):
+        try:
+            topo_structure(exporters_cfg(), wait=False)
+        except (CHError, OSError) as e:
+            print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
+
+
 def network_topology(q):
     """Neighbours, link states and the hops of a path come from all the traffic; the traffic selector (t) narrows
     only the volumes on the links (topology.set_volumes)."""
@@ -724,11 +792,17 @@ def network_topology(q):
     where, p, rng, step = scope({**nq, 't': ['all']})
     where, live = live_window(q, where, p, default='0')
     cfg = exporters_cfg()
-    known = {a.split('/')[0] for c in cfg.values() for v in c.get('if_addrs', {}).values() for a in v} | set(cfg) | \
-        {a for c in cfg.values() for a in c.get('public_ips', [])}
-    topo = topology.build(cfg, *topology.query(ch, where, p, known))
-    if narrow:
-        topology.set_volumes(topo, topology.iface_volumes(ch, f'{where} AND {narrow}', p))
+    if live:                         # two minutes of records: everything from them, as it is now
+        topo = topology.build(cfg, *topology.query(ch, where, p, _known(cfg)))
+        if narrow:
+            topology.set_volumes(topo, topology.iface_volumes(ch, f'{where} AND {narrow}', p))
+    else:                            # the neighbours of the last hour, the volumes of the period from the totals
+        near, exp_h, pairs = topo_structure(cfg)
+        tot, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, table=p.get('_flows', 'flows'))
+        ifaces = topology.iface_volumes(ch, p['_filt'], p, table=tot)
+        topo = topology.build(cfg, near, ifaces, {r['exporter'] for r in ifaces} | set(exp_h), pairs)
+        if narrow:
+            topology.set_volumes(topo, topology.iface_volumes(ch, f"{p['_filt']} AND {narrow}", p, table=tot))
     hints = iface_hints()
     for lk in topo['links']:
         seen = {}
@@ -798,16 +872,30 @@ def api_flows(q):
     return {'rows': rows}
 
 
+LIVE_TOP, LIVE_BACK = 20, 20
+
+
 def api_live(q):
-    """Flows that ended after `since` (unix s) — the map draws an arc for each as it arrives."""
+    """The newest flows with a location after `since` (unix s), for the map's arcs and Live connections: the
+    LIVE_TOP biggest of the last LIVE_BACK seconds of data, one per device x direction x place (1.8.1: before, the
+    oldest 300 records after `since` — thousands of records a second left the map ever further behind). `upto`:
+    the newest second read, the next `since`."""
     where, p, rng, step = scope(q)
     p['since'] = q1(q, 'since', str(int(time.time()) - 90), int)
-    rows = ch(f"""SELECT toUnixTimestamp(ts) AS t, exporter, toString(dir) AS dir, int_ip, ext_ip, ext_port, service, country, city, lat, lon, bytes
-        FROM {p['_flows']} WHERE {where} AND ts > toDateTime({{since:UInt32}}) AND lat != 0 ORDER BY ts LIMIT 300""", p, fmt='JSON')
+    last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE {where} AND ts > toDateTime({{since:UInt32}}) AND lat != 0", p, fmt='JSON')
+    upto = int(last[0]['t']) if last and int(last[0]['t'] or 0) else 0
+    if not upto:
+        return {'rows': [], 'now': int(time.time()), 'upto': p['since']}
+    p['lo'], p['upto'], p['n'] = max(p['since'], upto - LIVE_BACK), upto, LIVE_TOP
+    rows = ch(f"""SELECT toUnixTimestamp(max(ts)) AS t, exporter, toString(dir) AS dir, argMax(int_ip, bytes) AS int_ip, argMax(ext_ip, bytes) AS ext_ip,
+            argMax(ext_port, bytes) AS ext_port, argMax(service, bytes) AS service, country, city, lat, lon, sum(bytes) AS b, count() AS n
+        FROM flows WHERE {where} AND ts > toDateTime({{lo:UInt32}}) AND ts <= toDateTime({{upto:UInt32}}) AND lat != 0
+        GROUP BY exporter, dir, country, city, lat, lon ORDER BY b DESC LIMIT {{n:UInt8}}""", p, fmt='JSON')
     for r in rows:
-        r['t'], r['bytes'], r['ext_port'] = int(r['t']), int(r['bytes']), int(r['ext_port'])
+        r['t'], r['bytes'], r['ext_port'], r['n'] = int(r['t']), int(r.pop('b')), int(r['ext_port']), int(r['n'])
         r['name'] = NAMES.get(r['int_ip'])
-    return {'rows': rows, 'now': int(time.time())}
+    rows.sort(key=lambda r: r['t'])
+    return {'rows': rows, 'now': int(time.time()), 'upto': upto}
 
 
 def api_geo(q):
@@ -900,13 +988,16 @@ def iface_hints():
     # NetFlow does not carry interface addresses; show what the data reveals so the user can recognise ports:
     # the source NAT address used when leaving an interface (the uplink's public IP) and the private /24
     # networks that send traffic into it (LAN segments). Only addresses with at least 10 % of the interface's flows.
-    rows = ch("""SELECT exporter, i, a FROM (
+    # (1.8.1) the networks from the hourly totals of inside hosts per interface pair; the NAT address of an uplink
+    # does not change within the hour, so the last hour of records shows it
+    hosts, _ = rollups.source(['in_if', 'out_if', 'int_ip'], int(time.time()) - 86400, None, set(), use=USE_ROLLUPS)
+    rows = ch(f"""SELECT exporter, i, a FROM (
             SELECT exporter, i, a, c, sum(c) OVER (PARTITION BY exporter, i) AS t FROM (
                 SELECT exporter, out_if AS i, nat_ip AS a, count() AS c FROM flows
-                WHERE ts >= now() - INTERVAL 1 DAY AND dir = 'up' AND nat_ip != '' AND nat_ip != int_ip GROUP BY exporter, i, a
+                WHERE ts >= now() - INTERVAL 1 HOUR AND dir = 'up' AND nat_ip != '' AND nat_ip != int_ip GROUP BY exporter, i, a
                 UNION ALL
-                SELECT exporter, in_if AS i, concat(IPv4NumToString(bitAnd(IPv4StringToNumOrDefault(int_ip), 4294967040)), '/24') AS a, count() AS c FROM flows
-                WHERE ts >= now() - INTERVAL 1 DAY AND dir IN ('up', 'internal') AND int_ip != exporter AND isIPv4String(int_ip)
+                SELECT exporter, in_if AS i, concat(IPv4NumToString(bitAnd(IPv4StringToNumOrDefault(int_ip), 4294967040)), '/24') AS a, sum(flows) AS c FROM {hosts}
+                WHERE dir IN ('up', 'internal') AND int_ip != exporter AND isIPv4String(int_ip)
                   AND (isIPAddressInRange(int_ip, '10.0.0.0/8') OR isIPAddressInRange(int_ip, '172.16.0.0/12') OR isIPAddressInRange(int_ip, '192.168.0.0/16'))
                 GROUP BY exporter, i, a))
         WHERE c >= 0.1 * t ORDER BY exporter, i, c DESC LIMIT 3 BY exporter, i""", fmt='JSON')
@@ -967,17 +1058,20 @@ def api_devices(q):
     pub = ("(NOT (isIPAddressInRange({x}, '10.0.0.0/8') OR isIPAddressInRange({x}, '172.16.0.0/12') OR isIPAddressInRange({x}, '192.168.0.0/16')"
            " OR isIPAddressInRange({x}, '100.64.0.0/10') OR isIPAddressInRange({x}, '127.0.0.0/8') OR isIPAddressInRange({x}, '169.254.0.0/16')"
            " OR isIPAddressInRange({x}, 'fc00::/7') OR isIPAddressInRange({x}, 'fe80::/10') OR {x} = '::1' OR has({{selfs:Array(String)}}, {x})))")
-    src = "if(dir IN ('down', 'internal_back'), ext_ip, int_ip)"     # who sent the packet
-    dst = "if(dir IN ('down', 'internal_back'), int_ip, ext_ip)"     # who received it
+    del pub, selfs
+    # the collector already sorted every record by its ends (dir): the sender is public on 'down' and 'transit'
+    # records, the receiver on 'up' and 'transit' — so the 5-minute totals per interface pair answer it (1.8.1;
+    # before, two passes over a day of records, address by address)
+    day, _ = rollups.source(['in_if', 'out_if'], int(time.time()) - 86400, None, set(), use=USE_ROLLUPS)
     ifs = ch(f"""SELECT exporter, i, sum(b) AS bytes, sum(e) AS ext FROM (
-            SELECT exporter, in_if AS i, bytes AS b, if({pub.format(x=src)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY
-            UNION ALL SELECT exporter, out_if AS i, bytes AS b, if({pub.format(x=dst)}, bytes, 0) AS e FROM flows WHERE ts >= now() - INTERVAL 1 DAY)
-        GROUP BY exporter, i ORDER BY exporter, i""", {'selfs': selfs}, fmt='JSON')
+            SELECT exporter, in_if AS i, bytes AS b, if(dir IN ('down', 'transit'), bytes, 0) AS e FROM {day}
+            UNION ALL SELECT exporter, out_if AS i, bytes AS b, if(dir IN ('up', 'transit'), bytes, 0) AS e FROM {day})
+        GROUP BY exporter, i ORDER BY exporter, i""", fmt='JSON')
     seen_addrs = iface_hints()
     # records reported twice although the exporter sends no direction field (both directions monitored on
     # several interfaces): identical flow, interfaces, start time and size
     dups = {r['exporter']: r for r in ch("""SELECT exporter, count() AS n, uniqExact(cityHash64(int_ip, ext_ip, int_port, ext_port, proto, in_if, out_if, ts_start, bytes)) AS u,
-            countIf(obs != 255) AS with_dir FROM flows WHERE ts >= now() - INTERVAL 15 MINUTE GROUP BY exporter""", fmt='JSON')}
+            countIf(obs != 255) AS with_dir FROM flows WHERE ts >= now() - INTERVAL 5 MINUTE GROUP BY exporter""", fmt='JSON')}
     # the latest minute's sampling, unless the devices were edited since: the collector applies a new ratio within
     # about a minute, so until its stats cover that time show the configured one (changed in the UI -> shown at once)
     cfg_changed = max(exporters_mtime())
@@ -1546,12 +1640,19 @@ class H(BaseHTTPRequestHandler):
                 q = parse_qs(u.query)
                 body = CACHE.get(u.path, q)
                 if body is None:
-                    body = json.dumps(fn(q), default=str).encode()
+                    tag = web_tag(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page'))
+                    with web_query(tag, web_settings(u.path, q)):
+                        body = json.dumps(fn(q), default=str).encode()
                     CACHE.put(u.path, q, body)
                 return self.send(200, body, 'application/json')
             except BadRequest as e:
                 return self.send(400, json.dumps({'error': str(e)}).encode(), 'application/json')
-            except (CHError, OSError) as e:
+            except CHError as e:
+                code, msg = ch_error_answer(e)
+                if code == 502:
+                    print(f'[flowtrack-api] {u.path}: {e}', flush=True)
+                return self.send(code, json.dumps({'error': msg}).encode(), 'application/json')
+            except OSError as e:
                 print(f'[flowtrack-api] {u.path}: {e}', flush=True)
                 return self.send(502, json.dumps({'error': 'database error'}).encode(), 'application/json')
         path = 'index.html' if u.path in ('/', '') else u.path.lstrip('/')
@@ -1633,6 +1734,60 @@ class H(BaseHTTPRequestHandler):
         except OSError as e:
             print(f'[flowtrack-api] POST {u.path}: {e}', flush=True)
             return self.json(500, {'error': tr('could not save')})
+
+
+# ---------------------------------------------------------------- web queries: limits, priority, cancelling (1.8.1)
+# A page asks several queries; on a busy network (thousands of records/s) one may run for a long time. When the
+# browser has moved on to another page (or filters), the queries of the page it left are cancelled, so they do not
+# hold up the ones it asks now. Every web query has a time and memory limit, and live views go first.
+WEB_SECONDS = int(os.environ.get('FT_WEB_QUERY_SECONDS', '120'))
+WEB_MEMORY = int(os.environ.get('FT_CH_MEMORY_MB', '2048')) * (1 << 20) // 2
+_PAGES, _PAGES_LOCK = {}, threading.Lock()
+_TAG_RE = re.compile(r'^[A-Za-z0-9]{1,16}$')
+
+
+def _is_live(path, q):
+    return path == '/api/live' or q1(q, 'live', '0') == '1'
+
+
+def web_tag(token, tab, page):
+    """The query_id prefix of this request; cancels the queries of the page this browser tab showed before."""
+    if not (token and _TAG_RE.match(tab or '') and _TAG_RE.match(page or '')):
+        return None
+    sid = hashlib.sha256(token.encode()).hexdigest()[:10]
+    key, tag = (sid, tab), f'ftw-{sid}-{tab}-{page}'
+    with _PAGES_LOCK:
+        old = _PAGES.get(key)
+        _PAGES[key] = page
+        if len(_PAGES) > 5000:
+            _PAGES.pop(next(iter(_PAGES)))
+    if old and old != page:
+        threading.Thread(target=_cancel, args=(f'ftw-{sid}-{tab}-{old}-',), daemon=True).start()
+    return tag
+
+
+def _cancel(prefix):
+    try:
+        ch("KILL QUERY WHERE startsWith(query_id, {p:String}) ASYNC", {'p': prefix}, timeout=10)
+    except (CHError, OSError):
+        pass
+
+
+def web_settings(path, q):
+    return {'max_execution_time': WEB_SECONDS, 'timeout_overflow_mode': 'throw', 'max_memory_usage': WEB_MEMORY,
+            'priority': 1 if _is_live(path, q) else 5}
+
+
+def ch_error_answer(e):
+    """(status, message) for a failed query: the limits and a cancelled page in words people understand."""
+    s = str(e)
+    if 'Code: 159' in s or 'TIMEOUT_EXCEEDED' in s:
+        return 503, tr('Too much data for this period: choose a shorter period or add a filter.')
+    if 'Code: 241' in s or 'MEMORY_LIMIT_EXCEEDED' in s:
+        return 503, tr('Not enough memory for this period: choose a shorter period or add a filter.')
+    if 'Code: 394' in s or 'QUERY_WAS_CANCELLED' in s:
+        return 409, 'cancelled'
+    return 502, 'database error'
 
 
 # ---------------------------------------------------------------- backups (1.8.0): the work is done by root (backup.py)
@@ -1819,6 +1974,14 @@ if __name__ == '__main__':
     if any(dev for _, dev in LISTENERS):
         threading.Thread(target=watch_addresses, daemon=True).start()
     POLLER.start()
+    # Path analysis: the neighbours worked out in the background (at once, then every 10 minutes)
+    def _topo_warm():
+        try:
+            topo_structure(exporters_cfg(), wait=False)
+        except (CHError, OSError) as e:
+            print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
+        topo_refresher(threading.Event())
+    threading.Thread(target=_topo_warm, daemon=True).start()
     for srv in servers[1:]:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
     servers[0].serve_forever()

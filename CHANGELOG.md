@@ -3,6 +3,31 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.8.1 — 2026-10-14
+
+Busy networks (measured with a day of 2,400 records/s — about 200 million records — on 4 CPUs and 8 GB of RAM):
+- Through device and Path analysis read new pre-aggregated totals per interface pair (5-minute paths, hourly inside
+  hosts and outside addresses per path) instead of a day of records. The device list behind Through device (bytes
+  per interface, the networks seen on each) reads them too. Their history is filled in the background after the
+  upgrade, like the other totals.
+- Path analysis works out which devices are neighbours in the background every 10 minutes (from the last hour, at
+  once when the devices change); a page over a period only adds the volumes of the links.
+- Live map, globe and Live connections: the newest data always — the 20 biggest connections of the last seconds,
+  one per device × direction × place — instead of the oldest 300 records after the last poll, which left the map
+  minutes behind and ever further. At most 20 lines on the map and the globe.
+- Through device draws the 20 biggest paths by the chosen metric.
+- Queries of a page the browser has left (another page, other filters) are cancelled instead of running on and
+  holding up the next page; every web query has a time and memory limit and says what to do when it hits it
+  (a shorter period or a filter) instead of "database error"; live views go first.
+- Path search counts the conversations approximately (constant memory); finding neighbours samples half a million
+  records of the hour (two million took over 1 GiB).
+- Through device: the outside addresses beyond a WAN port — the biggest few are found approximately, then counted
+  exactly (grouping all of a day's addresses with their names took 1.5 GiB).
+- Pre-aggregated totals: the hourly ones (outside addresses, hosts × services, the new per-interface ones) fill their
+  history an hour at a time. A day of a busy network in one query needed ~3 GiB, and on a server with 8 GB of RAM the
+  fill failed and was tried again every minute without end.
+- Restore: `flowtrack restore --only-data` also takes a backup whose settings were left out on purpose.
+
 ## 1.8.0 — 2026-10-14
 
 - Backups: *Settings → Backups* and `sudo flowtrack backup | restore`. The flow data (ClickHouse `BACKUP`) and every

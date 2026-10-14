@@ -306,6 +306,20 @@ class CHError(Exception):
     pass
 
 
+# the web request a query belongs to (api.py sets it per request thread): its query_id prefix, so the queries of a page
+# left by the browser can be cancelled, and the limits / priority of web queries
+_WEB = threading.local()
+
+
+@contextlib.contextmanager
+def web_query(tag, settings):
+    _WEB.tag, _WEB.settings = tag, settings
+    try:
+        yield
+    finally:
+        _WEB.tag, _WEB.settings = None, None
+
+
 def ch(query, params=None, data=None, fmt=None, timeout=30, raw=False, settings=None):
     """Run a query over the ClickHouse HTTP interface.
     params: {name: value} bound to {name:Type} placeholders (server-side, no string interpolation).
@@ -313,6 +327,10 @@ def ch(query, params=None, data=None, fmt=None, timeout=30, raw=False, settings=
     Returns parsed JSON rows for fmt='JSON' (the whole response text with raw=True), else raw text."""
     # WHERE must see real columns even when a SELECT alias has the same name (any(service) AS service)
     qs = {'database': CH_DB, 'prefer_column_name_to_alias': '1'}
+    tag = getattr(_WEB, 'tag', None)
+    if tag:
+        qs['query_id'] = f'{tag}-{os.urandom(5).hex()}'
+        qs.update({k: str(v) for k, v in (_WEB.settings or {}).items()})
     qs.update({k: str(v) for k, v in (settings or {}).items()})
     for k, v in (params or {}).items():
         if k.startswith('_'):                # the caller's own notes (api.scope), not query parameters

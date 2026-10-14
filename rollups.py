@@ -42,6 +42,15 @@ ROLLUPS = {
     'agg_ext': {'bucket': 3600, 'keys': [('ext_ip', 'String', 'ext_ip')],
                 'attrs': [('service', 'LowCardinality(String)'), ('country', 'LowCardinality(String)'), ('city', 'LowCardinality(String)'),
                           ('asn', 'UInt32'), ('as_org', 'LowCardinality(String)')]},
+    # Through device and Path analysis (1.8.1): the paths through each device (input -> output interface); per hour the
+    # inside hosts on them (and, between inside hosts, the other end) and the outside addresses beyond them
+    'agg_iface': {'bucket': 300, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('service', 'LowCardinality(String)', 'service')],
+                  'attrs': []},
+    'agg_iface_host': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('int_ip', 'String', 'int_ip'),
+                       ('peer_ip', 'String', "if(dir IN ('internal', 'internal_back'), ext_ip, '')")],
+                       'attrs': []},
+    'agg_iface_ext': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('out_ip', 'String', "if(dir IN ('up', 'down'), ext_ip, '')")],
+                      'attrs': [('service', 'LowCardinality(String)'), ('country', 'LowCardinality(String)'), ('city', 'LowCardinality(String)')]},
 }
 CUT = max(r['bucket'] for r in ROLLUPS.values())    # the longest bucket (a day is a multiple of every bucket)
 LATE = 2 * 3600     # records may reach the collector this late (a multiple of every bucket): see _late()
@@ -204,9 +213,19 @@ def _fill(ready, log, stop):
                 part = f'ts >= toDateTime({lo}) AND ts < toDateTime({min(hi, at)})'
                 if int(ch(f'SELECT count() AS n FROM {name} WHERE {part}', fmt='JSON')[0]['n']):
                     ch(f'ALTER TABLE {name} DELETE WHERE {part}', timeout=3600, settings={'mutations_sync': 2})
-            ch(f'INSERT INTO {name} ' + _select(ROLLUPS[name], f'ts >= toDateTime({lo}) AND ts < toDateTime({min(hi, at)})'), timeout=3600,
-               settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000})
-            _set(f'ready_from:{name}', lo)
+            # an hourly table holds many more keys (outside addresses, hosts x services): a day of a busy network in one
+            # query needed ~3 GiB (seen with 2,400 records/s on 8 GB of RAM: refused, tried again every minute) —
+            # it is filled an hour at a time, newest first, and its progress kept after each
+            step = 86400 if ROLLUPS[name]['bucket'] < 3600 else ROLLUPS[name]['bucket']
+            end = min(hi, at)
+            while end > lo:
+                beg = max(lo, (end - 1) // step * step)
+                ch(f'INSERT INTO {name} ' + _select(ROLLUPS[name], f'ts >= toDateTime({beg}) AND ts < toDateTime({end})'), timeout=3600,
+                   settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000})
+                _set(f'ready_from:{name}', beg)
+                end = beg
+                if stop and stop.is_set():
+                    return False
         hi, n = lo, n + 1
         if stop and stop.is_set():
             return False
@@ -315,8 +334,10 @@ def ready_from(name=None):
     return None if None in got else max(got)
 
 
-PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_host', 'agg_host_svc', 'agg_ext']    # smallest first
-RAW_EXPR = {'has_ll': 'lat != 0'}       # rollup key columns that are expressions over the records
+# smallest first; a table added later goes after those that hold the same columns, so their queries stay where they are
+PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_iface', 'agg_host', 'agg_host_svc', 'agg_iface_host', 'agg_ext', 'agg_iface_ext']
+RAW_EXPR = {'has_ll': 'lat != 0', 'peer_ip': "if(dir IN ('internal', 'internal_back'), ext_ip, '')",
+            'out_ip': "if(dir IN ('up', 'down'), ext_ip, '')"}       # rollup key columns that are expressions over the records
 _TYPES = {c: t for r in ROLLUPS.values() for c, t, *_ in r['keys'] + r['attrs']}
 
 

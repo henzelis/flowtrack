@@ -323,7 +323,7 @@ def path_query(ch, where, p, src, dst):
     sender, receiver = "if(dir IN ('down', 'internal_back'), ext_ip, int_ip)", "if(dir IN ('down', 'internal_back'), int_ip, ext_ip)"
     key = "cityHash64(int_ip, ext_ip, int_port, ext_port, proto)"
     p = dict(p, src=str(ipaddress.ip_network(src, strict=False)), dst=str(ipaddress.ip_network(dst, strict=False)))
-    return ch(f"""SELECT exporter, in_if, out_if, sum(bytes) AS b, count() AS records, uniqExact({key}) AS convs,
+    return ch(f"""SELECT exporter, in_if, out_if, sum(bytes) AS b, count() AS records, uniq({key}) AS convs,
             groupUniqArray(5)(nat_ip) AS nat
         FROM flows WHERE {where}
             AND (isIPAddressInRange({sender}, {{src:String}}) OR (dir = 'up' AND nat_ip != '' AND isIPAddressInRange(nat_ip, {{src:String}})))
@@ -331,14 +331,15 @@ def path_query(ch, where, p, src, dst):
         GROUP BY exporter, in_if, out_if ORDER BY b DESC LIMIT 500""", p, fmt='JSON')
 
 
-def iface_volumes(ch, where, p):
-    """Bytes out of and into every interface of every exporter, also split by direction (build() rows `ifaces`)."""
+def iface_volumes(ch, where, p, table='flows'):
+    """Bytes out of and into every interface of every exporter, also split by direction (build() rows `ifaces`).
+    `table`: where the rows come from — the records, or the 5-minute totals per interface pair (api: agg_iface)."""
     return ch(f"""SELECT exporter, iface, sum(o) AS out_bytes, sum(i) AS in_bytes, sum(u) AS up, sum(dn) AS down, sum(it) AS internal FROM (
             SELECT exporter, out_if AS iface, bytes AS o, 0 AS i, if(dir = 'up', bytes, 0) AS u, if(dir = 'down', bytes, 0) AS dn,
-                   if(dir NOT IN ('up', 'down'), bytes, 0) AS it FROM flows WHERE {where}
+                   if(dir NOT IN ('up', 'down'), bytes, 0) AS it FROM {table} WHERE {where}
             UNION ALL
             SELECT exporter, in_if, 0, bytes, if(dir = 'up', bytes, 0), if(dir = 'down', bytes, 0), if(dir NOT IN ('up', 'down'), bytes, 0)
-                FROM flows WHERE {where})
+                FROM {table} WHERE {where})
         GROUP BY exporter, iface""", p, fmt='JSON')
 
 
@@ -375,12 +376,15 @@ def query(ch, where, p, known):
     # conversations recorded by more than one device (a busy network: a sample of them, chosen by the conversation,
     # so every device keeps all records of a conversation in the sample)
     total = sum(1 for _ in ifaces) and int(ch(f"SELECT count() AS n FROM flows WHERE {where}", p, fmt='JSON')[0]['n'])
-    p['every'] = max(1, total // 2_000_000)
+    # (1.8.1) half a million records are plenty to see which devices share conversations; two million took over 1 GiB
+    # (the conversation key with every device's interfaces) on a network of 2,200 records/s
+    p['every'] = max(1, total // 500_000)
     key = ("cityHash64(if(dir IN ('down', 'internal_back'), ext_ip, int_ip), if(dir IN ('down', 'internal_back'), int_ip, ext_ip), if(dir IN ('down', 'internal_back'), ext_port, int_port), "
            "if(dir IN ('down', 'internal_back'), int_port, ext_port), proto)")
     pairs = ch(f"""SELECT h1.1 AS a, h1.2 AS ai, h1.3 AS ao, h2.1 AS b, h2.2 AS bi, h2.3 AS bo, count() AS n FROM (
             SELECT groupUniqArray((exporter, in_if, out_if)) AS hops FROM flows WHERE {where} AND {key} % {{every:UInt32}} = 0
             GROUP BY {key} HAVING uniqExact(exporter) > 1 LIMIT 200000)
         ARRAY JOIN hops AS h1 ARRAY JOIN hops AS h2 WHERE h1.1 < h2.1
-        GROUP BY a, ai, ao, b, bi, bo ORDER BY n DESC LIMIT 5000""", p, fmt='JSON') if len(exporting) > 1 else []
+        GROUP BY a, ai, ao, b, bi, bo ORDER BY n DESC LIMIT 5000""", p, fmt='JSON',
+        settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000}) if len(exporting) > 1 else []
     return near, ifaces, exporting, pairs

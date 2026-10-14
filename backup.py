@@ -910,7 +910,7 @@ def next_run(cfg, now=None):
 
 # ---------------------------------------------------------------- verify
 
-def verify(bid, deep=False, log=print):
+def verify(bid, deep=False, log=print, settings=True):
     """Check a backup here: every file ClickHouse listed has its size, the settings their checksum, the full backup a
     differential one needs is there. deep: restore the data into a scratch database and count the rows."""
     m = _manifest(bid)
@@ -925,7 +925,7 @@ def verify(bid, deep=False, log=print):
     if os.path.isfile(os.path.join(folder, 'settings.tar.gz')):
         if _sha256(os.path.join(folder, 'settings.tar.gz')) != m['settings_sha256']:
             problems.append(tr('{id}: the settings archive is damaged.', id=bid))
-    else:
+    elif settings:               # a backup of the data alone (its settings left out on purpose) restores --only-data
         problems.append(tr('{id}: the settings archive is missing.', id=bid))
     if deep and not problems:
         scratch = f'{DB}_verify'
@@ -1087,7 +1087,7 @@ def restore(bid, data=True, settings=True, with_license=False, force=False, log=
         raise BackupError(tr('The backup is from FlowTrack {v}, newer than this {cur}: upgrade first (sudo flowtrack upgrade).', v=m['version'], cur=VERSION))
     if data and _db_exists(ASIDE):
         raise BackupError(tr('An earlier restore did not finish: the flow data from before it is kept as {aside}. Run sudo flowtrack restore --undo to put it back, then try again.', aside=ASIDE))
-    problems = verify(bid, log=log)
+    problems = verify(bid, log=log, settings=settings)
     if problems:
         raise BackupError(tr('The backup is not intact:') + '\n  ' + '\n  '.join(problems))
     log(tr('Stopping FlowTrack…'))
