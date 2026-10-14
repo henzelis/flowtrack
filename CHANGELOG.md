@@ -9,6 +9,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   upgrade to 1.3.3 or later switched the tables on, was summed up nowhere (seen as two records missing on long
   periods). Two hours after that moment the last two hours before it are now summed up again when they differ from
   the records; installs upgraded earlier get it once at the next start.
+- Connect a device: the configuration for the device follows the Sampling field. sFlow uses the entered rate
+  (until one is entered, the vendor's usual 1:1000 / 1:1024); NetFlow / IPFIX gets a sampler where it is set in the same
+  configuration (Cisco Flexible NetFlow, Juniper, Arista, VyOS, pmacct); for the others the configuration says to set
+  the same rate on the device. It changes as you type.
 
 ## 1.7.0 — 2026-10-14
 

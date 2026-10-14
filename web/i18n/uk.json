@@ -32,7 +32,7 @@
  "A collapsed group — pick a specific address.": "Згорнута група — виберіть конкретну адресу.",
  "A list of interfaces is expected": "Очікується список інтерфейсів",
  "A → B sent / received": "A → B відправлено / отримано",
- "AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling 1024 · sflow 1 polling 1-24 20": "AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling 1024 · sflow 1 polling 1-24 20",
+ "AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20": "AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20",
  "API unavailable": "API недоступне",
  "About": "Про програму",
  "Account": "Обліковий запис",
@@ -993,5 +993,6 @@
  "× usual peak": "× звичайного піку",
  "…and {n} more events (the hourly limit of messages).": "…і ще подій: {n} (ліміт повідомлень на годину).",
  "→ inside hosts it connected to · ← inside hosts that connected to it": "→ до скількох внутрішніх хостів підключався · ← скільки внутрішніх хостів підключалися до нього",
- "✓ {name} · {kind} — the chat ID is right.": "✓ {name} · {kind} — ID чату правильний."
+ "✓ {name} · {kind} — the chat ID is right.": "✓ {name} · {kind} — ID чату правильний.",
+ "sampling 1:{n}: set the same rate on the device — FlowTrack scales the records that do not carry their rate by it": "вибірка 1:{n}: встановіть таку саму частоту на пристрої — FlowTrack множить на неї записи, які не містять своєї частоти"
 }
