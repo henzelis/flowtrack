@@ -994,12 +994,16 @@
  "…and {n} more events (the hourly limit of messages).": "…і ще подій: {n} (ліміт повідомлень на годину).",
  "→ inside hosts it connected to · ← inside hosts that connected to it": "→ до скількох внутрішніх хостів підключався · ← скільки внутрішніх хостів підключалися до нього",
  "✓ {name} · {kind} — the chat ID is right.": "✓ {name} · {kind} — ID чату правильний.",
- "sampling 1:{n}: set the same rate on the device — FlowTrack scales the records that do not carry their rate by it": "вибірка 1:{n}: встановіть таку саму частоту на пристрої — FlowTrack множить на неї записи, які не містять своєї частоти",
  "interfaces to watch: {names}": "інтерфейси для спостереження: {names}",
  "Interfaces in the configuration (names on the device, comma-separated)": "Інтерфейси в конфігурації (імена на пристрої, через кому)",
  "Test SNMP to choose from the interfaces of the device.": "Натисніть «Перевірити SNMP», щоб вибрати з інтерфейсів пристрою.",
  "not on the device": "немає на пристрої",
  "Interfaces in the configuration (from SNMP)": "Інтерфейси в конфігурації (з SNMP)",
  "one interface per process: run one more for each of {names}": "один інтерфейс на процес: запустіть ще по одному для {names}",
- "Interface names: up to 64, each up to 64 characters, no quotes": "Імена інтерфейсів: до 64, кожне до 64 символів, без лапок"
+ "Interface names: up to 64, each up to 64 characters, no quotes": "Імена інтерфейсів: до 64, кожне до 64 символів, без лапок",
+ "netflow-sample-rate: FortiOS 7.6 and newer; FortiOS 7.4 and older sends every session — set 1:1 in FlowTrack there and leave the line out": "netflow-sample-rate: FortiOS 7.6 і новіші; FortiOS 7.4 і старіші надсилають кожну сесію — там поставте 1:1 у FlowTrack і пропустіть цей рядок",
+ "a sampler counts the traffic coming in: no ip flow ingress / egress on these interfaces (full NetFlow would override it)": "семплер рахує вхідний трафік: без ip flow ingress / egress на цих інтерфейсах (повний NetFlow його перекриє)",
+ "Packet sampling 1 of {n} — or, if the device cannot sample, none and 1:1 in FlowTrack.": "Вибірка 1 з {n} пакетів — або, якщо пристрій не вміє вибірку, без неї і 1:1 у FlowTrack.",
+ "Sampling 1 of {n} packets, counter polling every 20 s.": "Вибірка 1 з {n} пакетів, лічильники кожні 20 с.",
+ "{vendor} ({proto}) has no sampling setting: it sends every flow. Set 1:1 here — with 1:{n} FlowTrack would multiply its volumes by {n}.": "{vendor} ({proto}) не має налаштування вибірки: надсилає кожен потік. Поставте тут 1:1 — з 1:{n} FlowTrack помножить його обсяги на {n}."
 }

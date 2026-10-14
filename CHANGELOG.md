@@ -10,6 +10,11 @@ in Settings → General, at the bottom of every page, in the collector log and b
   from the last poll when editing; up interfaces with an address are ticked at first. With SNMP off the names are typed
   (comma-separated). The choice is kept with the device; a vendor whose configuration has no interface commands lists
   them as a note.
+- Sampling in the device configuration: the device's own commands with the rate of the form instead of a note —
+  FortiGate `netflow-sample-rate` (FortiOS 7.6 and newer; 7.4 and older send every session), MikroTik
+  `packet-sampling`, Cisco `flow-sampler-map` for classic NetFlow v5, Huawei `ip netstream sampler fix-packets`,
+  softflowd `-s`. Palo Alto, Check Point, SonicWall and pfSense / OPNsense have no sampling setting: the form warns at the
+  Sampling field that a rate there would multiply their volumes.
 
 ## 1.7.1 — 2026-10-14
 
