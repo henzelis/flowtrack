@@ -3,6 +3,22 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.8.0 — 2026-10-14
+
+- Backups: *Settings → Backups* and `sudo flowtrack backup | restore`. The flow data (ClickHouse `BACKUP`) and every
+  setting (devices, users, notifications, SNMP, events, TLS certificate), on a schedule — a full backup weekly or
+  daily, the changes since it on the other days — or with *Back up now*. Kept in a folder on the server
+  (`/var/backups/flowtrack`, `--backup-dir` to choose another, e.g. a NAS) and copied to S3 (any S3 storage), SFTP
+  (key or password, the server key checked) or FTP / FTPS; the copies can be encrypted with a passphrase
+  (AES-256-GCM). Keeping by the number of full backups, here and on the copies; a failed copy is retried with the next
+  backup. *Check* compares the files with ClickHouse's list (`--deep`: a restore into a scratch database).
+- Restore from the folder or from S3 / SFTP / FTP, also on a new server: the current flow data is set aside until the
+  backup is in place and comes back if the restore fails (`flowtrack restore --undo` after an interruption); the
+  license files only with `--with-license`; a backup from a newer FlowTrack is refused.
+- The installer mounts the backups folder into the ClickHouse container (the container is recreated once, the data
+  stays), adds the Python packages boto3 and paramiko, and the units `flowtrack-backup.service/.timer/.path`.
+  Uninstalling keeps the backups.
+
 ## 1.7.3 — 2026-10-14
 
 - Through device follows the Internet / Internal / All traffic selector: the device map, the paths and interfaces

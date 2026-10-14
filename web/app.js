@@ -1829,122 +1829,177 @@ function vGeneral(){
   document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
   document.getElementById('myPass').onclick = openPassword;
 }
-// ===================== backups: data + settings, on a schedule, here and off the server =====================
+// ===================== backups: data + settings, on a schedule, here and off the server (backup.py runs them as root) =====================
 const BK_ICON = 'M2 4h14v3H2zM3 7v8h12V7M7 10h4';
-// MOCKUP until api/backups exists: demo data, saved nowhere
-function bkDemo(){
-  const now = Math.floor(Date.now() / 1000), day = 86400, at3 = t => t - (t % day) + 3 * 3600 - new Date().getTimezoneOffset() * -60, d0 = at3(now) > now ? at3(now) - day : at3(now);
-  const rows = [];
-  for (let i = 0; i < 16; i++) { const t = d0 - i * day, full = i % 7 === 5;
-    rows.push({id:new Date(t * 1000).toISOString().slice(0, 16).replace(/[-:T]/g, ''), t, kind:full ? 'full' : 'incr', size:full ? 1.42e9 - i * 4e6 : 6e7 + (i * 7919 % 50) * 1e6,
-      version:i < 1 ? '1.8.0' : '1.7.3', encrypted:i < 9, settings:true, took:full ? 94 : 11,
-      places:{local:'ok', s3:i < 9 ? 'ok' : null, sftp:i === 0 ? 'error' : i < 9 ? 'ok' : null}, sftp_error:i === 0 ? 'Connection timed out (backup.example.net:22)' : ''}); }
-  return {mock:true, running:null, next:d0 + day, disk:{path:'/var/backups/flowtrack', used:rows.reduce((a, r) => a + r.size, 0), free:1.84e11},
-    config:{schedule:{on:true, time:'03:00', full:'week', weekday:0}, keep_full:4, encrypt:{on:true, set:true},
-      dests:{local:{path:'/var/backups/flowtrack'}, s3:{on:true, endpoint:'https://s3.eu-central-1.amazonaws.com', region:'eu-central-1', bucket:'acme-flowtrack', prefix:'prod-1/', key_id:'AKIA…7Q2D', secret_set:true},
-        ftp:{on:false, host:'', port:21, tls:true, verify:true, user:'', password_set:false, path:'/flowtrack'},
-        sftp:{on:true, host:'backup.example.net', port:22, user:'flowtrack', auth:'key', password_set:false, key_set:true, path:'/srv/backups/flowtrack', fingerprint:'SHA256:9xT1…kQ0'}}},
-    backups:rows};
-}
+const BK_DESTS = [['s3', 'S3'], ['sftp', 'SFTP'], ['ftp', 'FTP']];
 function vBackups(){
-  const v = document.getElementById('setBody');
-  v.innerHTML = `<div class="grid"><div id="bkMock" class="s12"></div><div id="bkKpi" style="display:contents"></div>
-    <section class="glass panel s12">${ph(BK_ICON, T('Backups'), T('the flow data and every setting · incremental between the full ones · newest first'),
+  const v = document.getElementById('setBody'), seq = renderSeq;
+  v.innerHTML = `<div class="grid"><div id="bkKpi" style="display:contents"></div>
+    <section class="glass panel s12">${ph(BK_ICON, T('Backups'), T('the flow data and every setting · a full one weekly, the changes since it on the other days · newest first'),
       `<label class="chk" title="${T('A full backup does not depend on older ones')}"><input type="checkbox" id="bkFull">${T('full')}</label> <button class="btn primary" id="bkNow">${T('Back up now')}</button>`)}<div id="bkList" class="loading"></div></section>
     <section class="glass panel s6">${ph('chart', T('Schedule and keeping'), T('runs on this server, also when nobody is logged in'))}<div id="bkSched" class="form"></div></section>
-    <section class="glass panel s6">${ph('key', T('Encryption'), T('of the backup files, here and off the server'))}<div id="bkEnc" class="form"></div></section>
-    <section class="glass panel s12">${ph('globe', T('Where to keep'), T('a folder on this server always · copies to S3, SFTP or FTP: a backup survives the loss of the server'))}<div id="bkDest"></div></section>
-    <section class="glass panel s12 evsave"><div><button class="btn primary" id="bkSave">${T('Save')}</button></div><p class="err" id="bkErr"></p><p class="note" id="bkOk" hidden>${T('Saved.')}</p></section></div>`;
-  const d = bkDemo(), c = d.config, fill2 = (id, html) => { const el = document.getElementById(id); el.classList.remove('loading'); el.innerHTML = html; };
-  if (d.mock) fill2('bkMock', `<div class="glass panel" style="border-color:var(--warn)"><b style="color:var(--warn)">${T('Mockup')}</b> <span class="note">${T('demo data — nothing here is saved or run yet')}</span></div>`);
+    <section class="glass panel s6">${ph('key', T('Encryption'), T('of the copies off the server (S3, SFTP, FTP)'))}<div id="bkEnc" class="form"></div></section>
+    <section class="glass panel s12">${ph('globe', T('Where to keep'), T('a folder on this server always · copies to S3, SFTP or FTP: a backup survives the loss of the server'))}<div id="bkDest" class="loading"></div></section>
+    <section class="glass panel s12 evsave"><div><button class="btn primary" id="bkSave">${T('Save')}</button></div><p class="err" id="bkErr" hidden></p><p class="note" id="bkOk" hidden>${T('Saved.')}</p></section></div>`;
+  let d = null, fp = '', checking = null, asked = 0;
+  const box = (id, html) => { const el = document.getElementById(id); if (!el) return null; el.classList.remove('loading'); el.innerHTML = html; return el; };
   const ago = t => { const s = Math.floor(Date.now() / 1000) - t; return s < 3600 ? T('{n} min ago', {n:Math.max(1, Math.round(s / 60))}) : s < 86400 ? T('{n} h ago', {n:Math.round(s / 3600)}) : T('{n} d ago', {n:Math.round(s / 86400)}); };
   const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
-  const last = d.backups[0], bad = last && Object.values(last.places).some(x => x === 'error');
-  const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span>${sub ? `<span class="nat" style="grid-column:2">${sub}</span>` : ''}</section>`;
-  fill2('bkKpi', kc(BK_ICON, T('Last backup'), last ? ago(last.t) : '—', last ? (bad ? `<span class="pill warn">${T('a copy failed')}</span> ` : `<span class="pill ok">OK</span> `) + `${last.kind === 'full' ? T('Full') : T('Incremental')} · ${fmtB(last.size)}` : T('none yet'))
-    + kc('pulse', T('Next backup'), c.schedule.on ? `${dmy(d.next)} ${hhmm(d.next)}` : T('off'), c.schedule.on ? (c.schedule.full === 'week' ? T('full every week, incremental every day') : T('full every day')) : T('only by hand'))
-    + kc('list', T('Kept'), `${d.backups.length}`, `${fmtB(d.disk.used)} · ${T('{free} free on the disk', {free:fmtB(d.disk.free)})}`)
-    + kc('shield', T('Encryption'), c.encrypt.on ? T('on') : T('off'), c.encrypt.on ? 'AES-256-GCM' : T('the files hold passwords and tokens'), c.encrypt.on ? 'var(--ok)' : 'var(--warn)'));
-  const place = (k, s, r) => s ? `<span class="pill ${s === 'ok' ? 'ok' : 'crit'}" title="${esc(s === 'ok' ? T('stored') : r.sftp_error || T('failed'))}">${{local:T('here'), s3:'S3', sftp:'SFTP', ftp:'FTP'}[k]}${s === 'ok' ? '' : ' ✕'}</span>` : '';
-  fill2('bkList', `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${T('Type')}</th><th class="num">${T('Size')}</th><th>${T('Version')}</th><th>${T('Where')}</th><th></th><th></th></tr></thead><tbody>
-    ${d.backups.slice(0, state.bkAll ? 999 : 8).map(r => `<tr data-id="${esc(r.id)}"><td class="mono">${when(r.t)}<div class="nat">${ago(r.t)}</div></td><td>${r.kind === 'full' ? `<b>${T('Full')}</b>` : T('Incremental')}${r.encrypted ? ` <span title="${T('encrypted')}">🔒</span>` : ''}</td>
-      <td class="num mono">${fmtB(r.size)}</td><td class="mono">${esc(r.version)}</td><td>${['local', 's3', 'sftp', 'ftp'].map(k => place(k, r.places[k], r)).join(' ')}</td>
-      <td class="nat">${r.took} s</td><td style="white-space:nowrap"><button class="btn" data-a="restore">${T('Restore…')}</button> <button class="btn" data-a="verify">${T('Check')}</button> <button class="btn" data-a="get" title="${T('Download the settings of this backup (no flow data)')}">${T('Settings ↓')}</button></td></tr>`).join('')}</tbody></table></div>
-    ${d.backups.length > 8 ? `<p style="margin:8px 0 0"><button class="btn" id="bkMore">${state.bkAll ? T('Show the last 8') : T('Show all ({n})', {n:d.backups.length})}</button></p>` : ''}
-    <p class="note">${T('An incremental backup needs the full one before it; deleting by the keeping rule removes a full backup together with its incrementals. A failed copy is tried again with the next backup.')}</p>`);
-  const more = document.getElementById('bkMore'); if (more) more.onclick = () => { state.bkAll = !state.bkAll; vBackups(); };
-  document.querySelectorAll('#bkList button[data-a="restore"]').forEach(b => b.onclick = () => { const id = b.closest('tr').dataset.id, r = d.backups.find(x => x.id === id);
-    openModal(T('Restore a backup'), when(r.t), `<div class="form" style="padding:4px 2px">
-      <p class="note" style="margin:0">${T('Restoring stops collecting and the web interface for a few minutes, replaces the flow data and the settings with the backup, and starts them again. Records that arrive meanwhile are lost.')}</p>
+  const busy = () => !!(d && (d.running || d.pending));
+  const load = async () => { const r = await fetch('api/backups'); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.status); return j; };
+  // ---- what changes while a backup runs: the cards, the list, the button
+  const draw = () => {
+    const c = d.config, last = d.last, newest = d.backups[0];
+    const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span>${sub ? `<span class="nat" style="grid-column:2">${sub}</span>` : ''}</section>`;
+    const lastSub = !last ? T('none yet') : !last.ok ? `<span class="pill ${newest && newest.id === last.id ? 'warn' : 'crit'}">${newest && newest.id === last.id ? T('a copy failed') : T('failed')}</span> <span title="${esc(last.error)}">${esc(last.error.slice(0, 90))}</span>`
+      : newest ? `<span class="pill ok">OK</span> ${newest.kind === 'full' ? T('Full') : T('Changes')} · ${fmtB(newest.size)}` : '';
+    box('bkKpi', kc(BK_ICON, T('Last backup'), last ? ago(last.t) : '—', lastSub)
+      + kc('pulse', T('Next backup'), d.next ? `${dmy(d.next)} ${hhmm(d.next)}` : T('off'), d.next ? (c.schedule.full === 'week' ? T('full every week, the changes every day') : T('full every day'))
+          + (d.tz_offset !== -new Date(d.next * 1000).getTimezoneOffset() * 60 ? ` · ${T('{t} on the server', {t:new Date((d.next + d.tz_offset) * 1000).toLocaleTimeString(LOC, {hour:'2-digit', minute:'2-digit', timeZone:'UTC'})})}` : '') : T('only by hand'))
+      + kc('list', T('Kept'), `${d.backups.length}`, `${fmtB(d.used)} · ${T('{free} free on the disk', {free:fmtB(d.free)})}`)
+      + kc('shield', T('Encryption'), c.encrypt.on ? T('on') : T('off'), c.encrypt.on ? T('copies: AES-256-GCM') : BK_DESTS.some(([k]) => c[k].on) ? T('the copies hold passwords and tokens') : T('no copies off the server'), c.encrypt.on ? 'var(--ok)' : BK_DESTS.some(([k]) => c[k].on) ? 'var(--warn)' : ''));
+    const on = BK_DESTS.filter(([k]) => c[k].on);
+    const place = (m, k, l) => { const s = (m.places || {})[k];
+      if (s === 'ok') return `<span class="pill ok" title="${T('stored')}">${l}</span>`;
+      if (s === 'error') return `<span class="pill crit" title="${esc((m.errors || {})[k] || T('failed'))}">${l} ✕</span>`;
+      return c[k].on ? `<span class="pill" style="opacity:.6" title="${T('not copied yet — with the next backup')}">${l} …</span>` : ''; };
+    const vf = m => { const x = m.verified; if (checking === m.id) return T('Checking…');
+      return x ? (x.ok ? `✓ ${T('intact')}` : `✕ ${T('damaged')}`) : T('Check'); };
+    const rows = d.backups.slice(0, state.bkAll ? 999 : 8);
+    const el = box('bkList', d.backups.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${T('Type')}</th><th class="num">${T('Size')}</th><th>${T('Version')}</th><th>${T('Where')}</th><th></th><th></th></tr></thead><tbody>
+      ${rows.map(m => `<tr data-id="${esc(m.id)}"><td class="mono">${when(m.t)}<div class="nat">${ago(m.t)}</div></td><td>${m.kind === 'full' ? `<b>${T('Full')}</b>` : T('Changes')}${m.encrypted ? ` <span title="${T('the copies are encrypted')}">🔒</span>` : ''}</td>
+        <td class="num mono">${fmtB(m.size)}</td><td class="mono">${esc(m.version)}</td><td>${[`<span class="pill ok">${T('here')}</span>`, ...on.map(([k, l]) => place(m, k, l))].join(' ')}</td>
+        <td class="nat">${Math.round(m.took)} s</td><td style="white-space:nowrap"><button class="btn" data-a="restore">${T('Restore…')}</button> <button class="btn" data-a="verify" ${busy() ? 'disabled' : ''} title="${esc(m.verified && !m.verified.ok ? m.verified.problems.join('\n') : m.verified ? T('checked {when}', {when:when(m.verified.t)}) : T('Check that every file of the backup is in place'))}">${vf(m)}</button></td></tr>`).join('')}</tbody></table></div>
+      ${d.backups.length > 8 ? `<p style="margin:8px 0 0"><button class="btn" id="bkMore">${state.bkAll ? T('Show the last 8') : T('Show all ({n})', {n:d.backups.length})}</button></p>` : ''}
+      <p class="note">${T('A backup of the changes needs the full one before it; the keeping rule deletes a full backup together with the changes after it. A failed copy is tried again with the next backup.')}</p>`
+      : `<div class="empty">${d.next ? T('No backups yet — the first one runs {when}, or press Back up now.', {when:when(d.next)}) : T('No backups yet — press Back up now.')}</div>`);
+    if (!el) return;
+    const more = document.getElementById('bkMore'); if (more) more.onclick = () => { state.bkAll = !state.bkAll; draw(); };
+    el.querySelectorAll('button[data-a="restore"]').forEach(b => b.onclick = () => openRestore(d.backups.find(x => x.id === b.closest('tr').dataset.id)));
+    el.querySelectorAll('button[data-a="verify"]').forEach(b => b.onclick = async () => { const id = b.closest('tr').dataset.id;
+      try { await apiPost('backups/verify', {id}); checking = id; asked = Math.floor(Date.now() / 1000); draw(); poll(); } catch (e) { formErr('bkErr', e.message); } });
+    const nb = document.getElementById('bkNow'), r = d.running;
+    nb.disabled = busy();
+    nb.textContent = !r ? (d.pending ? T('Starting…') : T('Back up now'))
+      : r.stage === 'data' ? T('Backing up the flow data…') : r.stage === 'settings' ? T('Saving the settings…')
+      : T('Copying to {where}… {pct} %', {where:r.stage.toUpperCase(), pct:r.total ? Math.min(99, Math.floor(100 * r.done / r.total)) : 0});
+  };
+  const openRestore = m => openModal(T('Restore a backup'), when(m.t), `<div class="form" style="padding:4px 2px">
+      <p class="note" style="margin:0">${T('Restoring stops collecting and the web interface for a few minutes, replaces the flow data and the settings with the backup, and starts them again. Records that arrive meanwhile are lost. The current data is set aside until the backup is in place and comes back if the restore fails.')}</p>
       <p class="note" style="margin:0">${T('Run on the server:')}</p>
-      <pre class="mono" style="margin:0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap">sudo flowtrack restore ${esc(id)}</pre>
-      <p class="note" style="margin:0">${T('Options: --only-settings (keep the flow data), --only-data (keep the settings), --with-license (also the license files — only on the same server). On a new server: install FlowTrack, then sudo flowtrack restore --from s3 (or sftp, or a folder) and pick the backup.')}</p>
-      ${r.encrypted ? `<p class="note" style="margin:0;color:var(--warn)">${T('This backup is encrypted: the restore asks for the passphrase.')}</p>` : ''}</div>`); });
-  document.querySelectorAll('#bkList button[data-a="verify"]').forEach(b => b.onclick = () => { b.textContent = T('Checking…'); setTimeout(() => { b.textContent = '✓ ' + T('intact'); }, 900); });
-  const s = c.schedule, days = [T('Sunday'), T('Monday'), T('Tuesday'), T('Wednesday'), T('Thursday'), T('Friday'), T('Saturday')];
-  fill2('bkSched', `<label class="chk"><input type="checkbox" id="bkOn" ${s.on ? 'checked' : ''}>${T('Back up every day')}</label>
-    <div class="two"><label>${T('At (server time)')}<input id="bkTime" type="time" value="${esc(s.time)}"></label>
-      <label>${T('Full backup')}<select id="bkFullSel"><option value="week" ${s.full === 'week' ? 'selected' : ''}>${T('once a week, incremental on the other days')}</option><option value="day" ${s.full === 'day' ? 'selected' : ''}>${T('every day')}</option></select></label></div>
-    <div class="two"><label>${T('Full backup on')}<select id="bkDay">${days.map((n, i) => `<option value="${i}" ${s.weekday === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
-      <label>${T('Keep full backups (with their incrementals)')}<input id="bkKeep" type="number" min="1" max="60" value="${esc(c.keep_full)}"></label></div>
-    <p class="note" style="margin:0">${T('About {size} with these settings: a full backup ≈ {full}, a day ≈ {day}.', {size:fmtB(c.keep_full * (1.42e9 + 6 * 8e7)), full:fmtB(1.42e9), day:fmtB(8e7)})}</p>`);
-  fill2('bkEnc', `<label class="chk"><input type="checkbox" id="bkEncOn" ${c.encrypt.on ? 'checked' : ''}>${T('Encrypt backups with a passphrase')}</label>
-    <div class="two"><label>${T('Passphrase')}<input id="bkPass" type="password" autocomplete="new-password" placeholder="${c.encrypt.set ? T('saved — leave empty to keep') : ''}"></label>
-      <label>${T('Repeat')}<input id="bkPass2" type="password" autocomplete="new-password"></label></div>
-    <p class="note" style="margin:0;color:var(--warn)">${T('Keep the passphrase somewhere else too (a password manager). Without it an encrypted backup cannot be restored — nobody, us included, can recover it.')}</p>
-    <p class="note" style="margin:0">${T('Without encryption the files are readable only by root on this server; on S3 / SFTP only the storage protects them. They hold the users, SNMP and Telegram / e-mail secrets.')}</p>`);
-  const ds = c.dests, dTab = state.bkTab || 'local';
-  const on = k => ds[k].on ? ` <span class="pill ok">${T('on')}</span>` : '';
-  fill2('bkDest', `<div class="seg ntseg" id="bkSeg" role="tablist">${[['local', T('Folder here')], ['s3', 'S3'], ['sftp', 'SFTP'], ['ftp', 'FTP']].map(([k, l]) => `<button type="button" role="tab" data-v="${k}" aria-pressed="${k === dTab}" aria-selected="${k === dTab}">${l}${k === 'local' ? '' : on(k)}</button>`).join('')}</div>
-    <div class="form tgform" data-p="local" ${dTab === 'local' ? '' : 'hidden'}>
-      <label>${T('Folder')}<input id="bkPath" value="${esc(ds.local.path)}"></label>
-      <p class="note" style="margin:0">${T('Always used: the newest backups stay here for a quick restore. A disk mounted from a NAS (NFS / SMB) works too. Changing it moves nothing — the old folder stays as it is.')} ${T('{free} free.', {free:fmtB(d.disk.free)})}</p></div>
-    <div class="form tgform" data-p="s3" ${dTab === 's3' ? '' : 'hidden'}>
-      <p class="note" style="margin:0">${T('Amazon S3 or any storage that speaks S3: MinIO, Backblaze B2, Wasabi, Cloudflare R2, Hetzner. Give FlowTrack a key that may only write and read this bucket.')}</p>
-      <label class="chk"><input type="checkbox" id="s3On" ${ds.s3.on ? 'checked' : ''}>${T('Copy every backup to S3')}</label>
-      <div class="two"><label>${T('Endpoint')}<input id="s3Ep" value="${esc(ds.s3.endpoint)}" placeholder="https://s3.eu-central-1.amazonaws.com"></label><label>${T('Region')}<input id="s3Reg" value="${esc(ds.s3.region)}" placeholder="eu-central-1"></label></div>
-      <div class="two"><label>${T('Bucket')}<input id="s3Bk" value="${esc(ds.s3.bucket)}"></label><label>${T('Folder in the bucket (optional)')}<input id="s3Pre" value="${esc(ds.s3.prefix)}" placeholder="flowtrack/"></label></div>
-      <div class="two"><label>${T('Access key ID')}<input id="s3Key" value="${esc(ds.s3.key_id)}" autocomplete="off"></label><label>${T('Secret access key')}<input id="s3Sec" type="password" autocomplete="new-password" placeholder="${ds.s3.secret_set ? T('saved — leave empty to keep') : ''}"></label></div>
-      <div><button class="btn" type="button" data-test="s3">${T('Test')}</button> <span class="note" data-say="s3"></span></div></div>
-    <div class="form tgform" data-p="sftp" ${dTab === 'sftp' ? '' : 'hidden'}>
-      <p class="note" style="margin:0">${T('Any server with SSH: a NAS (Synology, QNAP, TrueNAS), a Linux box, a hosting account. A key is safer than a password.')}</p>
-      <label class="chk"><input type="checkbox" id="sfOn" ${ds.sftp.on ? 'checked' : ''}>${T('Copy every backup over SFTP')}</label>
-      <div class="two"><label>${T('Server')}<input id="sfHost" value="${esc(ds.sftp.host)}" placeholder="backup.example.net"></label><div class="two"><label>${T('Port')}<input id="sfPort" type="number" value="${esc(ds.sftp.port)}"></label><label>${T('User')}<input id="sfUser" value="${esc(ds.sftp.user)}"></label></div></div>
-      <div class="two"><label>${T('Sign in with')}<select id="sfAuth"><option value="key" ${ds.sftp.auth === 'key' ? 'selected' : ''}>${T('a private key')}</option><option value="password" ${ds.sftp.auth === 'password' ? 'selected' : ''}>${T('a password')}</option></select></label>
-        <label>${T('Folder on the server')}<input id="sfPath" value="${esc(ds.sftp.path)}" placeholder="/backups/flowtrack"></label></div>
-      <label data-auth="key">${T('Private key (OpenSSH)')}<textarea id="sfKey" rows="3" class="mono" placeholder="${ds.sftp.key_set ? T('saved — leave empty to keep') : '-----BEGIN OPENSSH PRIVATE KEY-----'}" style="border:1px solid var(--edge);border-radius:10px;padding:8px 12px;background:rgba(0,0,0,.3);color:var(--ink)"></textarea></label>
-      <label data-auth="password" hidden>${T('Password')}<input id="sfPass" type="password" autocomplete="new-password" placeholder="${ds.sftp.password_set ? T('saved — leave empty to keep') : ''}"></label>
-      <p class="note" style="margin:0">${ds.sftp.fingerprint ? T('Server key trusted: {fp}. If it changes, copies stop until you test and accept the new one.', {fp:`<span class="mono">${esc(ds.sftp.fingerprint)}</span>`}) : T('The first Test shows the server key to accept.')}</p>
-      <div><button class="btn" type="button" data-test="sftp">${T('Test')}</button> <span class="note" data-say="sftp"></span></div></div>
-    <div class="form tgform" data-p="ftp" ${dTab === 'ftp' ? '' : 'hidden'}>
-      <p class="note" style="margin:0">${T('An FTP server: a NAS, a router with a disk, a hosting account. With TLS (FTPS) the password and the files are encrypted on the way; plain FTP sends them as they are — use it only inside a trusted network.')}</p>
-      <label class="chk"><input type="checkbox" id="ftOn" ${ds.ftp.on ? 'checked' : ''}>${T('Copy every backup over FTP')}</label>
-      <div class="two"><label>${T('Server')}<input id="ftHost" value="${esc(ds.ftp.host)}" placeholder="nas.example.lan"></label><div class="two"><label>${T('Port')}<input id="ftPort" type="number" value="${esc(ds.ftp.port)}"></label><label>${T('Encryption')}<select id="ftTls"><option value="tls" ${ds.ftp.tls ? 'selected' : ''}>${T('TLS (FTPS, explicit)')}</option><option value="none" ${ds.ftp.tls ? '' : 'selected'}>${T('none (plain FTP)')}</option></select></label></div></div>
-      <label class="chk"><input type="checkbox" id="ftVerify" ${ds.ftp.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
-      <div class="two"><label>${T('User')}<input id="ftUser" value="${esc(ds.ftp.user)}" autocomplete="off"></label><label>${T('Password')}<input id="ftPass" type="password" autocomplete="new-password" placeholder="${ds.ftp.password_set ? T('saved — leave empty to keep') : ''}"></label></div>
-      <label>${T('Folder on the server')}<input id="ftPath" value="${esc(ds.ftp.path)}" placeholder="/backups/flowtrack"></label>
-      <p class="note" id="ftWarn" style="margin:0;color:var(--warn)" hidden>${T('Plain FTP: anyone on the way sees the login, the password and — without encryption of the backups — the secrets inside them.')}</p>
-      <div><button class="btn" type="button" data-test="ftp">${T('Test')}</button> <span class="note" data-say="ftp"></span></div></div>`);
-  const ftls = () => { const plain = document.getElementById('ftTls').value === 'none'; document.getElementById('ftVerify').disabled = plain; document.getElementById('ftWarn').hidden = !plain; };
-  document.getElementById('ftTls').onchange = ftls; ftls();
-  document.querySelectorAll('#bkSeg [data-v]').forEach(b => b.onclick = () => { state.bkTab = b.dataset.v;
-    document.querySelectorAll('#bkSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
-    document.querySelectorAll('#bkDest [data-p]').forEach(p => { p.hidden = p.dataset.p !== b.dataset.v; }); });
-  const auth = () => { const a = document.getElementById('sfAuth').value; document.querySelectorAll('#bkDest [data-auth]').forEach(l => { l.hidden = l.dataset.auth !== a; }); };
-  document.getElementById('sfAuth').onchange = auth; auth();
-  const sched = () => { const off = !document.getElementById('bkOn').checked; ['bkTime', 'bkFullSel', 'bkDay'].forEach(id => { document.getElementById(id).disabled = off; });
-    if (!off) document.getElementById('bkDay').disabled = document.getElementById('bkFullSel').value !== 'week'; };
-  ['bkOn', 'bkFullSel'].forEach(id => { document.getElementById(id).onchange = sched; }); sched();
-  const enc = () => { const off = !document.getElementById('bkEncOn').checked; ['bkPass', 'bkPass2'].forEach(id => { document.getElementById(id).disabled = off; }); };
-  document.getElementById('bkEncOn').onchange = enc; enc();
-  document.querySelectorAll('#bkDest [data-test]').forEach(b => b.onclick = () => { const k = b.dataset.test, say = document.querySelector(`#bkDest [data-say="${k}"]`);
-    say.textContent = T('Testing…'); say.style.color = '';
-    setTimeout(() => { const good = k !== 'sftp'; say.textContent = good ? T('OK — wrote, read and deleted a test file.') : T('No answer from {host}:{port} in 10 s.', {host:ds.sftp.host, port:ds.sftp.port}); say.style.color = good ? 'var(--ok)' : 'var(--crit)'; }, 900); });
-  document.getElementById('bkNow').onclick = () => { const b = document.getElementById('bkNow'); b.disabled = true; b.textContent = T('Backing up… {pct} %', {pct:0});
-    let p = 0; const t = setInterval(() => { p += 20; b.textContent = T('Backing up… {pct} %', {pct:p}); if (p >= 100) { clearInterval(t); b.disabled = false; b.textContent = T('Back up now'); } }, 500); };
-  document.getElementById('bkSave').onclick = () => { const a = document.getElementById('bkPass').value, b2 = document.getElementById('bkPass2').value;
-    formErr('bkErr', a !== b2 ? T('The passphrases differ') : a && a.length < 10 ? T('A passphrase needs at least 10 characters') : '');
-    document.getElementById('bkOk').hidden = !!(a !== b2 || (a && a.length < 10)); };
+      <pre class="mono" style="margin:0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap">sudo flowtrack restore ${esc(m.id)}</pre>
+      <p class="note" style="margin:0">${T('Options: --only-settings (keep the flow data), --only-data (keep the settings), --with-license (also the license files — only on the same server). On a new server: install FlowTrack, set the same place here (S3, SFTP or FTP), then run sudo flowtrack restore --from s3 (or sftp, ftp, a folder) and pick the backup.')}</p>
+      ${m.encrypted ? `<p class="note" style="margin:0;color:var(--warn)">${T('The copies of this backup are encrypted: a restore from them asks for the passphrase.')}</p>` : ''}</div>`);
+  // ---- the forms: drawn once, so a refresh while a backup runs never clears what is being typed
+  const forms = () => {
+    const c = d.config, s = c.schedule, days = [T('Sunday'), T('Monday'), T('Tuesday'), T('Wednesday'), T('Thursday'), T('Friday'), T('Saturday')];
+    const fulls = d.backups.filter(m => m.kind === 'full'), diffs = d.backups.filter(m => m.kind !== 'full');
+    const fullSz = fulls.length ? fulls[0].size : 0, daySz = diffs.length ? diffs.reduce((a, m) => a + m.size, 0) / diffs.length : 0;
+    box('bkSched', `<label class="chk"><input type="checkbox" id="bkOn" ${s.on ? 'checked' : ''}>${T('Back up every day')}</label>
+      <div class="two"><label>${T('At (server time)')}<input id="bkTime" type="time" value="${esc(s.time)}"></label>
+        <label>${T('Full backup')}<select id="bkFullSel"><option value="week" ${s.full === 'week' ? 'selected' : ''}>${T('once a week, the changes on the other days')}</option><option value="day" ${s.full === 'day' ? 'selected' : ''}>${T('every day')}</option></select></label></div>
+      <div class="two"><label>${T('Full backup on')}<select id="bkDay">${days.map((n, i) => `<option value="${i}" ${s.weekday === i ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+        <label>${T('Keep full backups (with their changes)')}<input id="bkKeep" type="number" min="1" max="60" value="${esc(c.keep_full)}"></label></div>
+      <p class="note" style="margin:0" id="bkEst"></p>`);
+    const est = () => { const n = +document.getElementById('bkKeep').value || 1, wk = document.getElementById('bkFullSel').value === 'week';
+      document.getElementById('bkEst').textContent = fullSz ? T('About {size} with these settings: a full backup ≈ {full}, a day of changes ≈ {day}.', {size:fmtB(n * (wk ? fullSz + 6 * daySz : fullSz)), full:fmtB(fullSz), day:fmtB(daySz)}) : ''; };
+    box('bkEnc', `<label class="chk"><input type="checkbox" id="bkEncOn" ${c.encrypt.on ? 'checked' : ''}>${T('Encrypt the copies with a passphrase')}</label>
+      <div class="two"><label>${T('Passphrase')}<input id="bkPass" type="password" autocomplete="new-password" placeholder="${c.encrypt.set ? T('saved — leave empty to keep') : T('at least 10 characters')}"></label>
+        <label>${T('Repeat')}<input id="bkPass2" type="password" autocomplete="new-password"></label></div>
+      <p class="note" style="margin:0;color:var(--warn)">${T('Keep the passphrase somewhere else too (a password manager). Without it an encrypted copy cannot be restored — nobody, us included, can recover it.')}</p>
+      <p class="note" style="margin:0">${T('The folder on this server is not encrypted: only root can read it, and the next backup of the changes needs it as it is. The backups hold the users, SNMP and Telegram / e-mail secrets.')}</p>`);
+    const dTab = state.bkTab || 'local', pill = k => c[k].on ? ` <span class="pill ok">${T('on')}</span>` : '';
+    const sec = (id, set) => `<input id="${id}" type="password" autocomplete="new-password" placeholder="${set ? T('saved — leave empty to keep') : ''}">`;
+    const testRow = k => `<div><button class="btn" type="button" data-test="${k}">${T('Test')}</button> <span class="note" data-say="${k}"></span></div>`;
+    const x3 = c.s3, sf = c.sftp, ft = c.ftp;
+    fp = sf.fingerprint || '';
+    box('bkDest', `<div class="seg ntseg" id="bkSeg" role="tablist">${[['local', T('Folder here')], ...BK_DESTS].map(([k, l]) => `<button type="button" role="tab" data-v="${k}" aria-pressed="${k === dTab}" aria-selected="${k === dTab}">${l}${k === 'local' ? '' : pill(k)}</button>`).join('')}</div>
+      <div class="form tgform" data-p="local" ${dTab === 'local' ? '' : 'hidden'}>
+        <label>${T('Folder')}<input value="${esc(d.dir)}" readonly></label>
+        <p class="note" style="margin:0">${T('Always used: the newest backups stay here for a quick restore. {free} free.', {free:fmtB(d.free)})} ${T('Another folder (e.g. a disk mounted from a NAS) is set when installing or upgrading:')} <span class="mono">sudo flowtrack upgrade --force --backup-dir /mnt/nas/flowtrack</span></p></div>
+      <div class="form tgform" data-p="s3" ${dTab === 's3' ? '' : 'hidden'}>
+        <p class="note" style="margin:0">${T('Amazon S3 or any storage that speaks S3: MinIO, Backblaze B2, Wasabi, Cloudflare R2, Hetzner. Give FlowTrack a key that may only write and read this bucket.')}</p>
+        <label class="chk"><input type="checkbox" id="s3On" ${x3.on ? 'checked' : ''}>${T('Copy every backup to S3')}</label>
+        <div class="two"><label>${T('Endpoint (empty: Amazon S3)')}<input id="s3Ep" value="${esc(x3.endpoint)}" placeholder="https://s3.eu-central-1.amazonaws.com"></label><label>${T('Region')}<input id="s3Reg" value="${esc(x3.region)}" placeholder="eu-central-1"></label></div>
+        <div class="two"><label>${T('Bucket')}<input id="s3Bk" value="${esc(x3.bucket)}"></label><label>${T('Folder in the bucket (optional)')}<input id="s3Pre" value="${esc(x3.prefix)}" placeholder="flowtrack/"></label></div>
+        <div class="two"><label>${T('Access key ID')}<input id="s3Key" value="${esc(x3.key_id)}" autocomplete="off"></label><label>${T('Secret access key')}${sec('s3Sec', x3.secret_set)}</label></div>
+        ${testRow('s3')}</div>
+      <div class="form tgform" data-p="sftp" ${dTab === 'sftp' ? '' : 'hidden'}>
+        <p class="note" style="margin:0">${T('Any server with SSH: a NAS (Synology, QNAP, TrueNAS), a Linux box, a hosting account. A key is safer than a password.')}</p>
+        <label class="chk"><input type="checkbox" id="sfOn" ${sf.on ? 'checked' : ''}>${T('Copy every backup over SFTP')}</label>
+        <div class="two"><label>${T('Server')}<input id="sfHost" value="${esc(sf.host)}" placeholder="backup.example.net"></label><div class="two"><label>${T('Port')}<input id="sfPort" type="number" min="1" max="65535" value="${esc(sf.port)}"></label><label>${T('User')}<input id="sfUser" value="${esc(sf.user)}" autocomplete="off"></label></div></div>
+        <div class="two"><label>${T('Sign in with')}<select id="sfAuth"><option value="key" ${sf.auth === 'key' ? 'selected' : ''}>${T('a private key')}</option><option value="password" ${sf.auth === 'password' ? 'selected' : ''}>${T('a password')}</option></select></label>
+          <label>${T('Folder on the server')}<input id="sfPath" value="${esc(sf.path)}" placeholder="/backups/flowtrack"></label></div>
+        <label data-auth="key">${T('Private key (OpenSSH, without a passphrase)')}<textarea id="sfKey" rows="3" class="mono" placeholder="${sf.key_set ? T('saved — leave empty to keep') : '-----BEGIN OPENSSH PRIVATE KEY-----'}" style="border:1px solid var(--edge);border-radius:10px;padding:8px 12px;background:rgba(0,0,0,.3);color:var(--ink)"></textarea></label>
+        <label data-auth="password" hidden>${T('Password')}${sec('sfPass', sf.password_set)}</label>
+        <p class="note" style="margin:0" id="sfFp"></p>
+        ${testRow('sftp')}</div>
+      <div class="form tgform" data-p="ftp" ${dTab === 'ftp' ? '' : 'hidden'}>
+        <p class="note" style="margin:0">${T('An FTP server: a NAS, a router with a disk, a hosting account. With TLS (FTPS) the password and the files are encrypted on the way; plain FTP sends them as they are — use it only inside a trusted network.')}</p>
+        <label class="chk"><input type="checkbox" id="ftOn" ${ft.on ? 'checked' : ''}>${T('Copy every backup over FTP')}</label>
+        <div class="two"><label>${T('Server')}<input id="ftHost" value="${esc(ft.host)}" placeholder="nas.example.lan"></label><div class="two"><label>${T('Port')}<input id="ftPort" type="number" min="1" max="65535" value="${esc(ft.port)}"></label><label>${T('Encryption')}<select id="ftTls"><option value="tls" ${ft.tls ? 'selected' : ''}>${T('TLS (FTPS, explicit)')}</option><option value="none" ${ft.tls ? '' : 'selected'}>${T('none (plain FTP)')}</option></select></label></div></div>
+        <label class="chk"><input type="checkbox" id="ftVerify" ${ft.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
+        <div class="two"><label>${T('User')}<input id="ftUser" value="${esc(ft.user)}" autocomplete="off"></label><label>${T('Password')}${sec('ftPass', ft.password_set)}</label></div>
+        <label>${T('Folder on the server')}<input id="ftPath" value="${esc(ft.path)}" placeholder="/backups/flowtrack"></label>
+        <p class="note" id="ftWarn" style="margin:0;color:var(--warn)" hidden>${T('Plain FTP: anyone on the way sees the login, the password and — without encryption of the copies — the secrets inside them.')}</p>
+        ${testRow('ftp')}</div>`);
+    const $ = id => document.getElementById(id);
+    document.querySelectorAll('#bkSeg [data-v]').forEach(b => b.onclick = () => { state.bkTab = b.dataset.v;
+      document.querySelectorAll('#bkSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
+      document.querySelectorAll('#bkDest [data-p]').forEach(p => { p.hidden = p.dataset.p !== b.dataset.v; }); });
+    const auth = () => { const a = $('sfAuth').value; document.querySelectorAll('#bkDest [data-auth]').forEach(l => { l.hidden = l.dataset.auth !== a; }); };
+    $('sfAuth').onchange = auth; auth();
+    const fpNote = () => { $('sfFp').innerHTML = fp ? T('Server key trusted: {fp}. If it changes, copies stop until you test and accept the new one.', {fp:`<span class="mono">${esc(fp)}</span>`}) : T('The first Test shows the key of the server to accept.'); };
+    fpNote();
+    ['sfHost', 'sfPort'].forEach(id => { $(id).oninput = () => { if ($('sfHost').value.trim() !== sf.host || +$('sfPort').value !== +sf.port) { fp = ''; fpNote(); } else { fp = sf.fingerprint || ''; fpNote(); } }; });
+    const sched = () => { const off = !$('bkOn').checked; ['bkTime', 'bkFullSel', 'bkDay'].forEach(id => { $(id).disabled = off; });
+      if (!off) $('bkDay').disabled = $('bkFullSel').value !== 'week'; est(); };
+    ['bkOn', 'bkFullSel'].forEach(id => { $(id).onchange = sched; }); $('bkKeep').oninput = est; sched();
+    const enc = () => { const off = !$('bkEncOn').checked; ['bkPass', 'bkPass2'].forEach(id => { $(id).disabled = off; }); };
+    $('bkEncOn').onchange = enc; enc();
+    const ftls = () => { const plain = $('ftTls').value === 'none'; $('ftVerify').disabled = plain; $('ftWarn').hidden = !plain; };
+    $('ftTls').onchange = ftls; ftls();
+    document.querySelectorAll('#bkDest [data-test]').forEach(b => b.onclick = async () => { const k = b.dataset.test, say = document.querySelector(`#bkDest [data-say="${k}"]`);
+      const form = collect(); say.textContent = T('Testing…'); say.style.color = ''; b.disabled = true;
+      try { const r = await apiPost('backups/test', {kind:k, [k]:form[k]});
+        say.style.color = r.ok ? 'var(--ok)' : 'var(--crit)'; say.textContent = r.message;
+        if (r.ok && r.fingerprint) { const a = document.createElement('button'); a.className = 'btn'; a.type = 'button'; a.textContent = T('Accept this key');
+          a.onclick = () => { fp = r.fingerprint; fpNote(); say.style.color = 'var(--ok)'; say.textContent = T('Accepted — Test again, then Save.'); };
+          say.append(' ', a); }
+      } catch (e) { say.style.color = 'var(--crit)'; say.textContent = e.message; } finally { b.disabled = false; } });
+  };
+  const collect = () => { const $ = id => document.getElementById(id), val = id => $(id).value.trim();
+    return {schedule:{on:$('bkOn').checked, time:$('bkTime').value || '03:00', full:$('bkFullSel').value, weekday:+$('bkDay').value}, keep_full:+$('bkKeep').value,
+      encrypt:{on:$('bkEncOn').checked, passphrase:$('bkPass').value},
+      s3:{on:$('s3On').checked, endpoint:val('s3Ep'), region:val('s3Reg'), bucket:val('s3Bk'), prefix:val('s3Pre'), key_id:val('s3Key'), secret:$('s3Sec').value},
+      sftp:{on:$('sfOn').checked, host:val('sfHost'), port:+$('sfPort').value || 22, user:val('sfUser'), auth:$('sfAuth').value, path:val('sfPath'), key:$('sfKey').value.trim(), password:$('sfPass').value, fingerprint:fp},
+      ftp:{on:$('ftOn').checked, host:val('ftHost'), port:+$('ftPort').value || 21, tls:$('ftTls').value === 'tls', verify:$('ftVerify').checked, user:val('ftUser'), password:$('ftPass').value, path:val('ftPath')}}; };
+  document.getElementById('bkSave').onclick = async () => { const a = document.getElementById('bkPass').value, b2 = document.getElementById('bkPass2').value;
+    document.getElementById('bkOk').hidden = true;
+    if (a !== b2) return formErr('bkErr', T('The passphrases differ'));
+    formErr('bkErr', '');
+    try { const r = await apiPost('backups/config', collect()); d.config = r.config; d.next = r.next;
+      ['bkPass', 'bkPass2', 's3Sec', 'sfKey', 'sfPass', 'ftPass'].forEach(id => { document.getElementById(id).value = ''; });
+      forms(); draw(); document.getElementById('bkOk').hidden = false;
+    } catch (e) { formErr('bkErr', e.message); } };
+  document.getElementById('bkNow').onclick = async () => { formErr('bkErr', '');
+    try { await apiPost('backups/run', {full:document.getElementById('bkFull').checked}); d.pending = true; asked = Math.floor(Date.now() / 1000); draw(); poll(); }
+    catch (e) { formErr('bkErr', e.message); } };
+  // ---- while a backup or a check runs: ask every 2 s; it ends when the service has written its result
+  let polling = false;
+  const poll = () => { if (polling) return; polling = true;
+    const tick = async () => { if (seq !== renderSeq) { polling = false; return; }
+      try { const n = await load();
+        if (checking) { const v = (n.backups.find(m => m.id === checking) || {}).verified;
+          if ((v && v.t >= asked) || Date.now() / 1000 - asked > 900) checking = null; }
+        d = {...n, config:d.config}; draw();
+        if (n.running || n.pending || checking) { setTimeout(tick, 2000); return; }
+      } catch (e) { setTimeout(tick, 5000); return; }
+      polling = false; };
+    setTimeout(tick, 1500); };
+  load().then(n => { if (seq !== renderSeq) return; d = n; forms(); draw(); if (busy()) poll(); })
+    .catch(e => { box('bkList', errBox(e)); box('bkDest', ''); });
+  every(30000, () => { if (!polling && d) load().then(n => { if (seq === renderSeq) { d = {...n, config:d.config}; draw(); if (busy()) poll(); } }).catch(() => {}); });
 }
 function vLicense(){
   document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license'), T('limits in effect · a FlowTrack Pro license raises them'))}<div id="edBox" class="loading"></div></section>

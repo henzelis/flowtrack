@@ -154,6 +154,36 @@ Other commands on the server:
 | `sudo flowtrack reconfigure` | the installer's questions again: ports, device, admin password, firewall |
 | `sudo flowtrack uninstall` | remove FlowTrack; asks whether to keep the data |
 
+## Backups
+
+*Settings → Backups* (admins) and `sudo flowtrack backup | restore` keep the flow data and every setting safe:
+
+- **Schedule**: a full backup once a week (or daily) and the changes since it on the other days, at the hour you set,
+  run by `flowtrack-backup.timer` on the server itself. *Back up now* any time; the keeping rule removes the oldest full
+  backups together with their changes. The first scheduled backup after an install or upgrade waits for its hour.
+- **Where**: always a folder on the server (`/var/backups/flowtrack`, or `--backup-dir DIR` when installing or upgrading
+  — e.g. a disk mounted from a NAS), plus copies to **S3** (Amazon or any S3 storage: MinIO, Backblaze B2, Wasabi,
+  Cloudflare R2, Hetzner…), **SFTP** (key or password; the server's key is accepted once and then checked) and **FTP**
+  (FTPS by default). A copy that fails is retried with the next backup; *Test* checks a place by writing, reading back
+  and deleting a file.
+- **Encryption** of the copies with a passphrase (AES-256-GCM, key from scrypt). Without the passphrase an encrypted
+  copy cannot be restored. The folder on the server is readable by root only and not encrypted (the next backup of
+  the changes is made against it).
+- **Check**: *Check* (or `flowtrack backup verify ID`) compares every file with ClickHouse's list; `--deep` restores the
+  backup into a scratch database and counts the rows.
+- **Restore** (`sudo flowtrack restore [ID]`): collecting stops for the time of it, the current flow data is set aside
+  until the backup is in place and comes back if the restore fails (`flowtrack restore --undo` after an interruption).
+  `--only-settings`, `--only-data`; the license files only with `--with-license` (a license is bound to its server).
+  On a new server: install FlowTrack, set the same place in *Settings → Backups*, then
+  `sudo flowtrack restore --from s3` (or `sftp`, `ftp`, a folder with `.ftbk` files) and pick the backup.
+
+```bash
+sudo flowtrack backup [--full]                 # a backup now
+sudo flowtrack backup list [--from s3|sftp|ftp|DIR]
+sudo flowtrack backup verify [ID] [--deep]
+sudo flowtrack restore [ID] [--from …] [--only-settings|--only-data] [--with-license] [--passphrase-file F]
+```
+
 ## Requirements
 
 - Linux host reachable from the exporters (UDP 2055), Python 3.10+, Docker (for ClickHouse).
@@ -178,6 +208,7 @@ Other commands on the server:
 | `FT_WEB_BIND`, `FT_WEB_PORT` | interface of the default route, `3030` | web UI and API, same syntax — e.g. NetFlow on the external interface, the web UI only on the internal one |
 | `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowtrack/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
+| `FT_BACKUP_DIR` | `/var/backups/flowtrack` | where backups are kept on the server; change it with `sudo flowtrack upgrade --force --backup-dir DIR` (ClickHouse sees it as `/backups`) |
 
 Devices can be described in `/etc/flowtrack/exporters.json` or from the UI (*Settings → Devices → Connect
 device*, admins only; the collector picks changes up within a minute):
@@ -435,7 +466,7 @@ The installer's own messages (English and Ukrainian) are in `install.sh`.
 - Host names from DHCP leases (FortiGate API) and SNMP interface names / counter cross-checks
 - FortiGate application names from `APPLICATION_TAG`
 - DSCP / traffic class: breakdown and colouring by QoS marking
-- Scheduled reports; configurable retention; ClickHouse backups
+- Scheduled reports; configurable retention
 
 ## Repository layout
 
@@ -446,6 +477,7 @@ The installer's own messages (English and Ukrainian) are in `install.sh`.
 | `common.py`, `schema.sql` | ClickHouse client, GeoIP/ASN/service enrichment; database schema |
 | `topology.py` | Path analysis: layer-3 neighbours of the devices, link states, the hops of a path |
 | `rollups.py` | 5-minute and hourly totals for long periods: tables, filling the history, which one a query reads |
+| `backup.py` | backups and restore: ClickHouse BACKUP + settings, copies to S3 / SFTP / FTP, encryption, `flowtrack backup` / `restore` |
 | `web/` | the web UI (plain HTML/CSS/JS, ECharts vendored — no build step) |
 | `web/i18n/` | language dictionaries for the UI and the server's texts (see [Translations](#translations)) |
 | `deploy/` | systemd units, GeoIP refresh, configuration examples |

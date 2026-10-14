@@ -843,8 +843,10 @@ uninstall() {
     if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowtrack 2>/dev/null || true
     else rm -rf "$PREFIX/app" "$PREFIX/venv"; fi
   }
+  local bk; bk=$(envget FT_BACKUP_DIR 2>/dev/null || true); bk=${bk:-/var/backups/flowtrack}
   step "$(t 'Removing FlowTrack' 'Видалення FlowTrack')" remove_all
   ok "$(t 'FlowTrack removed.' 'FlowTrack видалено.')$([ "$keep" = y ] && t " Data kept in $PREFIX/clickhouse and $ETC." " Дані збережено в $PREFIX/clickhouse та $ETC.")"
+  if [ -d "$bk" ]; then say "  $(t "Backups are kept in $bk (delete the folder yourself when they are not needed)." "Бекапи лишаються в $bk (видаліть теку самі, коли вони не потрібні).")"; fi
 }
 
 main "$@"

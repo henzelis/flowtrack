@@ -67,10 +67,10 @@ SERVICES = ('flowtrack-collector', 'flowtrack-web')
 ID_RE = re.compile(r'^\d{8}-\d{6}$')
 DESTS = ('s3', 'sftp', 'ftp')
 # never restored: what the installer made for this server, the license bound to it, the state of backups themselves
-SKIP_RESTORE = ('etc/flowtrack/env', 'etc/flowtrack/clickhouse', 'etc/flowtrack/install-lang', 'var/lib/flowtrack/hw.board',
-                'var/lib/flowtrack/sessions.json', 'var/lib/flowtrack/backup_status.json', 'var/lib/flowtrack/backup_index.json',
-                'var/lib/flowtrack/backup.request', 'var/lib/flowtrack/reputation')
-LICENSE_FILES = ('var/lib/flowtrack/license.',)
+_C, _S = CONFIG_DIR.strip('/'), STATE_DIR.strip('/')
+SKIP_RESTORE = (f'{_C}/env', f'{_C}/clickhouse', f'{_C}/install-lang', f'{_S}/hw.board', f'{_S}/sessions.json',
+                f'{_S}/backup_status.json', f'{_S}/backup_index.json', f'{_S}/backup.request', f'{_S}/backup.lock', f'{_S}/reputation')
+LICENSE_FILES = (f'{_S}/license.',)
 
 
 class BackupError(Exception):
@@ -691,7 +691,7 @@ def make(full=False, log=print):
     t0 = time.time()
     try:
         status(running={'id': bid, 'kind': kind, 'stage': 'data', 'started': int(t0), 'done': 0, 'total': 0})
-        log(tr('Backing up the flow data ({kind})…', kind=tr('full') if kind == 'full' else tr('differential')))
+        log(tr('Backing up the flow data ({kind})…', kind=tr('full') if kind == 'full' else tr('changes')))
         rows_before = _tables()
         q = f"BACKUP DATABASE {DB} TO File('{bid}/data')"
         if kind == 'diff':
@@ -773,7 +773,16 @@ def copy_out(cfg, log=print, only=None):
                 _save_manifest(m)
             continue
         try:
+            there = set(d.list())
+        except BackupError:
+            there = set()
+        try:
             for m in todo:
+                if {m['id'] + '.ftbk', m['id'] + '.json'} <= there:      # already there (e.g. it was restored from there)
+                    m['places'][kind] = 'ok'
+                    m['errors'].pop(kind, None)
+                    _save_manifest(m)
+                    continue
                 status(running={'id': m['id'], 'kind': m['kind'], 'stage': kind, 'started': int(time.time()), 'done': 0, 'total': m['size']})
                 log(tr('Copying {id} to {where}…', id=m['id'], where=kind.upper()))
                 try:
@@ -1131,7 +1140,7 @@ def undo(log=print):
         _systemctl('start', *SERVICES)
 
 
-def _restore_settings(path, with_license):
+def _restore_settings(path, with_license, root='/'):
     def skip(name):
         if any(name == s or name.startswith(s + '/') for s in SKIP_RESTORE):
             return True
@@ -1144,17 +1153,19 @@ def _restore_settings(path, with_license):
             if not (ti.name.startswith(CONFIG_DIR.lstrip('/')) or ti.name.startswith(STATE_DIR.lstrip('/'))) or skip(ti.name):
                 continue
             members.append(ti)
-        t.extractall('/', members=members)
+        t.extractall(root, members=members)
 
 
 # ---------------------------------------------------------------- the service and the command line
 
 @contextlib.contextmanager
-def lock():
+def lock(wait=False):
+    """One backup or restore at a time. wait: the service waits for the running one (a request file it left would
+    start it again at once, over and over); the command line says so instead."""
     os.makedirs(STATE_DIR, exist_ok=True)
     fd = os.open(os.path.join(STATE_DIR, 'backup.lock'), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
     except BlockingIOError:
         os.close(fd)
         raise BackupError(tr('Another backup or restore is running.')) from None
@@ -1186,17 +1197,19 @@ def service():
     with contextlib.suppress(OSError):
         with open(os.path.join(CONFIG_DIR, 'install-lang')) as f:
             set_lang(f.read().strip())
-    req = None
-    if os.path.exists(REQUEST):
-        try:
-            with open(REQUEST) as f:
-                req = json.load(f)
-        except (OSError, ValueError):
-            req = {'do': 'backup'}
-        with contextlib.suppress(OSError):
-            os.remove(REQUEST)
     cfg = load()
-    with lock():
+    held = lock(wait=True)
+    held.__enter__()
+    try:
+        req = None
+        if os.path.exists(REQUEST):            # taken only under the lock, so it is never lost
+            try:
+                with open(REQUEST) as f:
+                    req = json.load(f)
+            except (OSError, ValueError):
+                req = {'do': 'backup'}
+            with contextlib.suppress(OSError):
+                os.remove(REQUEST)
         if req:
             if req.get('do') == 'verify' and ID_RE.match(str(req.get('id'))):
                 with contextlib.suppress(BackupError, CHError):
@@ -1219,8 +1232,9 @@ def service():
                 run(full=kind == 'full', slot=int(_slot(cfg)))
         elif st.get('next') != next_run(cfg):
             status(next=next_run(cfg))
-        if not os.path.exists(INDEX):
-            write_index()
+        write_index()                          # also after backups were deleted or copied in by hand
+    finally:
+        held.__exit__(None, None, None)
 
 
 def _table(ms, extra=''):
@@ -1230,7 +1244,7 @@ def _table(ms, extra=''):
     for m in ms:
         places = ' '.join(k for k, v in (m.get('places') or {}).items() if v == 'ok')
         bad = ' '.join(f'{k}✕' for k, v in (m.get('places') or {}).items() if v == 'error')
-        print(f"{m['id']}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(m['t']))}  {(tr('full') if m['kind'] == 'full' else tr('differential')):<14} "
+        print(f"{m['id']}  {time.strftime('%Y-%m-%d %H:%M', time.localtime(m['t']))}  {(tr('full') if m['kind'] == 'full' else tr('changes')):<14} "
               f"{_fmt(m.get('size', 0)):>10}  {m.get('version', '?'):<7} {places} {bad}{extra}")
 
 
@@ -1313,7 +1327,7 @@ def main(argv=None):
             what = tr('the settings') if a.only_settings else tr('the flow data') if a.only_data else tr('the flow data and the settings')
             print(tr('Restore {id} ({when}, FlowTrack {v}): {what} of this server are replaced; collecting stops for the time of it.',
                      id=a.id, when=time.strftime('%Y-%m-%d %H:%M', time.localtime(m['t'])), v=m.get('version', '?'), what=what))
-            if not a.yes and input(tr('Type yes to go on: ')).strip().lower() not in ('yes', 'так', 'y'):
+            if not a.yes and input(tr('Type yes to go on: ')).strip().lower() not in ('yes', 'y', tr('yes').lower()):
                 print(tr('Nothing changed.'))
                 return 1
             with lock():

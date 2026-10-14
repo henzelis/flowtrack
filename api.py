@@ -1465,7 +1465,7 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify'}
+ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups'}
 COOKIE = 'ft_session'
 
 
@@ -1537,6 +1537,8 @@ class H(BaseHTTPRequestHandler):
                     return self.json(200, get_events_config())
                 if u.path == '/api/notify':
                     return self.json(200, notify.public(notify.load()))
+                if u.path == '/api/backups':
+                    return self.json(200, get_backups())
                 return self.json(200, {'users': AUTH.list_users()})
         fn = ROUTES.get(u.path)
         if fn:
@@ -1613,6 +1615,10 @@ class H(BaseHTTPRequestHandler):
                 '/api/notify': lambda: post_notify(body),
                 '/api/notify/test': lambda: post_notify_test(body),
                 '/api/notify/chats': lambda: post_notify_chats(body),
+                '/api/backups/config': lambda: post_backups_config(body),
+                '/api/backups/run': lambda: post_backups_run(body),
+                '/api/backups/verify': lambda: post_backups_verify(body),
+                '/api/backups/test': lambda: post_backups_test(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
@@ -1627,6 +1633,81 @@ class H(BaseHTTPRequestHandler):
         except OSError as e:
             print(f'[flowtrack-api] POST {u.path}: {e}', flush=True)
             return self.json(500, {'error': tr('could not save')})
+
+
+# ---------------------------------------------------------------- backups (1.8.0): the work is done by root (backup.py)
+SECRETS = {'s3': ('secret',), 'sftp': ('password', 'key'), 'ftp': ('password',)}
+
+
+def get_backups():
+    """Settings → Backups: the settings without secrets, the state of the running / last backup, the backups."""
+    import backup
+    cfg = backup.load()
+    try:
+        with open(backup.INDEX) as f:
+            idx = json.load(f)
+    except (OSError, ValueError):
+        idx = {}
+    st = backup.read_status()
+    return {'config': backup.public(cfg), 'running': st.get('running'), 'last': st.get('last'), 'next': backup.next_run(cfg),
+            'pending': os.path.exists(backup.REQUEST), 'dir': idx.get('dir') or backup.DIR, 'free': idx.get('free', 0),
+            'used': idx.get('used', 0), 'backups': idx.get('backups', []), 'index_t': idx.get('t', 0),
+            'tz_offset': time.localtime().tm_gmtoff}
+
+
+def post_backups_config(body):
+    import backup
+    try:
+        cfg = backup.validate(body, backup.load())
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    backup.save(cfg)
+    return {'config': backup.public(cfg), 'next': backup.next_run(cfg)}
+
+
+def _backup_request(req):
+    """Ask root's flowtrack-backup.service (started by its .path unit when the file appears) to do something."""
+    import backup
+    if os.path.exists(backup.REQUEST):
+        raise BadRequest(tr('A backup task is already waiting to start.'))
+    tmp = backup.REQUEST + '.tmp'
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
+        json.dump({**req, 't': int(time.time())}, f)
+    os.replace(tmp, backup.REQUEST)
+    return {'ok': True}
+
+
+def post_backups_run(body):
+    return _backup_request({'do': 'backup', 'full': bool(body.get('full'))})
+
+
+def post_backups_verify(body):
+    import backup
+    bid = str(body.get('id') or '')
+    if not backup.ID_RE.match(bid):
+        raise BadRequest('bad id')
+    return _backup_request({'do': 'verify', 'id': bid, 'deep': bool(body.get('deep'))})
+
+
+def post_backups_test(body):
+    """Test a place with the typed settings; an empty secret is the stored one."""
+    import backup
+    kind = body.get('kind')
+    if kind not in SECRETS:
+        raise BadRequest('bad kind')
+    c = dict(backup.load()[kind])
+    for k, v in (body.get(kind) or {}).items():
+        if k in c and not (k in SECRETS[kind] and v in ('', None)):
+            c[k] = v
+    if kind == 'sftp' and 'fingerprint' not in (body.get(kind) or {}):
+        c['fingerprint'] = ''
+    if not str(c.get('host' if kind != 's3' else 'bucket') or '').strip():
+        raise BadRequest(tr('Fill in the server first.') if kind != 's3' else tr('Fill in the bucket first.'))
+    try:
+        c['port'] = int(c.get('port') or (22 if kind == 'sftp' else 21))
+    except (TypeError, ValueError):
+        raise BadRequest(tr('The port is a number from 1 to 65535.')) from None
+    return backup.test_dest(kind, c)
 
 
 _HOST_RE = re.compile(r'^[A-Za-z0-9.\-]+$|^\[[0-9A-Fa-f:.]+\]$')
