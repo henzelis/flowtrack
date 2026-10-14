@@ -52,7 +52,7 @@
  "All": "Усі",
  "All devices ({n})": "Усі пристрої ({n})",
  "All traffic": "Увесь трафік",
- "All traffic of the device regardless of the Internet / Internal selector. Wi-Fi SSID (VAP) interfaces of FortiGate are not sampled: traffic between two SSIDs does not appear.": "Увесь трафік пристрою незалежно від перемикача «Інтернет / Внутрішній». Wi-Fi-інтерфейси (VAP) FortiGate не експортують NetFlow: трафік між двома SSID тут не видно.",
+ "Follows the traffic selector at the top: Internet, Internal or All traffic (everything that passed the device). Wi-Fi SSID (VAP) interfaces of FortiGate are not sampled: traffic between two SSIDs does not appear.": "Враховує перемикач трафіку вгорі: Інтернет, Внутрішній або Увесь трафік (усе, що пройшло через пристрій). Wi-Fi-інтерфейси (VAP) FortiGate не експортують NetFlow: трафік між двома SSID тут не видно.",
  "Any mail server or service that takes SMTP: your own, Gmail or Microsoft 365 (with an app password), a relay of your provider. One letter per 10-minute check, to all recipients.": "Будь-який поштовий сервер чи сервіс із SMTP: власний, Gmail або Microsoft 365 (з паролем застосунку), релей вашого провайдера. Один лист на 10-хвилинну перевірку, усім отримувачам.",
  "Asking Telegram…": "Питаю Telegram…",
  "At least one administrator must remain": "Має лишитися хоча б один адміністратор",

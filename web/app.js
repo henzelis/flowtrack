@@ -840,7 +840,7 @@ function vPaths(){
       `<span id="pDevSeg"></span>` + seg('pMetricSeg', [['bytes', T('Bytes')], ['packets', T('Packets')], ['flows', 'Flows']], state.metric) + seg('pColorSeg', [['dir', T('Direction')], ['service', T('Service')]], state.ringColor || 'dir') + seg('pScaleSeg', [['sqrt', T('Compressed'), T('Width ∝ √volume — small paths stay visible next to big ones')], ['lin', T('Linear')]], state.scale) + seg('pLiveSeg', [['live', T('Live')], ['period', T('toggle::Period')]], live ? 'live' : 'period'), true)}
       <div class="legend" id="pLegend" style="margin:-6px 0 10px"></div>
       <div class="river devmap" id="cPaths"></div>
-      <p class="note">${T('All traffic of the device regardless of the Internet / Internal selector. Wi-Fi SSID (VAP) interfaces of FortiGate are not sampled: traffic between two SSIDs does not appear.')}</p></section>
+      <p class="note">${T('Follows the traffic selector at the top: Internet, Internal or All traffic (everything that passed the device). Wi-Fi SSID (VAP) interfaces of FortiGate are not sampled: traffic between two SSIDs does not appear.')}</p></section>
     <div class="col s3">
       <div id="pKpi" class="col"></div>
       <section class="glass panel">${ph('search', T('Path'), T('the selected input → output'))}<div id="pInsp"></div></section>
@@ -870,7 +870,7 @@ function vPaths(){
     if (!dev) { fill('cPaths', `<div class="empty">${T('No device has sent data yet')}</div>`); return; }
     const ifs = new Map(dev.interfaces.map(i => [i.index, i]));
     const extra = df ? [] : [{k:'device', v:ip}];
-    const load = () => api('paths', {t:'all', metric:state.metric, live:live ? 1 : 0, win:120}, extra);
+    const load = () => api('paths', {t:state.traffic, metric:state.metric, live:live ? 1 : 0, win:120}, extra);
     const color = new Map();
     // a fixed colour per interface (role colour for WAN / the device itself, else by its place among the device's interfaces)
     const plain = [...ifs.values()].filter(i => !ROLE_COLOR[i.role]).map(i => i.index).sort((a, b) => a - b);
@@ -919,7 +919,7 @@ function vPaths(){
     // inspector of the selected path (interface filters)
     const fi = state.filters.find(f => f.k === 'in_if' && !f.neg), fo = state.filters.find(f => f.k === 'out_if' && !f.neg);
     if (fi || fo) {
-      const [hosts, svc, dst] = await Promise.all([api('top', {dim:'int_ip', limit:5, t:'all'}, extra), api('top', {dim:'service', limit:5, t:'all'}, extra), api('top', {dim:'ext_ip', limit:5, t:'all'}, extra)]);
+      const [hosts, svc, dst] = await Promise.all([api('top', {dim:'int_ip', limit:5, t:state.traffic}, extra), api('top', {dim:'service', limit:5, t:state.traffic}, extra), api('top', {dim:'ext_ip', limit:5, t:state.traffic}, extra)]);
       if (seq !== renderSeq) return;
       const list = (rows, name) => rows.map(r => `<div class="brow" style="cursor:default"><span class="n">${esc(name(r))}</span><span class="t">${fmtB(tot(r))}</span><span class="p"></span></div>`).join('') || '—';
       fill('pInsp', `<div class="insp"><div class="who"><b>${esc(fi ? ifName(+fi.v) : '*')} → ${esc(fo ? ifName(+fo.v) : '*')}</b><span>${esc(dev.name)}</span></div>
@@ -935,7 +935,7 @@ function vPaths(){
       render(); };
     const mapEl = document.getElementById('cPaths');
     if (mapEl) createDevMap(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap,
-      fetchData:() => api('devmap', {t:'all', metric:state.metric, live:live ? 1 : 0, win:120, top:6}, extra)});
+      fetchData:() => api('devmap', {t:state.traffic, metric:state.metric, live:live ? 1 : 0, win:120, top:6}, extra)});
     try { draw(await load()); } catch (e) { fill('pTable', errBox(e)); }
     if (live) every(10000, () => load().then(d => { if (seq === renderSeq) draw(d); }).catch(() => {}));
   })().catch(e => fill('cPaths', errBox(e)));
