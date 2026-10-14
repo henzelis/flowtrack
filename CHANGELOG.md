@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## 1.7.0 — 2026-10-13
+## 1.7.0 — 2026-10-14
 
 - **sFlow v5.** Switches, firewalls and Linux hosts that send sFlow are received on UDP 6343 (`FT_SFLOW_PORT`; sFlow
   sent to the NetFlow port is recognised as well). The compiled core 1.4.0 decodes the sampled packet headers
