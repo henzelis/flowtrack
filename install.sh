@@ -12,6 +12,8 @@
 #           --lang en|uk   installer language
 #           --core FILE          the compiled FlowTrack core (ftcore-<version>-linux-<arch>.so from the GitHub release)
 #                                for servers without access to github.com; it must match ftcore.lock
+#           --backup-dir DIR     where backups are kept on this server (default /var/backups/flowtrack); a disk
+#                                mounted from a NAS works too. Copies to S3 / SFTP / FTP: Settings → Backups
 #           --license KEY|CODE|FILE  activate a license key (FTK-…, online) or a license (FTL-…) issued for this
 #                                server's activation request: sudo flowtrack-license request (also in Settings → License)
 #                          e.g. … | sudo bash -s -- --upgrade --license ./flowtrack.lic
@@ -35,6 +37,7 @@ FT_CORE_URL=${FT_CORE_URL:-}        # default: the GitHub release named in ftcor
 PREFIX=/opt/flowtrack
 ETC=/etc/flowtrack
 STATE=/var/lib/flowtrack
+BACKUP_DIR_OPT=""
 LOG=/var/log/flowtrack-install.log
 CH_IMAGE=clickhouse/clickhouse-server:24.8
 CH_NAME=flowtrack-ch
@@ -48,6 +51,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --core) CORE_SRC=${2:-}; shift ;;
     --core=*) CORE_SRC=${1#--core=} ;;
+    --backup-dir) BACKUP_DIR_OPT=${2:-}; shift ;;
+    --backup-dir=*) BACKUP_DIR_OPT=${1#--backup-dir=} ;;
     --license) LIC_SRC=${2:-}; shift ;;
     --license=*) LIC_SRC=${1#--license=} ;;
     --yes|-y) YES=1 ;;
@@ -492,10 +497,11 @@ make_venv() {
   # rebuild a missing or broken venv (e.g. one that was moved — venvs hard-code their path)
   if ! "$PREFIX/venv/bin/python" -m pip --version >/dev/null 2>&1; then rm -rf "$PREFIX/venv"; python3 -m venv "$PREFIX/venv"; fi
   "$PREFIX/venv/bin/python" -m pip install -q --upgrade pip
-  "$PREFIX/venv/bin/python" -m pip install -q "maxminddb>=2.2,<3"
-  "$PREFIX/venv/bin/python" -c 'import maxminddb'
+  # backups (1.8): copies to S3 (boto3) and SFTP (paramiko, which brings cryptography: also the encryption of copies)
+  "$PREFIX/venv/bin/python" -m pip install -q "maxminddb>=2.2,<3" "boto3>=1.34,<2" "paramiko>=3.4,<4"
+  "$PREFIX/venv/bin/python" -c 'import maxminddb, boto3, paramiko, cryptography'
   # decoding and license checks moved into the compiled core (FlowTrack 1.2)
-  "$PREFIX/venv/bin/python" -m pip uninstall -y -q netflow cryptography >/dev/null 2>&1 || true
+  "$PREFIX/venv/bin/python" -m pip uninstall -y -q netflow >/dev/null 2>&1 || true
 }
 step "$(t 'Python environment' 'Python-оточення')" make_venv
 
@@ -586,7 +592,12 @@ clickhouse_up() {
   # 1 GiB and a day of a busy network's flows did not fit into the queries of one page)
   mem=$(awk '/MemTotal/ {m=int($2/1024/2); if (m<1024) m=1024; if (m>8192) m=8192; print m}' /proc/meminfo)
   sed -i '/^FT_CH_MEMORY_MB=/d' "$ETC/env"; echo "FT_CH_MEMORY_MB=$mem" >> "$ETC/env"   # the web API sizes its queries by it
-  # FlowTrack's ClickHouse settings (quiet diagnostic logs, small caches), mounted into config.d
+  # backups: a folder of the host that ClickHouse sees as /backups (BACKUP … TO File(…)); only root and ClickHouse read it
+  BACKUP_DIR=${BACKUP_DIR_OPT:-$(envget FT_BACKUP_DIR)}; BACKUP_DIR=${BACKUP_DIR:-/var/backups/flowtrack}
+  case "$BACKUP_DIR" in /*) ;; *) echo "--backup-dir: an absolute path is expected: $BACKUP_DIR"; return 1 ;; esac
+  mkdir -p "$BACKUP_DIR"; chown 101:101 "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+  set_env FT_BACKUP_DIR "$BACKUP_DIR"
+  # FlowTrack's ClickHouse settings (quiet diagnostic logs, small caches, the backups folder), mounted into config.d
   mkdir -p "$ETC/clickhouse"
   if ! cmp -s "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; then
     cp "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; chmod 644 "$ETC/clickhouse/flowtrack.xml"; conf_changed=1
@@ -594,12 +605,14 @@ clickhouse_up() {
   ch_run() {
     docker run -d --name "$CH_NAME" --restart unless-stopped -p "127.0.0.1:$CH_PORT:8123" --memory "${mem}m" --memory-swap "$((mem * 2))m" \
       --ulimit nofile=262144:262144 -v "$PREFIX/clickhouse:/var/lib/clickhouse" \
-      -v "$ETC/clickhouse/flowtrack.xml:/etc/clickhouse-server/config.d/flowtrack.xml:ro" \
+      -v "$ETC/clickhouse/flowtrack.xml:/etc/clickhouse-server/config.d/flowtrack.xml:ro" -v "$BACKUP_DIR:/backups" \
       -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD="$CH_PASSWORD" "$CH_IMAGE"
   }
   if docker inspect "$CH_NAME" >/dev/null 2>&1; then
-    if ! docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$CH_NAME" | grep -q 'config.d/flowtrack.xml'; then
-      # an older install: recreate the container with the settings mounted (the data stays in $PREFIX/clickhouse)
+    if ! docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$CH_NAME" | grep -q 'config.d/flowtrack.xml' \
+       || [ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/backups"}}{{.Source}}{{end}}{{end}}' "$CH_NAME")" != "$BACKUP_DIR" ]; then
+      # an older install (or another backups folder): recreate the container with the settings and the backups folder
+      # mounted (the data stays in $PREFIX/clickhouse)
       docker stop -t 30 "$CH_NAME" >/dev/null 2>&1 || true; docker rm "$CH_NAME" >/dev/null; ch_run
     else
       if [ "$(docker inspect -f '{{.HostConfig.Memory}}' "$CH_NAME")" != "$((mem * 1024 * 1024))" ]; then
@@ -628,9 +641,10 @@ step "$(t 'Database (ClickHouse in Docker)' 'База даних (ClickHouse у 
 
 install_units() {
   cp "$PREFIX/app/deploy/flowtrack-collector.service" "$PREFIX/app/deploy/flowtrack-web.service" \
-     "$PREFIX/app/deploy/flowtrack-geoip.service" "$PREFIX/app/deploy/flowtrack-geoip.timer" /etc/systemd/system/
+     "$PREFIX/app/deploy/flowtrack-geoip.service" "$PREFIX/app/deploy/flowtrack-geoip.timer" \
+     "$PREFIX/app/deploy/flowtrack-backup.service" "$PREFIX/app/deploy/flowtrack-backup.timer" "$PREFIX/app/deploy/flowtrack-backup.path" /etc/systemd/system/
   systemctl daemon-reload
-  systemctl enable -q flowtrack-geoip.timer $UNITS
+  systemctl enable -q flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path $UNITS
   # `flowtrack-license status|request|activate FILE|deactivate` for servers without a browser at hand
   cat > /usr/local/bin/flowtrack-license <<WRAP
 #!/bin/sh
@@ -683,7 +697,7 @@ fi
 
 start_all() {
   systemctl restart $UNITS
-  systemctl start flowtrack-geoip.timer
+  systemctl start flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path
   for _ in $(seq 1 30); do
     if systemctl is-active -q flowtrack-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi   # localhost is always served
     sleep 1
@@ -819,9 +833,10 @@ uninstall() {
     ask_yn keep "$(t "Keep collected data and settings ($PREFIX, $ETC, $STATE) for a later reinstall?" "Зберегти зібрані дані й налаштування ($PREFIX, $ETC, $STATE) для повторного встановлення?")" y
   fi
   remove_all() {
-    systemctl disable --now flowtrack-geoip.timer $UNITS 2>/dev/null || true
+    systemctl disable --now flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path $UNITS 2>/dev/null || true
     rm -f /etc/systemd/system/flowtrack-collector.service /etc/systemd/system/flowtrack-web.service \
-          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer /etc/sysctl.d/60-flowtrack.conf \
+          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer \
+          /etc/systemd/system/flowtrack-backup.service /etc/systemd/system/flowtrack-backup.timer /etc/systemd/system/flowtrack-backup.path /etc/sysctl.d/60-flowtrack.conf \
           /usr/local/bin/flowtrack-license /usr/local/bin/flowtrack "$ETC/install-lang"
     systemctl daemon-reload
     docker rm -f "$CH_NAME" 2>/dev/null || true

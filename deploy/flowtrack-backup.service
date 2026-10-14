@@ -1,0 +1,13 @@
+[Unit]
+Description=FlowTrack backup (the schedule is in Settings → Backups; also started by the web interface)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/flowtrack/env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/app/backup.py backup service
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

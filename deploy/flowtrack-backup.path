@@ -1,0 +1,9 @@
+[Unit]
+Description=FlowTrack backup asked for by the web interface
+
+[Path]
+PathExists=/var/lib/flowtrack/backup.request
+Unit=flowtrack-backup.service
+
+[Install]
+WantedBy=paths.target

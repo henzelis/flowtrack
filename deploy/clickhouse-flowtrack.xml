@@ -28,6 +28,11 @@
         <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
     </query_log>
 
+    <!-- FlowTrack backups (backup.py): BACKUP … TO File('<id>/data') writes into the host folder mounted here -->
+    <backups>
+        <allowed_path>/backups/</allowed_path>
+    </backups>
+
     <!-- caches sized for a small container -->
     <mark_cache_size>268435456</mark_cache_size>
     <index_mark_cache_size>67108864</index_mark_cache_size>
