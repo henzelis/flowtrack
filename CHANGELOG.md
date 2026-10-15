@@ -3,6 +3,17 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.8.2 — 2026-10-15
+
+- Path analysis opens at once on a busy network: the neighbours found in the background are shown while newer ones
+  are worked out, instead of a page waiting ~20 s each time the SNMP data or the device settings had changed.
+- Path analysis map: a device card grows with the links on its sides and every link end gets its own place — the
+  interface name and address above its line — so labels no longer pile on each other; the map grows taller when the
+  devices need it; links between devices of one column go down the column instead of around the map edge; link
+  states (Gap, No observation) are drawn over the labels.
+- Geolocation: Live connections lists new connections also from devices without a location; the map says which
+  devices have none (lines start at a device's location — Settings → Devices, Latitude / Longitude).
+
 ## 1.8.1 — 2026-10-14
 
 Busy networks (measured with a day of 2,400 records/s — about 200 million records — on 4 CPUs and 8 GB of RAM):
