@@ -281,7 +281,45 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 /* states: loading, errors, footer */
 .loading{position:relative;min-height:60px}
-.loading::after{content:"Завантаження…";position:absolute;inset:0;display:grid;place-items:center;color:var(--ink3);font-size:12.5px}
+/* (1.8.5) waiting: a .loading box gets a decoding table or a spinning ring (app.js waitFill), shown after 0.4 s */
+.loading > .wdec,.loading > .wring{opacity:0;transition:opacity .25s}
+.loading.wshow > .wdec,.loading.wshow > .wring{opacity:1}
+.wfade{animation:wfade .35s ease-out}
+@keyframes wfade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.wdec{position:relative;display:grid;gap:9px;overflow:hidden;padding:4px 0}
+.wrow{display:grid;grid-template-columns:58px 104px minmax(0,1fr) 70px;gap:12px;align-items:center;font:12px/1.4 var(--f-mono);color:var(--ink3);white-space:nowrap}
+.wrow .tag{font-size:10.5px;overflow:hidden;text-overflow:clip}
+.wrow .vb{height:6px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden}
+.wrow .vb i{display:block;height:100%;width:100%;transform-origin:left;background:linear-gradient(90deg,#1aa7d6,#27D3F5);opacity:.35;transition:transform .7s cubic-bezier(.4,0,.2,1)}
+.wrow .num{text-align:right}
+.wdec.wone{display:flex;align-items:center;min-height:52px}
+.wval{font:600 22px/1.2 var(--f-mono);color:var(--ink3);letter-spacing:.5px}
+.wscan{position:absolute;left:0;right:0;top:0;height:28px;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(76,147,255,.12),transparent);animation:wscan 2.2s linear infinite}
+@keyframes wscan{from{transform:translateY(-30px)}to{transform:translateY(260px)}}
+.wring{display:grid;grid-template-columns:110px minmax(0,1fr);gap:16px;align-items:center;padding:6px 0}
+.wr{position:relative;width:110px;height:110px;display:grid;place-items:center}
+.wr::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(#2F7BFF 0 22%,#FF4FA0 0 38%,#FF9F43 0 52%,#27D3F5 0 66%,#8B5CFF 0 78%,#2EE59D 0 88%,rgba(255,255,255,.08) 0);
+  -webkit-mask:radial-gradient(circle,transparent 38px,#000 39px);mask:radial-gradient(circle,transparent 38px,#000 39px);animation:wspin 3.2s linear infinite;opacity:.55}
+.wr b{font:600 14px var(--f-mono);color:var(--ink)}
+@keyframes wspin{to{transform:rotate(360deg)}}
+.wleg{display:grid;gap:6px;font:11.5px/1.4 var(--f-mono);color:var(--ink3);min-width:0}
+.wleg div{display:grid;grid-template-columns:10px minmax(0,1fr) 40px;gap:8px;align-items:center;white-space:nowrap;overflow:hidden}
+.wleg i{width:8px;height:8px;border-radius:50%}
+.wleg span:last-child{text-align:right}
+.wbig{position:absolute;inset:0;z-index:2;pointer-events:none;opacity:0;transition:opacity .3s;background:linear-gradient(180deg,rgba(8,17,39,.0),rgba(8,17,39,.0))}
+.wbig.wshow{opacity:1}
+.wbig.wgone{opacity:0}
+.wbig canvas{position:absolute;inset:0;width:100%;height:100%}
+.wover{position:absolute;inset:0;display:grid;place-items:center;z-index:2}
+.wcancel{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap}
+.waitpill{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom, 0px));transform:translateX(-50%);z-index:50;display:flex;align-items:center;gap:12px;padding:8px 10px 8px 16px;border-radius:999px;font-size:12.5px;color:var(--ink2);max-width:calc(100vw - 32px);box-shadow:0 8px 30px rgba(0,0,0,.45);font-variant-numeric:tabular-nums}
+.waitpill .wptxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.wpbar{width:90px;height:4px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden;flex:none}
+.wpbar i{display:block;height:100%;width:100%;transform-origin:left;background:linear-gradient(90deg,var(--blue),var(--down));transition:transform .5s linear}
+.waitpill.indet .wpbar i{animation:windet 1.4s ease-in-out infinite;transform:none!important;width:30%}
+@keyframes windet{from{margin-left:-30%}to{margin-left:100%}}
+@media (max-width:480px){.wrow{grid-template-columns:48px 86px minmax(0,1fr) 58px;gap:8px}.wpbar{display:none}}
+@media (prefers-reduced-motion: reduce){.wscan,.wr::before,.waitpill.indet .wpbar i{animation:none}.wfade{animation:none}}
 .err{color:var(--crit);font-size:12.5px;padding:10px}
 .foot-note{margin-top:22px;color:var(--ink3);font-size:11.5px;text-align:center}
 .foot-note a{color:var(--ink2)}

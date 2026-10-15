@@ -65,9 +65,10 @@ let PAGE_ID = Math.random().toString(36).slice(2, 12), PAGE_AC = new AbortContro
 // a request of a page that is gone never answers it: its widgets were replaced (maybe by ones with the same ids)
 const NEVER = () => new Promise(() => {});
 async function apiFetch(url){
-  let r;
+  let r; const page = PAGE_ID; waitBegin(page);
   try { r = await fetch(url, {headers:{'X-FT-Tab':TAB_ID, 'X-FT-Page':PAGE_ID}, signal:PAGE_AC.signal}); }
   catch (e) { if (e.name === 'AbortError') return NEVER(); throw e; }
+  finally { waitEnd(page); }
   if (r.status === 401) { showLogin(T('Session ended — sign in again')); throw new Error(T('login required')); }
   const body = await r.json().catch(() => ({}));
   if (r.status === 409) return NEVER();          // cancelled by the server: the page changed
@@ -517,6 +518,193 @@ const dv = v => v === 'Local network' ? T('Local network') : v === 'Unknown' ? T
   : / other$/.test(String(v || '')) ? T('{name} other', {name: String(v).slice(0, -6)}) : v;
 const svcBadge = name => { const c = keyColor(name); return `<span class="app-b"><i style="background:${hexA(c, .85)};box-shadow:0 0 8px ${hexA(c, .6)}">${esc((dv(name) || '?')[0])}</i>${esc(dv(name))}</span>`; };
 const fill = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; return el; };
+// ===================== waiting (1.8.5): what a page shows while the server reads the data =====================
+// Tables "decode" (characters cycle until the answer), pie charts spin a ring with the share read, the big maps draw a
+// sketch of what is coming (Through device: the device and its interfaces, lines growing; Path analysis: the devices
+// and links assembling). A pill at the bottom says how far the database is (rows read of rows to read, from
+// system.processes) and cancels. Nothing shows for the first 0.4 s; one 30 fps canvas at most; stops when hidden.
+const WAIT = {n:0, since:0, page:null, prog:null, poll:0, tick:0, cancelled:false};
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
+const RING_IDS = new Set(['svcBox', 'protoBox', 'pBox', 'pL7', 'tDonut']);
+function waitBegin(page){ if (page !== PAGE_ID) return; if (!WAIT.n++) { WAIT.since = Date.now(); WAIT.page = page; WAIT.prog = null; WAIT.cancelled = false; } waitKick(); }
+function waitEnd(page){ if (page !== WAIT.page) return; WAIT.n = Math.max(0, WAIT.n - 1); if (!WAIT.n) waitPill(); }
+function waitReset(){ WAIT.n = 0; WAIT.page = PAGE_ID; WAIT.prog = null; WAIT.cancelled = false; waitPill(); }     // a new page: the old requests no longer count
+function waitKick(){
+  if (!WAIT.poll) WAIT.poll = setInterval(waitPoll, 700);
+  if (!WAIT.tick) WAIT.tick = setInterval(waitTick, 90);
+}
+async function waitPoll(){
+  if (!WAIT.n) { if (!document.querySelector('#view .loading, #view .wbig')) { clearInterval(WAIT.poll); WAIT.poll = 0; } return; }
+  if (document.hidden || Date.now() - WAIT.since < 400) return;
+  try { const r = await fetch('api/progress', {headers:{'X-FT-Tab':TAB_ID, 'X-FT-Page':PAGE_ID}}); if (r.ok) { const d = await r.json(); if (d.n) WAIT.prog = {...d, t:Date.now()}; } } catch (e) {}
+  waitPill();
+}
+const fmtRows = n => n >= 1e6 ? T('{n} M', {n:(n / 1e6).toLocaleString(LOC, {maximumFractionDigits:1})}) : n.toLocaleString(LOC);
+function waitText(){ const p = WAIT.prog; if (!p) return T('Reading the data…');
+  if (p.total > p.rows && p.rows > 0) { const left = p.secs * (p.total - p.rows) / p.rows;
+    return T('Read {a} of {b} records · {p}%', {a:fmtRows(p.rows), b:fmtRows(p.total), p:Math.floor(100 * p.rows / p.total)}) + (left >= 1 ? ' · ' + T('~{s} s left', {s:Math.ceil(left)}) : ''); }
+  return T('Read {a} records · {s} s', {a:fmtRows(p.rows), s:Math.round(p.secs)}); }
+const waitShare = () => { const p = WAIT.prog; return p && p.total ? Math.min(1, p.rows / p.total) : 0; };
+// the pill: shown while something is read for more than 1.5 s
+function waitPill(){
+  let el = document.getElementById('waitPill');
+  const on = WAIT.n > 0 && Date.now() - WAIT.since > 1500 && !WAIT.cancelled;
+  if (WAIT.cancelled) return;                 // the pill says "Cancelled" until the next page
+  if (!on) { if (el) el.hidden = true; return; }
+  if (!el) { el = document.createElement('div'); el.id = 'waitPill'; el.className = 'glass waitpill'; el.setAttribute('role', 'status');
+    el.innerHTML = '<span class="wpbar"><i></i></span><span class="wptxt"></span><button class="btn" type="button"></button>'; document.body.append(el);
+    el.querySelector('button').onclick = waitCancel; }
+  el.hidden = false; el.querySelector('.wpbar').hidden = false; el.querySelector('.wptxt').textContent = waitText();
+  const btn = el.querySelector('button'); btn.textContent = T('Cancel'); btn.onclick = waitCancel;
+  const sh = waitShare(); el.querySelector('.wpbar i').style.transform = `scaleX(${sh || 0.04})`; el.classList.toggle('indet', !sh);
+}
+async function waitCancel(){
+  WAIT.cancelled = true;
+  try { await fetch('api/cancel', {method:'POST', headers:{'Content-Type':'application/json', 'X-FT-Tab':TAB_ID, 'X-FT-Page':PAGE_ID}, body:'{}'}); } catch (e) {}
+  PAGE_AC.abort(); PAGE_AC = new AbortController(); WAIT.n = 0;
+  // the boxes say so in a word; the pill explains once and offers to ask again
+  const msg = `<div class="empty wcancel">${T('Cancelled')}</div>`;
+  document.querySelectorAll('#view .loading').forEach(el => { el.classList.remove('loading', 'wshow'); el.innerHTML = msg; });
+  document.querySelectorAll('#view .wbig').forEach(el => { const h = el.parentElement; el.remove(); if (h) h.insertAdjacentHTML('beforeend', `<div class="wover">${msg}</div>`); });
+  const el = document.getElementById('waitPill');
+  if (el) { el.hidden = false; el.classList.remove('indet'); el.querySelector('.wpbar').hidden = true; el.querySelector('.wptxt').textContent = T('Cancelled. A shorter period or a filter makes it faster.');
+    const b = el.querySelector('button'); b.textContent = T('Try again'); b.onclick = () => render(); }
+}
+// the small panels: a decoding table or a spinning ring, put into each empty .loading box
+const W_AZ = 'ABCDEFGHKLMNPQRSTUVWXYZ';
+const wScr = tpl => tpl.replace(/[0-9]/g, () => String(Math.floor(Math.random() * 10))).replace(/[A-Za-z]/g, () => W_AZ[Math.floor(Math.random() * W_AZ.length)]);
+const W_ROWS = ['443|TCP·HTTPS|106 GB', '61000|UDP·QUIC|84.1 GB', '53|UDP·DNS|43.6 GB', '8443|TCP·MGMT|15.8 GB', '51820|UDP·WG|9.73 GB', '80|TCP·HTTP|8.38 GB'];
+function waitFill(el){
+  if (el.dataset.w || el.children.length) return;
+  el.dataset.w = '1';
+  if (RING_IDS.has(el.id)) { el.innerHTML = `<div class="wring" aria-hidden="true"><div class="wr"><b>0%</b></div><div class="wleg">${[0, 1, 2, 3, 4].map(i => `<div><i style="background:${PAL[i]}"></i><span data-s="PROTOCOL"></span><span data-s="00%"></span></div>`).join('')}</div></div>`; return; }
+  const hgt = el.getBoundingClientRect().height || 180;
+  if (hgt < 100) { el.innerHTML = `<div class="wdec wone" aria-hidden="true"><span class="wval" data-s="${['128.4 GB', '2 417', '96.1 Mbit/s', '35 812'][Math.floor(Math.random() * 4)]}"></span></div>`; return; }   // a KPI tile: one number
+  const n = Math.max(2, Math.min(8, Math.floor(hgt / 30)));
+  el.innerHTML = `<div class="wdec" aria-hidden="true"><i class="wscan"></i>${W_ROWS.concat(W_ROWS).slice(0, n).map((r, i) => { const [a, b, c] = r.split('|');
+    return `<div class="wrow"><span data-s="${a}"></span><span class="tag" data-s="${b}"></span><span class="vb"><i style="transform:scaleX(${(0.9 - i * 0.12).toFixed(2)})"></i></span><span class="num" data-s="${c}"></span></div>`; }).join('')}</div>`;
+}
+function waitTick(){
+  const boxes = document.querySelectorAll('#view .loading');
+  if (!boxes.length && !document.querySelector('#view .wbig')) { clearInterval(WAIT.tick); WAIT.tick = 0; return; }
+  if (document.hidden) return;
+  const shown = Date.now() - WAIT.since > 400 || !WAIT.n;
+  boxes.forEach(el => { waitFill(el); el.classList.toggle('wshow', shown); });
+  if (REDUCED.matches) return;
+  document.querySelectorAll('#view .loading [data-s]').forEach(x => { x.textContent = wScr(x.dataset.s); });
+  document.querySelectorAll('#view .loading .vb i').forEach(x => { if (Math.random() < 0.1) x.style.transform = `scaleX(${(0.15 + Math.random() * 0.8).toFixed(2)})`; });
+  const pc = Math.round(100 * waitShare()) + '%'; document.querySelectorAll('#view .wring .wr b').forEach(b => { b.textContent = pc; });
+  waitPill();
+}
+// the big maps: a canvas sketch over the map box until its first answer; stop() takes it away
+function waitBig(host, kind, sketch){
+  const box = document.createElement('div'); box.className = 'wbig'; box.innerHTML = '<canvas aria-hidden="true"></canvas>'; host.append(box);
+  const cv = box.querySelector('canvas'); let ctx = cv.getContext('2d'), W = 0, H = 0, DPR = 1, raf = 0, last = 0, t0 = performance.now(), S = null, alive = true;
+  const C2 = {blue:'#4C93FF', down:C.down, up:C.up, int:C.int, ext:C.ext, ink2:'#A9B7D9'};
+  const spr = {}; const sprite = col => { if (spr[col]) return spr[col]; const c = document.createElement('canvas'), n = 32; c.width = c.height = n; const g = c.getContext('2d');
+    const gr = g.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2); gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.18, col); gr.addColorStop(0.45, col + '55'); gr.addColorStop(1, col + '00');
+    g.fillStyle = gr; g.fillRect(0, 0, n, n); return (spr[col] = c); };
+  const glow = (x, y, r, col, a) => { ctx.globalAlpha = a; const d = r * 5; ctx.drawImage(sprite(col), x - d / 2, y - d / 2, d, d); };
+  const bez = (p0, p1, p2, p3, t) => { const u = 1 - t; return u * u * u * p0 + 3 * u * u * t * p1 + 3 * u * t * t * p2 + t * t * t * p3; };
+  const ease = t => t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+  const part = (l, t) => { const mx = (l.x0 + l.x1) / 2, P = [[l.x0, l.y0], [mx, l.y0], [mx, l.y1], [l.x1, l.y1]], L = (a, b) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    const p01 = L(P[0], P[1]), p12 = L(P[1], P[2]), p23 = L(P[2], P[3]), p012 = L(p01, p12), p123 = L(p12, p23), e = L(p012, p123);
+    ctx.beginPath(); ctx.moveTo(l.x0, l.y0); ctx.bezierCurveTo(p01[0], p01[1], p012[0], p012[1], e[0], e[1]); ctx.stroke(); return e; };
+  const along = (pts, t) => { const n = pts.length / 2 - 1, f = Math.min(n - 1e-6, t * n), i = Math.floor(f), u = f - i, x0 = pts[i * 2], y0 = pts[i * 2 + 1], x1 = pts[i * 2 + 2], y1 = pts[i * 2 + 3], mx = (x0 + x1) / 2;
+    return [bez(x0, mx, mx, x1, u), bez(y0, y0, y1, y1, u)]; };
+  function size(){ const r = box.getBoundingClientRect(); if (!r.width) return; DPR = Math.min(1.5, devicePixelRatio || 1); W = r.width; H = r.height;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); ctx.setTransform(DPR, 0, 0, DPR, 0, 0); S = sketch.layout(W, H); S.bg = null; S.lines.forEach(l => { l.t0 = 0; l.k = 0; }); S.t0 = performance.now(); }
+  const ro = new ResizeObserver(() => { size(); go(); }); ro.observe(box);
+  function frame(now){
+    raf = 0; if (!alive || !S) return;
+    if (now - last >= 32) { last = now;
+      const T0 = now / 1000, dt = 1 / 30, P = Math.max(Math.min(1, (now - S.t0) / 9000), waitShare());     // the share read, or a slow clock when the server has no estimate
+      let done = 0;
+      S.lines.forEach(l => { if (!l.t0 && P >= l.at) l.t0 = T0; l.k = l.t0 ? (REDUCED.matches ? 1 : ease(Math.min(1, (T0 - l.t0) / 0.8))) : 0; if (l.k >= 1) done++; });
+      if (!S.bg || S.bgKey !== done) { const c = S.bg || document.createElement('canvas'); c.width = cv.width; c.height = cv.height; const g = c.getContext('2d'); g.setTransform(DPR, 0, 0, DPR, 0, 0);
+        const real = ctx; ctx = g; sketch.still(ctx, S, (l) => { ctx.globalAlpha = l.a; part(l, 1); }); ctx = real; S.bg = c; S.bgKey = done; }
+      ctx.clearRect(0, 0, W, H); ctx.globalAlpha = 1; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(S.bg, 0, 0); ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      ctx.lineWidth = 1.4; ctx.lineCap = 'round'; ctx.strokeStyle = C2.blue;
+      S.lines.forEach(l => { if (!l.k || l.k >= 1) return; ctx.globalAlpha = l.a + 0.15; const e = part(l, l.k); ctx.globalCompositeOperation = 'lighter'; glow(e[0], e[1], 2.4, C2.blue, 0.9); ctx.globalCompositeOperation = 'source-over'; });
+      // packets on finished routes
+      const routes = S.routes.filter(r => r.lines.every(l => l.k >= 1));
+      ctx.globalCompositeOperation = 'lighter';
+      S.pk.forEach(q => { if (!q.r) { if (!routes.length) return; q.r = routes[Math.floor(Math.random() * routes.length)]; q.s = -Math.random() * 0.5; q.up = Math.random() < 0.55; }
+        q.s += REDUCED.matches ? 0 : q.v * dt; if (q.s >= 1) { q.r = null; return; } if (q.s < 0) return;
+        const pts = q.up ? q.r.pts : q.r.back, [x, y] = along(pts, q.s); glow(x, y, 2.3, q.up ? C2.up : C2.down, 0.95); });
+      ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    }
+    if (!REDUCED.matches) go();       // reduced motion: one still picture
+  }
+  function go(){ if (alive && !raf && !document.hidden) raf = requestAnimationFrame(frame); }
+  setTimeout(() => { if (alive) box.classList.add('wshow'); }, 400);
+  const vis = () => go(); document.addEventListener('visibilitychange', vis);
+  const stop = () => { if (!alive) return; alive = false; ro.disconnect(); document.removeEventListener('visibilitychange', vis); cancelAnimationFrame(raf);
+    box.classList.add('wgone'); setTimeout(() => box.remove(), 350); };
+  onCleanup(stop);
+  return {stop};
+}
+// Through device: the device and its interfaces are known before the answer; the hosts are dots; lines grow host ->
+// interface -> through the device -> interface -> address
+function sketchDevice(dev, ifs){
+  const named = [...ifs.values()].filter(i => i.role !== 'local').slice(0, 12);
+  const wan = named.filter(i => i.role === 'wan'), lan = named.filter(i => i.role !== 'wan');
+  const L = (lan.length ? lan : named.slice(0, Math.ceil(named.length / 2))).slice(0, 6), R = (wan.length ? wan : named.slice(L.length)).slice(0, 6);
+  const nm = i => i.custom_name || i.name || `if ${i.index}`;
+  return {
+    layout(W, H){
+      const bx = W * 0.36, bw = W * 0.28, by = H * 0.1, bh = H * 0.8;
+      const ports = [...(L.length ? L : [{name:'LAN'}]).map((x, k, a) => ({n:nm(x), side:'L', x:bx, y:by + bh * (k + 1) / (a.length + 1)})),
+        ...(R.length ? R : [{name:'WAN'}]).map((x, k, a) => ({n:nm(x), side:'R', x:bx + bw, y:by + bh * (k + 1) / (a.length + 1)}))];
+      const nl = ports.filter(p => p.side === 'L'), nr = ports.filter(p => p.side === 'R');
+      const hosts = (side, list) => Array.from({length:7}, (_, k) => ({x:side === 'L' ? W * 0.06 : W * 0.94, y:H * (0.1 + 0.8 * k / 6), p:list[Math.floor(k / 7 * list.length)]}));
+      const hl = hosts('L', nl), hr = hosts('R', nr), lines = [];
+      hl.forEach((h, k) => { h.line = {x0:h.x, y0:h.y, x1:h.p.x, y1:h.p.y, a:0.24, at:0.02 + k * 0.04}; lines.push(h.line); });
+      const links = []; nl.forEach((a, k) => { const b = nr[k % nr.length]; links.push({a, b}); if (nr.length > 1 && k < 2) links.push({a, b:nr[(k + 1) % nr.length]}); });
+      links.forEach((l, k) => { l.line = {x0:l.a.x, y0:l.a.y, x1:l.b.x, y1:l.b.y, a:0.45, at:0.3 + k * 0.05}; lines.push(l.line); });
+      hr.forEach((h, k) => { h.line = {x0:h.p.x, y0:h.p.y, x1:h.x, y1:h.y, a:0.24, at:0.55 + k * 0.04}; lines.push(h.line); });
+      const routes = [];
+      links.forEach(l => hl.filter(h => h.p === l.a).forEach(a => hr.filter(h => h.p === l.b).forEach(b => { const pts = [a.x, a.y, l.a.x, l.a.y, l.b.x, l.b.y, b.x, b.y];
+        routes.push({lines:[a.line, l.line, b.line], pts, back:[b.x, b.y, l.b.x, l.b.y, l.a.x, l.a.y, a.x, a.y]}); })));
+      return {box:{bx, bw, by, bh}, ports, hosts:[...hl, ...hr], lines, routes, pk:Array.from({length:22}, () => ({r:null, s:0, v:0.18 + Math.random() * 0.14}))};
+    },
+    still(ctx, S, line){
+      const B = S.box;
+      ctx.globalAlpha = 0.9; ctx.fillStyle = '#0B1736'; ctx.strokeStyle = 'rgba(130,175,255,.45)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(B.bx, B.by, B.bw, B.bh, 14); ctx.fill(); ctx.stroke();
+      ctx.globalAlpha = 0.8; ctx.fillStyle = '#A9B7D9'; ctx.font = '600 12.5px Manrope, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(dev.name, B.bx + B.bw / 2, B.by + 22);
+      ctx.lineWidth = 1.4; ctx.lineCap = 'round'; ctx.strokeStyle = '#4C93FF'; S.lines.forEach(l => { if (l.k >= 1) line(l); });
+      S.hosts.forEach(h => { ctx.globalAlpha = 0.9; ctx.fillStyle = h.x < B.bx ? C.int : C.ext; ctx.beginPath(); ctx.arc(h.x, h.y, 3.5, 0, 6.2832); ctx.fill(); });
+      S.ports.forEach(p => { ctx.globalAlpha = 1; ctx.fillStyle = '#081127'; ctx.strokeStyle = '#4C93FF'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 6.2832); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#A9B7D9'; ctx.font = '11px "JetBrains Mono", monospace'; ctx.textAlign = p.side === 'L' ? 'left' : 'right'; ctx.fillText(p.n.length > 16 ? p.n.slice(0, 15) + '…' : p.n, p.x + (p.side === 'L' ? 9 : -9), p.y + 18); });
+      ctx.globalAlpha = 1; ctx.textAlign = 'left'; ctx.lineCap = 'butt';
+    }};
+}
+// Path analysis: the devices (known before the answer) in columns, the internet on the right; links assemble
+function sketchGraph(devs){
+  const list = devs.slice(0, 9);
+  return {
+    layout(W, H){
+      const cols = list.length <= 3 ? [list] : [list.slice(0, Math.ceil(list.length / 3)), list.slice(Math.ceil(list.length / 3), Math.ceil(2 * list.length / 3)), list.slice(Math.ceil(2 * list.length / 3))];
+      const nodes = [];
+      cols.forEach((c, ci) => c.forEach((d, k) => nodes.push({name:d.name, c:ci, x:W * (0.12 + ci * (0.6 / Math.max(1, cols.length - 1 || 1))), y:H * ((k + 1) / (c.length + 1))})));
+      const inet = {name:T('Internet'), c:cols.length, x:W * 0.9, y:H / 2, inet:true}; nodes.push(inet);
+      const lines = [], routes = [];
+      const link = (a, b, at) => { const l = {x0:a.x + (a.inet ? 0 : 50), y0:a.y, x1:b.x - (b.inet ? 30 : 50), y1:b.y, a:0.38, at}; lines.push(l); routes.push({lines:[l], pts:[l.x0, l.y0, l.x1, l.y1], back:[l.x1, l.y1, l.x0, l.y0]}); };
+      let k = 0; const n = nodes.length;
+      nodes.forEach(a => { const next = nodes.filter(b => b.c === a.c + 1); if (!next.length) return;
+        next.forEach((b, j) => { if (j === nodes.indexOf(a) % next.length || Math.random() < 0.35 || b.inet) link(a, b, 0.05 + (k++) * 0.75 / Math.max(1, n * 1.4)); }); });
+      if (!lines.length && nodes.length > 1) link(nodes[0], inet, 0.1);
+      return {nodes, lines, routes, pk:Array.from({length:24}, () => ({r:null, s:0, v:0.3 + Math.random() * 0.2}))};
+    },
+    still(ctx, S, line){
+      ctx.lineWidth = 1.4; ctx.lineCap = 'round'; ctx.strokeStyle = '#4C93FF'; S.lines.forEach(l => { if (l.k >= 1) line(l); });
+      S.nodes.forEach(nd => { ctx.globalAlpha = 0.95; ctx.fillStyle = '#0B1736'; ctx.strokeStyle = nd.inet ? C.ext : '#4C93FF'; ctx.lineWidth = 1.5;
+        const w = nd.inet ? 60 : 100, h = nd.inet ? 34 : 30; ctx.beginPath(); ctx.roundRect(nd.x - w / 2, nd.y - h / 2, w, h, nd.inet ? 17 : 8); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#A9B7D9'; ctx.font = '600 11.5px Manrope, sans-serif'; ctx.textAlign = 'center'; const t = nd.name.length > 14 ? nd.name.slice(0, 13) + '…' : nd.name; ctx.fillText(t, nd.x, nd.y + 4); });
+      ctx.globalAlpha = 1; ctx.textAlign = 'left'; ctx.lineCap = 'butt';
+    }};
+}
 const errBox = e => `<div class="err">${T('Failed to load: ')}${esc(e.message)}</div>`;
 function wireFilters(root){
   root.querySelectorAll('[data-f]').forEach(b => b.addEventListener('click', e => { e.stopPropagation(); addFilter(b.dataset.f, b.dataset.v, e.shiftKey); }));
@@ -525,7 +713,7 @@ function wireFilters(root){
 // run an async section; ignore results if the user navigated away meanwhile
 async function section(id, fn){
   const seq = renderSeq;
-  try { const html = await fn(); if (seq === renderSeq && html != null) { const el = fill(id, html); if (el) { el.classList.remove('loading'); wireFilters(el); } } }
+  try { const html = await fn(); if (seq === renderSeq && html != null) { const el = fill(id, html); if (el) { const was = el.classList.contains('wshow'); el.classList.remove('loading', 'wshow'); delete el.dataset.w; if (was) el.classList.add('wfade'); wireFilters(el); } } }
   catch (e) { if (seq === renderSeq) { const el = fill(id, errBox(e)); if (el) el.classList.remove('loading'); } }
 }
 const convRows = (rows, total) => rows.length ? '<div class="blist">' + rows.map(x => { const max = tot(rows[0]) || 1;
@@ -949,9 +1137,10 @@ function vPaths(){
       else if (sh.kind === 'host') putFilter({k:sh.side === 'L' ? 'ip' : 'dst', v:sh.ip, neg:false});
       if (!df) putFilter({k:'device', v:ip, neg:false});
       render(); };
-    const mapEl = document.getElementById('cPaths');
-    if (mapEl) createDevMap(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap,
+    const mapEl = document.getElementById('cPaths'); let wb = null;
+    if (mapEl) createDevMap(mapEl, {ifs, dev, refreshMs:live ? 10000 : 0, onPick:pickMap, onData:() => { if (wb) wb.stop(); },
       fetchData:() => api('devmap', {t:state.traffic, metric:state.metric, live:live ? 1 : 0, win:120, top:6}, extra)});
+    if (mapEl && mapEl.querySelector('canvas')) wb = waitBig(mapEl, 'device', sketchDevice(dev, ifs));   // (1.8.5) a sketch until the first answer
     try { draw(await load()); } catch (e) { fill('pTable', errBox(e)); }
     if (live) every(10000, () => load().then(d => { if (seq === renderSeq) draw(d); }).catch(() => {}));
   })().catch(e => fill('cPaths', errBox(e)));
@@ -1224,6 +1413,7 @@ function vNetwork(){
   const hopIndex = () => { const m = new Map(); if (path) path.hops.forEach((h, k) => { if (!m.has(h.device) && h.state !== 'unplaced' && h.state !== 'branch') m.set(h.device, k + 1); }); return m; };
   const map = createTopoMap(document.getElementById('cNet'), {onNode:n => { if (n.ip === 'internet' || n.ip === state.netPov) return; state.netPov = n.ip; if (n.more) state.netDepth = Math.max(depth, 1); render(); },
     pathSet:() => path && path.hops.length ? new Set(path.hops.filter(h => h.state !== 'unplaced').map(h => h.device)) : null, hopNo:ip => hopIndex().get(ip)});
+  let wb = waitBig(document.getElementById('cNet'), 'graph', sketchGraph((META.devices || []).slice().sort((a, b) => a.name.localeCompare(b.name))));   // (1.8.5) a sketch until the first answer
   const nm = ip => ip === 'internet' ? T('Internet') : ((topo && topo.devices.find(d => d.ip === ip)) || {}).name || ip;
   const drawSide = () => {
     const ls = topo.links, cnt = s => ls.filter(l => l.state === s).length;
@@ -1264,7 +1454,7 @@ function vNetwork(){
     const opts = d.devices.slice().sort((a, b) => a.name.localeCompare(b.name)).map(x => `<option value="${esc(x.ip)}"${x.ip === d.pov ? ' selected' : ''}${!x.neighbours ? ' disabled' : ''}>${esc(x.name)} (${esc(x.ip)})${!x.neighbours ? ' — ' + T('no L3 neighbours') : ''}</option>`).join('');
     fill('nPovSeg', `<label class="sel glass" title="${T('Point of View')}">${icon(ICO.dev, 16)}<select id="nPovSel" aria-label="${T('Point of View')}">${opts}</select></label>`);
     const ps = document.getElementById('nPovSel'); if (ps) ps.onchange = () => { state.netPov = ps.value; render(); };
-    map.set(d); drawSide(); };
+    if (wb) { wb.stop(); wb = null; } map.set(d); drawSide(); };
   const trace = async () => {
     const s = document.getElementById('nSrc').value.trim(), t = document.getElementById('nDst').value.trim();
     state.netSrc = s; state.netDst = t;
@@ -1277,7 +1467,7 @@ function vNetwork(){
   document.getElementById('nSwap').onclick = () => { const a = document.getElementById('nSrc'), b = document.getElementById('nDst'); [a.value, b.value] = [b.value, a.value]; if (state.netPath) trace(); };
   const cl = document.getElementById('nClear'); if (cl) cl.onclick = () => { state.netSrc = state.netDst = ''; state.netPath = false; render(); };
   drawPath();
-  load().then(d => { show(d); if (state.netPath && state.netSrc && state.netDst) trace(); }).catch(e => { if (seq === renderSeq) { fill('cNet', errBox(e)); fill('nLinks', ''); } });
+  load().then(d => { show(d); if (state.netPath && state.netSrc && state.netDst) trace(); }).catch(e => { if (wb) { wb.stop(); wb = null; } if (seq === renderSeq) { fill('cNet', errBox(e)); fill('nLinks', ''); } });
   if (live) every(10000, () => load().then(show).catch(() => {}));
 }
 // the top hosts as CSV: [header, rows]; inside traffic adds how many inside hosts each one connected to / was connected from
@@ -2741,6 +2931,7 @@ function render(){ if (state.view === 'devices' || state.view === 'users') { sta
   state.dirty = null; SHOWN = Object.fromEntries(SHOWN_KEYS.map(k => [k, Array.isArray(state[k]) ? state[k].slice() : state[k]]));
   renderSeq++;
   PAGE_ID = Math.random().toString(36).slice(2, 12);     // a new view: the server cancels what the old one still runs
+  waitReset();
   PAGE_AC.abort(); PAGE_AC = new AbortController();       // and the browser stops waiting for it
   for (const [k, v] of API_SHARED) if (!v.done) API_SHARED.delete(k);     // nor is a cancelled answer shared with it
   cleanup(); renderShell(); renderUser(); saveUrl(); VIEWS[state.view](); }

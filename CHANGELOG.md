@@ -3,6 +3,22 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Waiting that shows the work.** A page that waits for the database no longer says only "Loading…":
+  - *Through device* draws a sketch of the map at once — the device with its real interface names, the hosts as dots —
+    and the lines grow host → interface → through the device → interface → address, packets running along the
+    finished routes; the map takes its place when the answer comes.
+  - *Path analysis* assembles the devices and their links the same way.
+  - Tables "decode" (characters cycle until the answer), KPI tiles cycle one number, pie charts spin a ring with the
+    share read in the middle; the answer fades in.
+  - Nothing shows for answers under 0.4 s; one canvas of 30 frames a second at most (below 1 % of one core), paused
+    when the browser tab is hidden; the system setting "reduce motion" leaves still pictures.
+- **Progress and Cancel.** After 1.5 s a pill at the bottom says how far the database is ("Read 18.4 M of 41 M
+  records · 44 % · ~4 s left", from ClickHouse's own counters of this page's queries) and has Cancel: it stops this
+  page's queries on the server. `GET /api/progress`, `POST /api/cancel`.
+- The "Loading…" text was Ukrainian in every language; it is gone.
+
 ## 1.8.4 — 2026-10-15
 
 A service release: the settings are easier to find and harder to get wrong.

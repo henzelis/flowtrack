@@ -1825,6 +1825,8 @@ class H(BaseHTTPRequestHandler):
                 return self.json(200, AUTH.public(user))
             if u.path == '/api/edition':
                 return self.json(200, edition_info(admin=AUTH.users[user]['role'] == 'admin'))
+            if u.path == '/api/progress':      # not a page query itself: it neither cancels nor counts in what it reports
+                return self.json(200, page_progress(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page')))
             if u.path in ADMIN_GET:
                 if AUTH.users[user]['role'] != 'admin':
                     return self.json(403, {'error': tr('Administrator rights required')})
@@ -1893,6 +1895,8 @@ class H(BaseHTTPRequestHandler):
             user = AUTH.session_user(tok)
             if not user:
                 return self.json(401, {'error': 'login required'})
+            if u.path == '/api/cancel':
+                return self.json(200, cancel_page(tok, self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page')))
             if u.path == '/api/logout':
                 AUTH.logout(tok)
                 self.set_cookie('', 0)
@@ -1970,6 +1974,34 @@ def web_tag(token, tab, page):
     if old and old != page:
         threading.Thread(target=_cancel, args=(f'ftw-{sid}-{tab}-{old}-',), daemon=True).start()
     return tag
+
+
+def _page_prefix(token, tab, page):
+    if not (token and _TAG_RE.match(tab or '') and _TAG_RE.match(page or '')):
+        return None
+    return f"ftw-{hashlib.sha256(token.encode()).hexdigest()[:10]}-{tab}-{page}-"
+
+
+def page_progress(token, tab, page):
+    """(1.8.5) How far the queries of this page are: rows read, rows to read (ClickHouse's estimate, 0 = unknown),
+    seconds — for the waiting animations and the progress line."""
+    prefix = _page_prefix(token, tab, page)
+    if not prefix:
+        return {'n': 0}
+    try:
+        r = ch("SELECT count() AS n, sum(read_rows) AS rows, sum(total_rows_approx) AS total, max(elapsed) AS secs "
+               "FROM system.processes WHERE startsWith(query_id, {p:String})", {'p': prefix}, fmt='JSON', timeout=5)[0]
+    except (CHError, OSError, IndexError):
+        return {'n': 0}
+    return {'n': int(r['n']), 'rows': int(r['rows'] or 0), 'total': int(r['total'] or 0), 'secs': round(float(r['secs'] or 0), 1)}
+
+
+def cancel_page(token, tab, page):
+    """(1.8.5) The Cancel button: stop what this page still asks the database."""
+    prefix = _page_prefix(token, tab, page)
+    if prefix:
+        _cancel(prefix)
+    return {'ok': bool(prefix)}
 
 
 def _cancel(prefix):

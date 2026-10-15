@@ -1246,5 +1246,13 @@
  "not an IP address: {value}": "не IP-адреса: {value}",
  "host name: give a name for {ip}": "назва хоста: вкажіть назву для {ip}",
  "host name: at most 64 characters: {name}": "назва хоста: не більше 64 символів: {name}",
- "at most 5000 host names": "не більше 5000 назв хостів"
+ "at most 5000 host names": "не більше 5000 назв хостів",
+ "Reading the data…": "Читаю дані…",
+ "{n} M": "{n} млн",
+ "Read {a} of {b} records · {p}%": "Прочитано {a} з {b} записів · {p}%",
+ "~{s} s left": "залишилось ~{s} с",
+ "Read {a} records · {s} s": "Прочитано {a} записів · {s} с",
+ "Cancelled. A shorter period or a filter makes it faster.": "Скасовано. Коротший період або фільтр зроблять це швидшим.",
+ "Try again": "Спробувати ще раз",
+ "Cancelled": "Скасовано"
 }
