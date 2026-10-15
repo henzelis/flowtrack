@@ -1156,5 +1156,6 @@
  "yes": "так",
  "{t} on the server": "{t} на сервері",
  "Too much data for this period: choose a shorter period or add a filter.": "Забагато даних за цей період: виберіть коротший період або додайте фільтр.",
- "Not enough memory for this period: choose a shorter period or add a filter.": "Не вистачає пам'яті для цього періоду: виберіть коротший період або додайте фільтр."
+ "Not enough memory for this period: choose a shorter period or add a filter.": "Не вистачає пам'яті для цього періоду: виберіть коротший період або додайте фільтр.",
+ "No lines from devices without a location — set Latitude and Longitude in Settings → Devices": "Ліній від пристроїв без розташування немає — вкажіть широту й довготу в Налаштування → Пристрої"
 }

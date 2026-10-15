@@ -422,8 +422,10 @@ function flatMap(el, geo, onConn, arcs = !isCustom()){
     const now = performance.now(); live = live.filter(e => now - e.born < 4500);
     const n = Math.min(queue.length, Math.max(1, Math.ceil(queue.length / 4)), Math.max(0, MAP_LINES - live.length));
     for (const r of queue.splice(0, n)) {
-      const s = siteGeo(r.exporter); if (!s || (s[0] === r.lon && s[1] === r.lat)) continue;
-      const up = r.dir === 'up'; live.push({coords:up ? [s, [r.lon, r.lat]] : [[r.lon, r.lat], s], color:up ? C.up : C.down, born:now}); if (onConn) onConn(r);
+      // a line needs the device's location (Settings → Devices); Live connections lists the flow without it too
+      const s = siteGeo(r.exporter), up = r.dir === 'up';
+      if (s && (s[0] !== r.lon || s[1] !== r.lat)) live.push({coords:up ? [s, [r.lon, r.lat]] : [[r.lon, r.lat], s], color:up ? C.up : C.down, born:now});
+      if (onConn) onConn(r);
     }
     if (n || live.length !== lastLen) c.setOption({series:[{id:'live', data:live.map(e => ({coords:e.coords, lineStyle:{color:e.color}}))}]});
     lastLen = live.length;
@@ -1396,10 +1398,13 @@ function vApps(){
     setTimeout(() => { const el = document.getElementById('cL7'); if (el) donut(el, t.rows.slice(0, 8), k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), T('protocols')]); });
     return `<div class="chart" id="cL7" style="height:220px"></div><div class="dl">${t.rows.slice(0, 8).map((r, i) => `<i class="idot" style="background:${PAL[i % PAL.length]}"></i><button class="link" data-f="l7" data-v="${esc(r.k)}">${esc(dv(r.k))}</button><span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div>`; });
 }
+// devices without a location: the map draws no lines from them — say so and where to set it
+const noSite = () => { const n = META.devices.filter(d => d.lat == null || d.lon == null).map(d => d.name || d.ip);
+  return n.length ? `<p class="note warn">${T('No lines from devices without a location — set Latitude and Longitude in Settings → Devices')}: ${esc(n.join(', '))}</p>` : ''; };
 function vGeo(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('globe', T('Connection map'), T('destination GeoIP · a line appears when a new flow arrives · colour = direction'),
-      `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('sites')}</span><span><i style="background:${C.ext}"></i>${T('destinations')}</span></span>`)}<div class="chart map" id="cMap"></div></section>
+      `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span><span><i style="background:${C.int}"></i>${T('sites')}</span><span><i style="background:${C.ext}"></i>${T('destinations')}</span></span>`)}<div class="chart map" id="cMap"></div>${noSite()}</section>
     <section class="glass panel s4">${ph('pulse', T('Live connections'), T('new flows with geolocation'))}<div class="ticker" id="ticker"><div class="empty">${T('Waiting for new records (exporters send about once a minute)…')}</div></div></section>
     <section class="glass panel s4">${ph('globe', T('Countries'), T('by destination address'))}<div id="ccBox" class="loading"></div></section>
     <section class="glass panel s8">${ph('nodes', T('Autonomous systems'), T('who actually serves the traffic'))}<div id="asBox" class="loading"></div></section></div>`;
