@@ -13,7 +13,7 @@ after the next full hour."""
 import threading
 import time
 
-from common import CHError, ch, classify_l7_sql, port_service_sql, server_is_src_sql
+from common import CHError, ch, classify_l7_sql, port_service_sql, server_is_src_sql, sql_str
 
 BUCKET = 300        # the finest bucket (5 minutes); charts use rollups only with steps that are multiples of a table's own
 VERSION = 1          # bump when a definition below changes: the tables are then built again
@@ -319,6 +319,46 @@ def raise_keep_days(days):
 
 _cache = {'t': 0, 'st': {}}
 _lock = threading.Lock()
+
+
+# (1.8.3) the user renamed ports: the L7 protocol is a key of these rollups
+L7_TABLES = [n for n, r in ROLLUPS.items() if any(k[0] == 'l7' for k in r['keys'])]
+
+
+def relabel_records(names):
+    """{(proto, port): l7}: the stored records of those ports get these L7 names (the rollups follow later)."""
+    if not names:
+        return
+    arms = ', '.join(f"(proto, ext_port) = ({int(p)}, {int(n)}), '{sql_str(v)}'" for (p, n), v in sorted(names.items()))
+    keys = ', '.join(f'({int(p)}, {int(n)})' for p, n in sorted(names))
+    ch(f"ALTER TABLE flows UPDATE l7 = multiIf({arms}, l7) WHERE (proto, ext_port) IN ({keys})", timeout=3600,
+       settings={'mutations_sync': 2})
+
+
+def relabel_rollups(protos, labels, until, at=None, log=print, stop=None):
+    """Sum the rollup buckets before `until` (a full hour) that hold these L7 names (old and new) again from the
+    records, newest day first — a day per DELETE, an hour per INSERT (bounded memory). -> where it stopped (unix s,
+    to go on from), 0 when done. Buckets older than the records keep their names."""
+    old = ch("SELECT toUnixTimestamp(min(ts)) AS t, count() AS n FROM flows", fmt='JSON')
+    if not old or not int(old[0]['n']):
+        return 0
+    # from the first whole hour that still has records: the totals of older hours are all that is left of them
+    first = -(-int(old[0]['t']) // 3600) * 3600
+    cond = (f"proto IN ({', '.join(str(int(p)) for p in sorted(protos))}) AND "
+            f"l7 IN ({', '.join(chr(39) + sql_str(x) + chr(39) for x in sorted(labels))})")
+    hi = min(until, at) if at else until
+    while hi > first:
+        if stop and stop.is_set():
+            return hi
+        lo = max(first, (hi - 1) // 86400 * 86400)
+        for name in L7_TABLES:
+            ch(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({lo}) AND ts < toDateTime({hi}) AND {cond}', timeout=3600,
+               settings={'mutations_sync': 2})
+            for h in range(lo, hi, 3600):
+                ch(f'INSERT INTO {name} ' + _select(ROLLUPS[name], f'ts >= toDateTime({h}) AND ts < toDateTime({min(h + 3600, hi)}) AND {cond}'),
+                   timeout=3600, settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000})
+        hi = lo
+    return 0
 
 
 def ready_from(name=None):

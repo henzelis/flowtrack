@@ -5,14 +5,22 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## 1.8.3 — 2026-10-15
 
+- Several values of one filter: typed in the search box, `device:ROUTER-A` and then `device:ROUTER-B` show the traffic
+  of both (any of them matches) — likewise several hosts, outside addresses, countries, services… A device can be
+  typed by its name. A click on a chart or a table still replaces the value of its kind. Events follow the same rule.
+- Events: exclusions of a connection in one direction — "up 10.0.0.5 -> 203.0.113.7:443" (a nightly backup from a
+  host of ours), "down * -> 10.0.0.9:8443" (a monitoring system that calls our service). Settings → Events, or the
+  Exclude button of an event, which proposes the rule of that event. Excluded events are neither shown nor notified.
+- Port names: your own name of a protocol + port (Settings → General), e.g. "tcp/8443 HTTPS management" instead of
+  "TCP other" in every report. New records get it at once, the stored records of the last 30 days within a minute,
+  the totals of longer periods are summed again after the current hour.
 - Devices that send RUNNING TOTALS of long sessions (seen on a FortiGate 200F: a site-to-site tunnel exported every
   30 minutes with all its bytes since the start — 16 TiB each time, hundreds of TiB a day that never existed) are
   found by the collector on their own: the same session comes again with the same start and its counters never go
   down. From then on only what a session grew by since its last export is stored, over that time. The device is
   remembered across restarts, all its packets go to one collector worker (so every export of a session is seen),
   and Settings → Devices marks it "running totals corrected". Devices that start a new interval at every export,
-  or whose counters go up and down, are left alone. Core 1.4.1.
-- Data stored before the upgrade is not changed.
+  or whose counters go up and down, are left alone; the records stored before the upgrade stay as they are. Core 1.4.1.
 
 ## 1.8.2 — 2026-10-15
 

@@ -87,7 +87,7 @@ HEAVY = {'max_memory_usage': _MEM, 'max_bytes_before_external_group_by': _MEM * 
 
 # ---------------------------------------------------------------- settings
 def defaults():
-    return {'kinds': {k: dict(v) for k, v in KINDS.items()}, 'ignore': [], 'sensitive': list(SENSITIVE),
+    return {'kinds': {k: dict(v) for k, v in KINDS.items()}, 'ignore': [], 'exclude': [], 'sensitive': list(SENSITIVE),
             'public': list(PUBLIC), 'roles': {}, 'lists': {n: True for n in reputation.LISTS}, 'own_list': []}
 
 
@@ -101,7 +101,7 @@ def load_config():
     for k, v in (saved.get('kinds') or {}).items():
         if k in cfg['kinds'] and isinstance(v, dict):
             cfg['kinds'][k].update({x: y for x, y in v.items() if x in cfg['kinds'][k]})
-    for k in ('ignore', 'sensitive', 'public', 'roles', 'own_list'):
+    for k in ('ignore', 'exclude', 'sensitive', 'public', 'roles', 'own_list'):
         if k in saved:
             cfg[k] = saved[k]
     cfg['lists'].update({n: bool(v) for n, v in (saved.get('lists') or {}).items() if n in cfg['lists']})
@@ -187,7 +187,76 @@ def validate(body):
     if len(out) > 20000:
         raise ValueError(tr('own list: at most 20,000 entries'))
     cfg['own_list'] = sorted(out)
+    cfg['exclude'] = exclusions(body.get('exclude', []))
     return cfg
+
+
+# (1.8.3) Exclusions: events of one connection in one direction are not shown nor notified — e.g. a nightly backup
+# from a host of ours to a server:port (upload), or a monitoring system that calls our service (download). A rule:
+# source (who opened it) and / or target address or network, the target port (0 = any), the direction.
+# The direction of an event: upload when it is about what we send or call out, download when about what arrives.
+UPLOAD_KINDS = ('sustained_upload', 'inside_scan', 'lateral_scan', 'malware_contact', 'listed_contact', 'new_country', 'burst')
+DIRECTIONS = ('up', 'down', 'any')
+
+
+def _net(v):
+    v = str(v or '').strip()
+    if not v:
+        return ''
+    try:
+        return str(ipaddress.ip_network(v, strict=False)) if '/' in v else str(ipaddress.ip_address(v))
+    except ValueError:
+        raise ValueError(tr('exclusion: not an address or network: {value}', value=v)) from None
+
+
+def exclusions(rules):
+    """The exclusion rules from the UI, checked."""
+    out = []
+    for r in rules if isinstance(rules, list) else []:
+        if not isinstance(r, dict):
+            continue
+        try:
+            port = int(r.get('port') or 0)
+        except (TypeError, ValueError):
+            raise ValueError(tr('not a port: {port}', port=r.get('port'))) from None
+        if not 0 <= port <= 65535:
+            raise ValueError(tr('not a port: {port}', port=port))
+        d = r.get('dir') or 'any'
+        if d not in DIRECTIONS:
+            raise ValueError('dir')
+        x = {'src': _net(r.get('src')), 'dst': _net(r.get('dst')), 'port': port, 'dir': d}
+        if not x['src'] and not x['dst']:
+            raise ValueError(tr('exclusion: give a source or a target address'))
+        if x not in out:
+            out.append(x)
+    if len(out) > 1000:
+        raise ValueError(tr('at most 1000 exclusions'))
+    return out
+
+
+class Exclude:
+    """Is an event excluded by a rule? `kind`, `src` (who opened it), `dst`, `port` as stored."""
+
+    def __init__(self, rules):
+        self.rules = [(ipaddress.ip_network(r['src'], strict=False) if r['src'] else None,
+                       ipaddress.ip_network(r['dst'], strict=False) if r['dst'] else None, int(r['port']), r['dir']) for r in rules or ()]
+
+    @staticmethod
+    def _in(ip, net):
+        if net is None:
+            return True
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return a.version == net.version and a in net
+
+    def __call__(self, kind, src, dst, port):
+        if not self.rules:
+            return False
+        d = 'up' if kind in UPLOAD_KINDS else 'down'
+        return any((rd == 'any' or rd == d) and (not rp or rp == int(port or 0)) and self._in(src, rs) and self._in(dst, rt)
+                   for rs, rt, rp, rd in self.rules)
 
 
 def _endpoint(ep):
@@ -211,6 +280,13 @@ def save_config(cfg):
     with os.fdopen(fd, 'w') as f:
         json.dump(cfg, f, indent=1, ensure_ascii=False)
     os.replace(tmp, CONFIG)
+
+
+def add_exclusion(rule):
+    cfg = load_config()
+    cfg['exclude'] = exclusions(list(cfg.get('exclude') or []) + [rule])
+    save_config(cfg)
+    return cfg
 
 
 def add_ignore(value):
@@ -668,7 +744,9 @@ class Detector:
                          + (f" + {len(cfg['own_list']):,} own" if cfg['own_list'] else ''))
             new = []
             found += store(rules(cfg, self.base, done, done + WINDOW, self.rep), done, done + WINDOW, new)
-            on = [r for r in new if cfg['kinds'].get(r['kind'], {}).get('on') and (r['src'], r['info'].get('asn')) not in Ignore(cfg['ignore'])]
+            exc = Exclude(cfg.get('exclude'))
+            on = [r for r in new if cfg['kinds'].get(r['kind'], {}).get('on') and (r['src'], r['info'].get('asn')) not in Ignore(cfg['ignore'])
+                  and not exc(r['kind'], r['src'], r['dst'], r['port'])]
             self.notifier.push([{'kind': r['kind'], 'row': r} for r in on], cfg['kinds'], done + WINDOW)
             done += WINDOW
             self.save_state(done)
@@ -707,7 +785,7 @@ class Detector:
 # ---------------------------------------------------------------- reading (web API)
 def recent(cfg, since, until=None):
     """Stored events active in [since, until], with their texts; ignored sources and disabled kinds left out."""
-    ign = Ignore(cfg['ignore'])
+    ign, exc = Ignore(cfg['ignore']), Exclude(cfg.get('exclude'))
     out = []
     for r in ch("""SELECT kind, key, first_seen, last_seen, hits, exporter, src, dst, port, proto, value, info FROM events FINAL
             WHERE last_seen >= {since:DateTime} AND first_seen <= {until:DateTime} ORDER BY last_seen DESC LIMIT 5000""",
@@ -716,7 +794,7 @@ def recent(cfg, since, until=None):
         if not k or not k['on']:
             continue
         info = json.loads(r['info'] or '{}')
-        if (r['src'], info.get('asn')) in ign:
+        if (r['src'], info.get('asn')) in ign or exc(r['kind'], r['src'], r['dst'], r['port']):
             continue
         r['info'] = info
         title, text = describe(r)

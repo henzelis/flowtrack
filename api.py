@@ -24,6 +24,7 @@ from auth import Auth, AuthError  # noqa: E402
 import detect  # noqa: E402
 import notify  # noqa: E402
 import reputation  # noqa: E402
+import common  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
 import snmp  # noqa: E402
@@ -157,9 +158,9 @@ def scope(q):
     except ValueError:
         raise BadRequest('bad filter JSON')
     flt = flt if isinstance(flt, list) else []
-    # one host chosen (positive `ip` filter): the records are read from its point of view (host_view), so the
-    # sessions in which it is the server count too
-    host = next((str(f.get('v', '')) for f in flt if isinstance(f, dict) and f.get('k') == 'ip' and not f.get('neg')), '')
+    # hosts chosen (positive `ip` filters): the records are read from their point of view (host_view), so the
+    # sessions in which one of them is the server count too
+    host = sorted({str(f.get('v', '')) for f in flt if isinstance(f, dict) and f.get('k') == 'ip' and not f.get('neg') and f.get('v')})
     internal = "dir IN ('internal', 'internal_back')"
     # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
     traffic = q.get('t', ['internet'])[0]
@@ -169,6 +170,7 @@ def scope(q):
     elif traffic == 'internal':
         where.append(internal)
         fcols.add('dir')
+    anyof = {}          # (1.8.3) several positive filters of one key: any of them (device A or device B)
     for i, f in enumerate(flt):
         if not isinstance(f, dict):
             continue
@@ -204,8 +206,13 @@ def scope(q):
             fcols.add(col)
         else:
             continue
-        where.append(f'NOT ({cond})' if neg else cond)
+        if neg:
+            where.append(f'NOT ({cond})')
+        else:
+            anyof.setdefault(k, []).append(cond)
         params[f'f{i}'] = v
+    for conds in anyof.values():
+        where.append(conds[0] if len(conds) == 1 else '(' + ' OR '.join(conds) + ')')
     step = STEP.get(rng) if not custom else None
     if not step:    # custom: the smallest round step that keeps the chart within ~300 points
         step = next((x for x in NICE_STEPS if rng / x <= 300), NICE_STEPS[-1])
@@ -224,15 +231,15 @@ DIR_HOST = rollups.DIR
 
 
 def host_view(period):
-    """The records of the period with the host {hv} on the inside side. Between inside hosts int_ip is the client:
+    """The records of the period with the hosts {hv} (a list) on the inside side. Between inside hosts int_ip is the client:
     a session in which the host is the server (ext_ip) is turned round — int_ip / int_port = the host, ext_ip /
     ext_port = its client — and its directions swapped, so for the host too 'internal' = sent, 'internal_back' =
     received (the queries count dir IN ('up', 'internal') as sent). `turned` = 1 on those records."""
-    r = "(dir IN ('internal', 'internal_back') AND ext_ip = {hv:String} AND int_ip != {hv:String})"
+    r = "(dir IN ('internal', 'internal_back') AND ext_ip IN {hv:Array(String)} AND int_ip NOT IN {hv:Array(String)})"
     return (f"(SELECT * REPLACE (if({r}, ext_ip, int_ip) AS int_ip, if({r}, int_ip, ext_ip) AS ext_ip, "
             f"if({r}, ext_port, int_port) AS int_port, if({r}, int_port, ext_port) AS ext_port, "
             f"CAST(if({r}, if(dir = 'internal', 'internal_back', 'internal'), toString(dir)) AS {DIR_HOST}) AS dir), toUInt8({r}) AS turned "
-            f"FROM flows WHERE {period} AND (int_ip = {{hv:String}} OR ext_ip = {{hv:String}}))")
+            f"FROM flows WHERE {period} AND (int_ip IN {{hv:Array(String)}} OR ext_ip IN {{hv:Array(String)}}))")     # IN: the index is used
 
 
 def src(p, cols, t0=None, t1=None, bucketed=False):
@@ -1161,6 +1168,7 @@ def _alerts_now(kinds):
                   WHERE ts >= now() - INTERVAL 3 HOUR AND dir = 'up' GROUP BY int_ip, ext_ip, service, ext_port, m HAVING b * 8 / 60 > 5000000)
             GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON') if kinds['sustained_upload']['on'] else []:
         out.append({'sev': kinds['sustained_upload']['sev'], 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
+                    'src': r['int_ip'], 'dst': r['ext_ip'], 'port': int(r['port']),
                     'title': tr('Sustained upload'),
                     'text': tr('{host} → {dst} ({service}) — {mbps} Mbit/s for {mins} min in the last 3 h.', host=NAMES.get(r['int_ip']) or r['int_ip'],
                                dst=f"{r['ext_ip']}:{r['port']}", service=r['service'], mbps=f"{float(r['bps']) / 1e6:.1f}", mins=r['mins']),
@@ -1258,15 +1266,24 @@ def api_alerts(q):
     except (ValueError, TypeError):
         raise BadRequest('bad filter JSON')
     out = _alerts_now(kinds) if t1 >= time.time() - 600 else []
-    out = [a for a in out if not a.get('ip') or (a['ip'], 0) not in ign]
+    exc = detect.Exclude(cfg.get('exclude'))
+    out = [a for a in out if (not a.get('ip') or (a['ip'], 0) not in ign) and not exc(a['kind'], a.get('src') or a.get('ip'), a.get('dst', ''), a.get('port', 0))]
     try:
         out += detect.recent(cfg, t0, t1)
     except CHError as e:           # before the collector of 1.6 created the table
         if 'UNKNOWN_TABLE' not in str(e):
             raise
+    # exclusions each; positive filters of one key: any of them (1.8.3)
+    pos = {}
     for f in flt:
-        if f.get('k') in EVENT_FILTERS:
-            out = [a for a in out if _event_match(a, f) != bool(f.get('neg'))]
+        if f.get('k') not in EVENT_FILTERS:
+            continue
+        if f.get('neg'):
+            out = [a for a in out if not _event_match(a, f)]
+        else:
+            pos.setdefault(f.get('k'), []).append(f)
+    for fs in pos.values():
+        out = [a for a in out if any(_event_match(a, f) for f in fs)]
     rank = {'crit': 0, 'warn': 1, 'info': 2}
     out.sort(key=lambda a: rank.get(a['sev'], 3))       # stable: the order within a priority stays
     for a in out:
@@ -1345,6 +1362,61 @@ def post_notify_chats(body):
 def post_events_ignore(body):
     try:
         detect.add_ignore(body.get('value', ''))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return {'ok': True}
+
+
+PROTO_BY_NAME = {'tcp': 6, 'udp': 17, 'sctp': 132}
+
+
+def api_ports(q):
+    """(1.8.3) The user's own names of ports, as 'tcp/8443 HTTPS management' lines."""
+    names = common.load_port_names()
+    rev = {v: k for k, v in PROTO_BY_NAME.items()}
+    return {'lines': [f"{rev.get(p, p)}/{n} {v}" for (p, n), v in sorted(names.items())],
+            'applied': _ports_pending() is None}
+
+
+def _ports_pending():
+    try:
+        with open(os.path.join(STATE_DIR, 'ports_applied.json')) as f:
+            return json.load(f).get('pending')
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def post_ports(body):
+    """'tcp/8443 HTTPS management' per line (also tcp:8443, 8443/tcp; a port alone = TCP) -> ports.json; the collector
+    names new records at once and renames the stored ones."""
+    out = {}
+    for line in str(body.get('text', '')).splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        spec, _, name = line.partition(' ')
+        name = name.strip()
+        m = re.fullmatch(r'(?:(tcp|udp|sctp)[/:])?(\d{1,5})(?:/(tcp|udp|sctp))?', spec.lower())
+        if not m or not name:
+            raise BadRequest(tr('port name: write it as «tcp/8443 HTTPS management»: {line}', line=line))
+        port = int(m.group(2))
+        if not 1 <= port <= 65535:
+            raise BadRequest(tr('not a port: {port}', port=port))
+        if len(name) > 40:
+            raise BadRequest(tr('port name: at most 40 characters: {line}', line=line))
+        out[f"{PROTO_BY_NAME[m.group(1) or m.group(3) or 'tcp']}/{port}"] = name
+    if len(out) > 500:
+        raise BadRequest(tr('at most 500 port names'))
+    tmp = common.PORT_NAMES_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, common.PORT_NAMES_FILE)
+    return api_ports({})
+
+
+def post_events_exclude(body):
+    try:
+        detect.add_exclusion({k: body.get(k) for k in ('src', 'dst', 'port', 'dir')})
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return {'ok': True}
@@ -1588,7 +1660,7 @@ class Cache:
 
 CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
-          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
+          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
@@ -1749,6 +1821,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/license/checkin': post_license_checkin,
                 '/api/events/config': lambda: post_events_config(body),
                 '/api/events/ignore': lambda: post_events_ignore(body),
+                '/api/events/exclude': lambda: post_events_exclude(body),
+                '/api/ports': lambda: post_ports(body),
                 '/api/notify': lambda: post_notify(body),
                 '/api/notify/test': lambda: post_notify_test(body),
                 '/api/notify/chats': lambda: post_notify_chats(body),

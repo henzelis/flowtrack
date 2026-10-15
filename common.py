@@ -702,8 +702,61 @@ def clean_org(org):
     return s
 
 
+# (1.8.3) the user's own names of ports (Settings -> General): STATE_DIR/ports.json {"6/8443": "HTTPS management"};
+# a name replaces the L7 protocol of that protocol + port (the service named by the port alone stays)
+PORT_NAMES_FILE = os.path.join(STATE_DIR, 'ports.json')
+PORT_NAMES = {}
+_port_names_mtime = [None]
+
+
+def load_port_names():
+    """{(proto, port): name} from ports.json; empty when there is none."""
+    try:
+        with open(PORT_NAMES_FILE) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for k, v in (raw.items() if isinstance(raw, dict) else ()):
+        try:
+            pr, po = (int(x) for x in str(k).split('/'))
+        except ValueError:
+            continue
+        if isinstance(v, str) and v.strip():
+            out[(pr, po)] = v.strip()
+    return out
+
+
+def reload_port_names():
+    """Take ports.json again when it changed (the collector's workers every 10 s) -> True when it did."""
+    try:
+        mt = os.path.getmtime(PORT_NAMES_FILE)
+    except OSError:
+        mt = 0
+    if mt == _port_names_mtime[0]:
+        return False
+    _port_names_mtime[0] = mt
+    PORT_NAMES.clear()
+    PORT_NAMES.update(load_port_names())
+    return True
+
+
+def default_l7(proto, port):
+    """The L7 protocol FlowTrack names for proto + port without the user's names."""
+    hit = PORTS.get((proto, port))
+    if hit:
+        return hit[0]
+    name = PROTO_NAMES.get(proto, f'IP/{proto}')
+    if proto in (6, 17) and port:
+        return f'{name}/{port}' if port < 1024 else f'{name} other'
+    return name
+
+
 def classify_l7(proto, port):
     """(L7 protocol, port-derived service or None)."""
+    own = PORT_NAMES.get((proto, port))
+    if own:
+        return own, (PORTS.get((proto, port)) or (None, None))[1]
     hit = PORTS.get((proto, port))
     if hit:
         return hit
@@ -714,7 +767,7 @@ def classify_l7(proto, port):
 
 
 def _known_port(proto, port):
-    return port < 1024 or (proto, port) in PORTS
+    return port < 1024 or (proto, port) in PORTS or (proto, port) in PORT_NAMES     # a named port is a service
 
 
 def server_is_src(proto, sport, dport):
@@ -740,11 +793,17 @@ def server_is_src_sql(proto='proto', sport='int_port', dport='ext_port'):
 
 def classify_l7_sql(proto='proto', port='ext_port'):
     """classify_l7()[0] as a ClickHouse expression."""
-    arms = ', '.join(f"({proto}, {port}) = ({p}, {n}), '{l7}'" for (p, n), (l7, _) in sorted(PORTS.items()))
+    names = {**{k: v[0] for k, v in PORTS.items()}, **PORT_NAMES}
+    arms = ', '.join(f"({proto}, {port}) = ({p}, {n}), '{sql_str(l7)}'" for (p, n), l7 in sorted(names.items()))
     names = ', '.join(f"{proto} = {p}, '{n}'" for p, n in sorted(PROTO_NAMES.items()))
     return (f"multiIf({arms}, {proto} IN (6, 17) AND {port} != 0, "
             f"if({port} < 1024, concat(if({proto} = 6, 'TCP', 'UDP'), '/', toString({port})), concat(if({proto} = 6, 'TCP', 'UDP'), ' other')), "
             f"multiIf({names}, concat('IP/', toString({proto}))))")
+
+
+def sql_str(s):
+    """Text inside a single-quoted ClickHouse literal."""
+    return str(s).replace('\\', '\\\\').replace("'", "\\'")
 
 
 def port_service_sql(proto='proto', port='ext_port'):

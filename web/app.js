@@ -84,10 +84,12 @@ async function apiPost(path, body){
 }
 // single entry point for new filters: no duplicates; a positive filter replaces the previous positive
 // filter of the same key (two would AND to nothing); exclusions stack; the opposite of a filter replaces it
-function putFilter(f){
+// add=true (typed in the search box, 1.8.3): a positive filter joins the others of its key — any of them matches
+// (device A or device B); a click on a chart or a table still replaces it
+function putFilter(f, add){
   const k = f.k, v = String(f.v), neg = !!f.neg;
   if (!FILTER_KEYS.includes(k) || !v) return;
-  state.filters = state.filters.filter(x => !(x.k === k && (x.v === v || (!neg && !x.neg))));
+  state.filters = state.filters.filter(x => !(x.k === k && (x.v === v || (!add && !neg && !x.neg))));
   state.filters.push({k, v, neg});
 }
 function addFilter(k, v, neg){ putFilter({k, v, neg}); state.sel = null; render(); }
@@ -1490,6 +1492,19 @@ function evRange(a, b){
 }
 // the filter an event's button sets: the server names it for stored events (an outside attacker is an outside
 // address), the anomalies computed from flows are about an inside host or a device
+// exclusions (1.8.3): one rule a line — direction, who opened the connection, its target and port:
+// "up 10.0.0.5 -> 203.0.113.7:443", "down * -> 10.0.0.9:8443", "any 198.51.100.0/24 -> *"
+const EX_DIRS = {up:'up', upload:'up', down:'down', download:'down', any:'any', '*':'any'};
+const exText = r => `${r.dir} ${r.src || '*'} -> ${r.dst ? (r.dst.includes(':') && !r.dst.includes('/') && r.port ? `[${r.dst}]` : r.dst) : '*'}${r.port ? ':' + r.port : ''}`;
+function exParse(text){
+  return text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(l => {
+    const m = l.match(/^(\S+)\s+(\S+)\s*->\s*(\S+)$/); if (!m || !EX_DIRS[m[1].toLowerCase()]) throw new Error(T('exclusion: write it as «up SOURCE -> TARGET:PORT»: {line}', {line:l}));
+    let t = m[3], port = 0; const pm = t.match(/^\[(.+)\]:(\d+)$/) || (t.split(':').length === 2 ? t.match(/^(.+):(\d+)$/) : null); if (pm) { t = pm[1]; port = +pm[2]; }
+    return {dir:EX_DIRS[m[1].toLowerCase()], src:m[2] === '*' ? '' : m[2], dst:t === '*' ? '' : t, port}; });
+}
+// the rule the Exclude button of an event proposes: this source -> this target:port, in the event's direction
+const UPLOAD_KINDS = ['sustained_upload', 'inside_scan', 'lateral_scan', 'malware_contact', 'listed_contact', 'new_country', 'burst'];
+const exOf = x => (x.src || x.ip) && (x.dst || x.port) ? {dir:UPLOAD_KINDS.includes(x.kind) ? 'up' : 'down', src:x.src || x.ip, dst:x.dst || '', port:x.port || 0} : null;
 const evFilter = x => x.fk && x.fv ? [x.fk, x.fv] : x.ip ? ['ip', x.ip] : x.device ? ['device', x.device] : null;
 function vThreats(){
   const v = document.getElementById('view');
@@ -1507,6 +1522,9 @@ function vThreats(){
     const n = s => all.filter(x => x.sev === s).length, a = cur === 'all' ? all : all.filter(x => x.sev === cur);
     setTimeout(() => {
       document.querySelectorAll('#evSeg button').forEach(b => b.onclick = () => { state.evSev = b.dataset.v; vThreats(); });
+      document.querySelectorAll('[data-exc]').forEach(b => b.onclick = async () => { const r = JSON.parse(b.dataset.exc);
+        if (!confirm(T('Exclude {rule}? Such events will no longer be shown or notified. You can change it in Settings → Events.', {rule: exText(r)}))) return;
+        try { await apiPost('events/exclude', r); vThreats(); } catch (e) { alert(e.message); } });
       document.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => {
         if (!confirm(T('Ignore {addr}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.', {addr: b.dataset.ign}))) return;
         try { await apiPost('events/ignore', {value:b.dataset.ign}); vThreats(); } catch (e) { alert(e.message); } });
@@ -1515,7 +1533,7 @@ function vThreats(){
       `<button data-v="${k}" aria-pressed="${cur === k}">${l} <span class="mono">${c}</span></button>`).join('')}</div>` + note +
       (a.length ? '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
       <div class="meta"><span class="pill ${x.sev}">${sevs[x.sev] || x.sev}</span><span class="mono">${x.stored && x.first !== x.last ? esc(evRange(x.first, x.last)) : esc(evTime(x.when))}</span>
-        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address')}">${T('Ignore')}</button>` : ''}</span></div></div>`).join('') + '</div>'
+        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter')}</button>` : ''}${exOf(x) && isAdmin() ? `<button class="btn" data-exc="${esc(JSON.stringify(exOf(x)))}" title="${esc(T('Do not show events of this connection in this direction') + ': ' + exText(exOf(x)))}">${T('Exclude')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address')}">${T('Ignore')}</button>` : ''}</span></div></div>`).join('') + '</div>'
         : `<div class="empty">${T('No events of this priority')}</div>`); });
 }
 // Settings → Events (administrators): detections on/off, priority, thresholds; roles of our services; exceptions
@@ -1607,6 +1625,8 @@ function vEventsCfg(){
       : `<div class="empty">${T('Nothing learned yet — services show up within an hour of traffic.')}</div>`);
     box('evxBox', `<div class="form">
       <label>${T('Ignore — addresses, networks, ASNs (one per line)')}<textarea id="evIgn" rows="6" placeholder="203.0.113.7&#10;198.51.100.0/24&#10;AS40934">${esc(cfg.ignore.join('\n'))}</textarea></label>
+      <label>${T('Exclude connections — one per line: up|down|any SOURCE -> TARGET:PORT (* = any)')}<textarea id="evExc" rows="4" placeholder="up 10.0.0.5 -> 203.0.113.7:443&#10;down * -> 10.0.0.9:8443">${esc((cfg.exclude || []).map(exText).join('\n'))}</textarea></label>
+      <p class="note">${T('up = what we send or call out (uploads, contacts, scans from inside); down = what arrives (scans, guessing, floods). The events of such a connection are not shown nor notified.')}</p>
       <label>${T('Sensitive ports')}<input id="evSens" value="${esc(cfg.sensitive.join(', '))}"></label>
       <label>${T('Public ports')}<input id="evPub" value="${esc(cfg.public.join(', '))}"></label>
       <p class="note">${T('The role of a service listed on the left wins over these ports.')}</p></div>`);
@@ -1619,6 +1639,7 @@ function vEventsCfg(){
     const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
     const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
     return {kinds, roles, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
+      exclude:exParse(document.getElementById('evExc').value),
       sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value};
   };
   const collectNotify = () => { const kinds = {}, email_kinds = {}, v = id => document.getElementById(id);
@@ -1631,7 +1652,7 @@ function vEventsCfg(){
   const err = document.getElementById('evErr'), ok = document.getElementById('evOk');
   load().then(show).catch(e => { err.textContent = e.message; });
   document.getElementById('evSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
-    try { const nt = await apiPost('notify', collectNotify()); show({...await apiPost('events/config', collect()), notify:nt}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
+    try { const cfg = collect(), nt = await apiPost('notify', collectNotify()); show({...await apiPost('events/config', cfg), notify:nt}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
   document.getElementById('evDef').onclick = async () => { if (!confirm(T('Restore the default settings of all events? Exceptions and service roles are cleared too.'))) return;
     err.textContent = ''; ok.hidden = true;
     try { show({...await apiPost('events/config', {}), notify:await get('api/notify')}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
@@ -1875,10 +1896,21 @@ function vGeneral(){
         <div><span>${T('Edition')}</span><b>${ed.status === 'active' ? 'Pro' : 'Community'}</b><button class="lnk" id="toLic">${T('License')} →</button></div>
         <div><span>${T('Source code')}</span><a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">github.com/henzelis/flowtrack</a></div>
         <div><span>${T('Account')}</span><b class="mono">${esc(ME.name)}</b><button class="lnk" id="myPass">${T('Change my password')}</button></div>
-      </div></section></div>`;
+      </div></section>
+    <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowTrack names (e.g. TCP other) in every report'))}
+      <div class="form" id="pnBox"><div class="loading"></div></div></section></div>`;
   document.getElementById('langSel').onchange = e => { if (e.target.value !== LANG) setLang(e.target.value); };
   document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
   document.getElementById('myPass').onclick = openPassword;
+  // (1.8.3) port names: new records get them at once, stored ones (30 days) and the totals are renamed in the background
+  const pn = d => { const el = document.getElementById('pnBox'); if (!el) return; const admin = isAdmin();
+    el.innerHTML = `<label>${T('One per line: protocol/port and the name')}<textarea id="pnText" rows="5" ${admin ? '' : 'readonly'} placeholder="tcp/8443 HTTPS management&#10;udp/5000 Camera stream">${esc(d.lines.join('\n'))}</textarea></label>
+      <p class="note">${T('New records get the name at once; the records of the last 30 days within a minute, the totals of longer periods after the current hour.')}${d.applied ? '' : ' <b>' + T('Renaming the totals…') + '</b>'}</p>
+      ${admin ? `<div><button class="btn primary" id="pnSave">${T('Save')}</button></div><p class="err" id="pnErr" hidden></p><p class="note" id="pnOk" hidden>${T('Saved.')}</p>` : ''}`;
+    const b = document.getElementById('pnSave'); if (b) b.onclick = async () => { const err = document.getElementById('pnErr'); err.hidden = true;
+      try { pn(await apiPost('ports', {text:document.getElementById('pnText').value})); document.getElementById('pnOk').hidden = false; }
+      catch (e) { err.textContent = e.message; err.hidden = false; } }; };
+  api('ports').then(pn).catch(e => fill('pnBox', errBox(e)));
 }
 // ===================== backups: data + settings, on a schedule, here and off the server (backup.py runs them as root) =====================
 const BK_ICON = 'M2 4h14v3H2zM3 7v8h12V7M7 10h4';
@@ -2454,9 +2486,10 @@ function renderShell(){
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
   const px = document.getElementById('periodX'); if (px) px.onclick = () => { state.range = state.prevRange || '24h'; render(); };
   const pe = document.getElementById('periodEdit'); if (pe) pe.onclick = openPeriod;
-  const ds = document.getElementById('devSel'), df = state.filters.find(f => f.k === 'device' && !f.neg);
-  ds.innerHTML = `<option value="">${T('All devices ({n})', {n: META.devices.length})}</option>` + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
-  ds.value = df ? df.v : '';
+  const ds = document.getElementById('devSel'), dfs = state.filters.filter(f => f.k === 'device' && !f.neg);
+  ds.innerHTML = `<option value="">${T('All devices ({n})', {n: META.devices.length})}</option>` + (dfs.length > 1 ? `<option value="*" disabled>${T('{n} devices', {n: dfs.length})}</option>` : '')
+    + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
+  ds.value = dfs.length > 1 ? '*' : dfs.length ? dfs[0].v : '';
   editionBadge();
   const fv = document.getElementById('ftVer'); if (fv && META.version) fv.textContent = 'FlowTrack ' + META.version;
   const rs = document.getElementById('rangeSel');
@@ -2516,11 +2549,13 @@ q.addEventListener('keydown', e => {
   if (e.key === 'Enter') {
     for (let t of q.value.trim().split(/\s+/).filter(Boolean)) {
       const neg = t.startsWith('-'); if (neg) t = t.slice(1); const i = t.indexOf(':');
-      if (i > 0 && FILTER_KEYS.includes(t.slice(0, i).toLowerCase()) && t.slice(i + 1)) putFilter({k:t.slice(0, i).toLowerCase(), v:t.slice(i + 1), neg});
-      else if (/^[\d.]+$/.test(t) && t.split('.').length === 4) putFilter({k:/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(t) ? 'ip' : 'dst', v:t, neg});
-      else if (/^AS\d+$/i.test(t)) putFilter({k:'asn', v:t, neg});
-      else if (/^[A-Za-z]{2}$/.test(t)) putFilter({k:'country', v:t.toUpperCase(), neg});
-      else if (t) putFilter({k:'service', v:t, neg});
+      if (i > 0 && FILTER_KEYS.includes(t.slice(0, i).toLowerCase()) && t.slice(i + 1)) { const k = t.slice(0, i).toLowerCase(); let v = t.slice(i + 1);
+        if (k === 'device') { const d = META.devices.find(x => x.ip === v || (x.name || '').toLowerCase() === v.toLowerCase()); if (d) v = d.ip; }   // by name too
+        putFilter({k, v, neg}, true); }
+      else if (/^[\d.]+$/.test(t) && t.split('.').length === 4) putFilter({k:/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(t) ? 'ip' : 'dst', v:t, neg}, true);
+      else if (/^AS\d+$/i.test(t)) putFilter({k:'asn', v:t, neg}, true);
+      else if (/^[A-Za-z]{2}$/.test(t)) putFilter({k:'country', v:t.toUpperCase(), neg}, true);
+      else if (t) putFilter({k:'service', v:t, neg}, true);
     }
     q.value = ''; render();
   } else if (e.key === 'Backspace' && !q.value && state.filters.length) { state.filters.pop(); render(); }

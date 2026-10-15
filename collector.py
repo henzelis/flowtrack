@@ -29,7 +29,7 @@ import detect  # noqa: E402
 import rollups  # noqa: E402
 from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, server_is_src,
-                    service_name)
+                    service_name, PORT_NAMES, default_l7, load_port_names, reload_port_names)
 
 BIND = os.environ.get('FT_BIND', '0.0.0.0')
 PORT = int(os.environ.get('FT_PORT', '2055'))
@@ -489,6 +489,8 @@ class Collector:
                 self.save_templates()
             self.reload_config()
             self.load_running()
+            if reload_port_names():          # the user's names of ports: new records get them at once
+                log(f'port names: {len(PORT_NAMES)} of your own')
             ed = edition()                   # a license change applies without a restart (the core's limiter follows)
             self.keep_days = ed['retention_days']
             if self.rate_limited:
@@ -499,6 +501,7 @@ def worker_main(n, q, results, ppid, workers=1):
     """Decoding process: batches of (packet, exporter ip, learn_only) from the receiver -> ClickHouse."""
     signal.signal(signal.SIGTERM, signal.SIG_IGN)     # the receiver stops us with a sentinel after draining
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    reload_port_names()
     c = Collector(worker=n, accounting=False, workers=workers)
     c.load_templates()
     c.load_running()
@@ -673,6 +676,57 @@ class Receiver:
                 time.sleep(60)
 
     @staticmethod
+    def port_names():
+        """(1.8.3) The user named or renamed ports (Settings -> General): the stored records of the last 30 days get the
+        new L7 names half a minute later (when every worker names new records so), and the rollups that hold the old
+        or new names are summed again from the records after the current hour (they are being written until then).
+        What was applied and what is left is in STATE_DIR/ports_applied.json, so a restart goes on."""
+        path = os.path.join(STATE_DIR, 'ports_applied.json')
+        def load():
+            try:
+                with open(path) as f:
+                    v = json.load(f)
+                return v if isinstance(v, dict) else {}
+            except (OSError, ValueError):
+                return {}
+        def save(v):
+            with open(path + '.tmp', 'w') as f:
+                json.dump(v, f)
+            os.replace(path + '.tmp', path)
+        key = lambda k: tuple(int(x) for x in k.split('/'))
+        while True:
+            time.sleep(30)
+            try:
+                st, want = load(), {f'{p}/{n}': v for (p, n), v in load_port_names().items()}
+                had = st.get('names', {})
+                if want != had:
+                    time.sleep(30)                 # the workers take the new names within 10 s
+                    want = {f'{p}/{n}': v for (p, n), v in load_port_names().items()}
+                    change = {key(k): want.get(k) or default_l7(*key(k)) for k in set(want) | set(had) if want.get(k) != had.get(k)}
+                    rollups.relabel_records(change)
+                    pend = st.get('pending') or {'protos': [], 'labels': []}
+                    pend['protos'] = sorted(set(pend['protos']) | {p for p, _ in change})
+                    pend['labels'] = sorted(set(pend['labels']) | set(change.values())
+                                            | {had.get(f'{p}/{n}') or default_l7(p, n) for p, n in change})
+                    pend['until'], pend['at'] = (int(time.time()) // 3600 + 1) * 3600, 0
+                    save({'names': want, 'pending': pend})
+                    log(f'port names: {len(change)} port(s) renamed in the stored records; the totals follow after '
+                        f"{time.strftime('%H:%M', time.gmtime(pend['until'] + 600))} UTC")
+                    continue
+                pend = st.get('pending')
+                if pend and time.time() >= pend['until'] + 600:
+                    at = rollups.relabel_rollups(pend['protos'], pend['labels'], pend['until'], pend.get('at') or None, log)
+                    if at:
+                        pend['at'] = at
+                        save(st)
+                    else:
+                        save({'names': st.get('names', {})})
+                        log('port names: the totals carry the new names too')
+            except (CHError, OSError, ValueError) as ex:
+                log(f'WARN port names: {str(ex)[:200]} — trying again in a minute')
+                time.sleep(30)
+
+    @staticmethod
     def license_checkins():
         """Online licenses: renew the lease at the license server once a day (hourly after a failure). Runs in its own
         thread so a slow or unreachable server never delays receiving."""
@@ -713,6 +767,7 @@ class Receiver:
         threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()
         threading.Thread(target=self.license_checkins, name='license-checkin', daemon=True).start()
         threading.Thread(target=self.rollups, name='rollups', daemon=True).start()
+        threading.Thread(target=self.port_names, name='port-names', daemon=True).start()
         threading.Thread(target=detect.Detector(log).run, name='detect', daemon=True).start()   # scans, floods ... (detect.py)
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
