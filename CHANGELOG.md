@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.8.6 — 2026-10-15
 
 - **Filter by network.** `ip:172.16.0.0/24` keeps the inside hosts of that network on every page (what they send and
   what they receive, as a host filter does), `dst:203.0.113.0/24` the outside addresses, `-ip:10.10.0.0/16` leaves a
