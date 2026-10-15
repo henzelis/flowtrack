@@ -77,3 +77,39 @@ class NetworkScope(unittest.TestCase):
         where, _, _, _ = api.scope({'range': ['1h'], 'f': ['[{"k":"ip","v":"10.20.0.5"}]']})
         self.assertIn('int_ip = {f0:String}', where)
         self.assertNotIn('ext_ip', where)
+
+
+class TopoStructure(unittest.TestCase):
+    """Path analysis (1.8.2): a page never waits for the neighbours once there are some; outdated ones are shown while
+    new ones are worked out in the background."""
+    def setUp(self):
+        self.calls, self.orig = [], api.topology.query
+        def slow(ch, where, p, known):
+            self.calls.append(time.time()); time.sleep(.5)
+            return ['near%d' % len(self.calls)], [], {'1.2.3.4'}, []
+        api.topology.query = slow
+        api._topo.update(key=None, t=0, data=None)
+
+    def tearDown(self):
+        api.topology.query = self.orig
+        for _ in range(50):                 # let a background build finish
+            if not api._topo_bg.is_set():
+                break
+            time.sleep(.05)
+
+    def test_first_is_waited_for_then_outdated_is_served_at_once(self):
+        self.assertEqual(api.topo_structure({})[0], ['near1'])
+        self.assertEqual(api.topo_structure({})[0], ['near1'])         # fresh: no build
+        self.assertEqual(len(self.calls), 1)
+        api._topo['t'] = 0                                              # outdated (or SNMP data changed)
+        t = time.time(); got = api.topo_structure({}); self.assertLess(time.time() - t, .2)
+        self.assertEqual(got[0], ['near1'])                             # the old one, at once
+        api.topo_structure({})                                          # a second page: no second build
+        time.sleep(.8)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(api.topo_structure({})[0], ['near2'])
+
+    def test_snmp_data_change_does_not_block(self):
+        api.topo_structure({})
+        api._topo['key'] = ('other',)
+        t = time.time(); api.topo_structure({}); self.assertLess(time.time() - t, .2)

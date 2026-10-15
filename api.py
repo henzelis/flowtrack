@@ -751,11 +751,14 @@ def network_q(q):
 
 # Path analysis (1.8.1): which devices are neighbours changes rarely, and finding it is the heaviest query FlowTrack
 # has (every conversation of the period, grouped by the devices that saw it). It is worked out in the background from
-# the last hour every 10 minutes (and at once when the devices' settings change); a page over a period then adds
+# the last hour every 10 minutes (and when the devices' settings or SNMP data change); a page over a period then adds
 # only the volumes of its links, from the 5-minute totals per interface pair.
+# (1.8.2) A page never waits for it once there is one: an outdated structure is shown while a new one is worked out
+# in the background — on a busy network that takes 20 s, and SNMP data changing every few minutes made every visit wait.
 TOPO_EVERY, TOPO_SPAN = 600, 3600
 _topo = {'key': None, 't': 0, 'data': None}
-_topo_lock = threading.Lock()
+_topo_lock = threading.Lock()          # one build at a time
+_topo_bg = threading.Event()           # a background build is running
 
 
 def _known(cfg):
@@ -763,17 +766,44 @@ def _known(cfg):
         {a for c in cfg.values() for a in c.get('public_ips', [])}
 
 
-def topo_structure(cfg, wait=True):
-    """(near, exporting, pairs) of the last hour, as topology.build() takes them; worked out again when older than
-    TOPO_EVERY or when the devices changed. wait=False (the background refresh) always works it out."""
+def _topo_build(cfg):
     key = (exporters_mtime(), snmp.data_mtime())
     with _topo_lock:
-        if wait and _topo['data'] is not None and _topo['key'] == key and time.time() - _topo['t'] < TOPO_EVERY * 1.5:
-            return _topo['data']
         p = {'span': TOPO_SPAN}
         near, _, exporting, pairs = topology.query(ch, 'ts >= now() - toIntervalSecond({span:UInt32})', p, _known(cfg))
         _topo.update(key=key, t=time.time(), data=(near, exporting, pairs))
         return _topo['data']
+
+
+def _topo_build_bg(cfg):
+    """Work the structure out in a thread of its own (no web request's query tag: leaving the page does not cancel it)."""
+    if _topo_bg.is_set():
+        return
+    _topo_bg.set()
+    def run():
+        try:
+            _topo_build(cfg)
+        except (CHError, OSError) as e:
+            print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
+        finally:
+            _topo_bg.clear()
+    threading.Thread(target=run, daemon=True).start()
+
+
+def topo_structure(cfg, wait=True):
+    """(near, exporting, pairs) of the last hour, as topology.build() takes them. A page gets the one there is at once
+    (an outdated one starts a background build); only the very first one is waited for. wait=False (the background
+    refresh) always works it out."""
+    if not wait:
+        return _topo_build(cfg)
+    data = _topo['data']
+    if data is None:
+        with _topo_lock:                   # a build already running (the start of the web): wait for it, not twice
+            data = _topo['data']
+        return data if data is not None else _topo_build(cfg)
+    if _topo['key'] != (exporters_mtime(), snmp.data_mtime()) or time.time() - _topo['t'] >= TOPO_EVERY * 1.5:
+        _topo_build_bg(cfg)
+    return data
 
 
 def topo_refresher(stop):

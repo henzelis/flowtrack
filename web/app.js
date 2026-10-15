@@ -970,6 +970,10 @@ function createTopoMap(host, opts){
   const box = host.firstChild, cv = box.querySelector('canvas'), tip = box.querySelector('.rtip'), ctx = cv.getContext('2d');
   let W = 0, H = 0, dpr = 1, data = null, hover = null, shapes = [], centred = null, GAP = 184;
   const CW = 136, CH = 74;                // card size; GAP: room between columns for the interface labels
+  const BASE = host.getBoundingClientRect().height || 560;     // the map grows taller than this when the cards need it
+  // ribbon width by volume; one link end on a card side takes a slot: its label (name over address) above its ribbon
+  const v = x => state.scale === 'lin' ? x : Math.sqrt(x), vol2 = l => Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in);
+  let vmax = 1; const lw = x => x > 0 ? 2 + 14 * v(x) / vmax : 0, slot = l => 40 + lw(vol2(l)), WAN_PAD = 40;
   const CLW = 210, CLH = 72, UP = 84;     // the internet cloud on top; UP: room under it for the WAN ribbons and their labels
   function size(){ const r = host.getBoundingClientRect(); H = r.height; dpr = Math.min(2, devicePixelRatio || 1); draw(); }
   const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
@@ -997,21 +1001,31 @@ function createTopoMap(host, opts){
     GAP = hi === lo ? 184 : Math.max(120, Math.min(220, (avail - 28 - (hi - lo + 1) * CW) / (hi - lo)));
     W = Math.max(avail, (hi - lo + 1) * CW + (hi - lo) * GAP + 28, CLW + 28);
     const x0 = 14 + CW / 2, x1 = W - 14 - CW / 2, xs = c => hi === lo ? W / 2 : x0 + (x1 - x0) * (c - lo) / (hi - lo);
-    const wan = data.links.filter(l => l.b === 'internet' && col.has(l.a));
+    const wan = data.links.filter(l => l.b === 'internet' && col.has(l.a)), hasWan = new Set(wan.map(l => l.a));
     const top = wan.length ? 12 + CLH + UP : 12;            // devices start under the cloud
+    // a card is as tall as the slots of its busier side; a card with a WAN link keeps room above it for that label
+    const sides = new Map(), sameCol = new Set();
+    for (const l of data.links) { if (l.b === 'internet' || !col.has(l.a) || !col.has(l.b)) continue;
+      if (col.get(l.a) === col.get(l.b)) { sameCol.add(col.get(l.a)); continue; }      // drawn down the column, no slot
+      for (const [me, other] of [[l.a, l.b], [l.b, l.a]]) { const k = me + (col.get(other) > col.get(me) ? '>R' : '>L'); sides.set(k, (sides.get(k) || 0) + slot(l)); } }
+    const hOf = n => Math.max(CH, ...['>L', '>R'].map(k => (sides.get(n + k) || 0) + 16)), padOf = n => hasWan.has(n) ? WAN_PAD : 0;
+    const gOf = c => sameCol.has(c) ? 44 : 24;     // room for a link between two cards of one column and its state
+    const colH = c => { const list = [...col.keys()].filter(n => col.get(n) === c); return list.reduce((s, n) => s + padOf(n) + hOf(n), 0) + gOf(c) * (list.length - 1); };
+    H = Math.max(BASE, top + Math.max(...cols.map(colH)) + 12);
     const pos = new Map();
     // the middle column first, then outwards: each column ordered by its parents' height, then centred on them
     for (const c of [...cols].sort((a, b) => Math.abs(a) - Math.abs(b) || b - a)) {
       const list = [...col.keys()].filter(n => col.get(n) === c).sort((a, b) => ((pos.get(parent.get(a)) || {}).y || 0) - ((pos.get(parent.get(b)) || {}).y || 0));
-      const room = H - top - 12, total = CH * list.length, gap = Math.min(56, Math.max(8, (room - total) / Math.max(1, list.length)));
+      const room = H - top - 12, total = list.reduce((s, n) => s + padOf(n) + hOf(n), 0), gap = Math.min(56, Math.max(gOf(c), (room - total) / Math.max(1, list.length)));
       let y = top + Math.max(0, (room - total - gap * (list.length - 1)) / 2);
-      const ys = list.map(() => { const m = y + CH / 2; y += CH + gap; return m; });
+      const ys = list.map(n => { y += padOf(n); const m = y + hOf(n) / 2; y += hOf(n) + gap; return m; });
       if (c !== 0 && list.length) {
         const want = list.reduce((s, n) => s + ((pos.get(parent.get(n)) || {y:(top + H) / 2}).y), 0) / list.length, cur = ys.reduce((s, v) => s + v, 0) / ys.length;
-        const d = Math.max(top + CH / 2 - ys[0], Math.min(H - 12 - CH / 2 - ys[ys.length - 1], want - cur));
+        const f = list[0], e = list[list.length - 1];
+        const d = Math.max(top + padOf(f) + hOf(f) / 2 - ys[0], Math.min(H - 12 - hOf(e) / 2 - ys[ys.length - 1], want - cur));
         ys.forEach((v, k) => ys[k] = v + d);
       }
-      list.forEach((n, k) => pos.set(n, {x:xs(c), y:ys[k], w:CW, h:CH, c}));
+      list.forEach((n, k) => pos.set(n, {x:xs(c), y:ys[k], w:CW, h:hOf(n), c}));
     }
     // the cloud over the devices that reach the internet
     const wx = wan.map(l => pos.get(l.a).x), cx = wx.length ? Math.max(14 + CLW / 2, Math.min(W - 14 - CLW / 2, (Math.min(...wx) + Math.max(...wx)) / 2)) : W / 2;
@@ -1027,17 +1041,17 @@ function createTopoMap(host, opts){
   function draw(){
     if (!H) return;
     if (!data) { W = host.clientWidth; return; }
+    vmax = Math.max(1e-9, ...data.links.map(l => v(vol2(l))));
     const {pos, cloud} = data.nodes.length ? layout() : {pos:new Map(), cloud:null};
-    if (!data.nodes.length) W = host.clientWidth;
+    if (!data.nodes.length) { W = host.clientWidth; H = BASE; }
+    const hs = H > BASE ? H + 'px' : '';
+    if (host.style.height !== hs) host.style.height = hs;     // the ResizeObserver draws again at the new height
     box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr;
     if (centred !== data.pov && pos.has(data.pov)) { centred = data.pov; host.scrollLeft = Math.max(0, pos.get(data.pov).x - host.clientWidth / 2); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
     ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
     if (!data.nodes.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No device has sent data yet'), W / 2, H / 2); return; }
     const node = new Map(data.nodes.map(n => [n.ip, n])), onPath = opts.pathSet ? opts.pathSet() : null;
-    const v = x => state.scale === 'lin' ? x : Math.sqrt(x);
-    const vmax = Math.max(1e-9, ...data.links.map(l => v(Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in))));
-    const lw = x => x > 0 ? 2 + 14 * v(x) / vmax : 0;
     const nm = d => esc(d === 'internet' ? T('Internet') : (node.get(d) || {}).name || d);
     // a ribbon of three strands (from the internet, to the internet, internal) along a path, as one end measured it
     const ribbon = (curve, l, w, horizontal) => {
@@ -1055,12 +1069,16 @@ function createTopoMap(host, opts){
     const tipOf = l => `<b>${nm(l.a)} ${esc(l.a_name)} ↔ ${nm(l.b)} ${esc(l.b_name)}</b>${l.net ? ` <span class="nat">${esc(l.net)}</span>` : ''}<div style="color:${l.state === 'observed' ? C.ext : l.state === 'adjacent' || l.state === 'one_sided' ? C.ink2 : RED}">${LINK_STATE[l.state][0]} — ${LINK_STATE[l.state][1]}</div>`
       + (l.b === 'internet' ? `<div>${T('to the internet')}: <b class="mono">${fmtB(l.a_out)}</b> · ${T('from it')}: <b class="mono">${fmtB(l.a_in)}</b></div>`
         : [[l.a, l.b, l.a_out, l.b_in], [l.b, l.a, l.b_out, l.a_in]].map(([f, t, s, g]) => `<div>${nm(f)} → ${nm(t)}: <b class="mono">${fmtB(s)}</b> ${T('sent')} · <b class="mono">${fmtB(g)}</b> ${T('received')}</div>`).join(''));
-    // where each link meets a card: links on the same side of a card are spread over its height, ordered by the far end
+    // where each link meets a card: the links on one side of a card get a slot each down its height, ordered by the
+    // far end; the ribbon leaves at the bottom of its slot, its label sits above it
     const ends = new Map(), anchor = new Map();
     for (const l of data.links) { const A = pos.get(l.a), B = pos.get(l.b); if (!A || !B) continue;
-      for (const [me, other, P, Q] of [[l.a, l.b, A, B], [l.b, l.a, B, A]]) { const k = me + (Q.x > P.x ? '>R' : '>L'); if (!ends.has(k)) ends.set(k, []); ends.get(k).push({l, me, y:Q.y}); } }
-    for (const list of ends.values()) { list.sort((a, b) => a.y - b.y); const n = list.length, spread = Math.min(CH - 28, 16 * (n - 1));
-      list.forEach((e, k) => anchor.set(e.l, {...anchor.get(e.l), [e.me === e.l.a ? 'a' : 'b']:{dy:n === 1 ? 0 : -spread / 2 + spread * k / (n - 1), first:k === 0, last:k === n - 1, n}})); }
+      if (A.c === B.c) continue;
+      for (const [me, other, P, Q] of [[l.a, l.b, A, B], [l.b, l.a, B, A]]) { const k = me + (Q.c > P.c ? '>R' : '>L'); if (!ends.has(k)) ends.set(k, []); ends.get(k).push({l, me, y:Q.y}); } }
+    for (const list of ends.values()) { list.sort((a, b) => a.y - b.y); const n = list.length;
+      let y = -list.reduce((s, e) => s + slot(e.l), 0) / 2;
+      list.forEach((e, k) => { const dy = n === 1 ? 0 : y + 34 + lw(vol2(e.l)) / 2; y += slot(e.l);
+        anchor.set(e.l, {...anchor.get(e.l), [e.me === e.l.a ? 'a' : 'b']:{dy, first:k === 0, last:k === n - 1, n}}); }); }
     // the WAN ribbons: spread along the card top (several WANs) and along the cloud bottom (ordered by device)
     const up = new Map();
     if (cloud) {
@@ -1070,7 +1088,7 @@ function createTopoMap(host, opts){
       const order = [...wl].sort((a, b) => pos.get(a.a).x + up.get(a).dx - pos.get(b.a).x - up.get(b).dx), span = Math.min(cloud.w * .5, 22 * (order.length - 1));
       order.forEach((l, k) => { up.get(l).cx = cloud.x + (order.length === 1 ? 0 : -span / 2 + span * k / (order.length - 1)); });
     }
-    const labels = [];
+    const labels = [], pills = [], sameK = new Map();
     for (const l of data.links) {
       const A = pos.get(l.a), B = pos.get(l.b);
       const dim = onPath && !(onPath.has(l.a) && onPath.has(l.b));    // a WAN ribbon stays lit only on a path to / from the internet
@@ -1090,18 +1108,32 @@ function createTopoMap(host, opts){
         continue;
       }
       if (!A || !B) { ctx.globalAlpha = 1; continue; }
+      if (A.c === B.c) {
+        // two devices of one column: from the bottom of the upper card to the top of the lower one, bowed outwards
+        // when a card lies between them; the interfaces are in the tooltip and the table
+        const U = A.y < B.y ? A : B, D = U === A ? B : A, k = (sameK.get(U.c) || 0); sameK.set(U.c, k + 1);
+        const xu = U.x + U.w / 2 - 22 - 16 * (k % 3), yu = U.y + U.h / 2, yd2 = D.y - D.h / 2, rw = Math.min(w, 10);
+        const out = (U.c < 0 ? -1 : 1) * ([...pos.values()].some(P => P.c === U.c && P.y > U.y && P.y < D.y) ? U.w / 2 + 40 : 0);
+        const curve = off => { const p = new Path2D(); p.moveTo(xu + off, yu); p.bezierCurveTo(xu + off + out, yu + 30, xu + off + out, yd2 - 30, xu + off, yd2); return p; };
+        if (w && l.state !== 'adjacent') ribbon(curve, l, rw, false);
+        if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? rw / 2 + 4 : 0)); ctx.setLineDash([]); }
+        if (look) pills.push([look[1], xu + out * .75, (yu + yd2) / 2, look[0], dim]);
+        ctx.globalAlpha = 1;
+        shapes.push({stroke:curve(0), sw:Math.max(12, rw + 6), l, tip:tipOf(l)});
+        continue;
+      }
       const L = A.x <= B.x ? A : B, R = L === A ? B : A, flip = L !== A, an = anchor.get(l) || {}, ea = (flip ? an.b : an.a) || {dy:0, n:1}, eb = (flip ? an.a : an.b) || {dy:0, n:1};
       const xa = L.x + L.w / 2, xb = R.x - R.w / 2, ya = L.y + ea.dy, yb = R.y + eb.dy, xm = (xa + xb) / 2;
       const curve = off => { const p = new Path2D(); p.moveTo(xa, ya + off); p.bezierCurveTo(xm, ya + off, xm, yb + off, xb, yb + off); return p; };
       if (w && l.state !== 'adjacent') ribbon(curve, l, w, true);
       if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? w / 2 + 4 : 0)); ctx.setLineDash([]); }
       // interface · address at each end, on the side the ribbon bends away from (two lines when one does not fit)
-      const la = flip ? [l.b_name, l.b_addr] : [l.a_name, l.a_addr], lb = flip ? [l.a_name, l.a_addr] : [l.b_name, l.b_addr], room = xb - xa - 14;
-      // the outer links of a card side keep their labels outside; a lone link: the side its ribbon bends away from
-      const sideOf = (e, bendsUp) => e.n > 1 ? (e.first ? -1 : e.last ? 1 : -1) : bendsUp ? 1 : -1;
+      const la = flip ? [l.b_name, l.b_addr] : [l.a_name, l.a_addr], lb = flip ? [l.a_name, l.a_addr] : [l.b_name, l.b_addr], room = (xb - xa) / 2 - (look ? 44 : 12);     // half the gap each: the state sits in the middle
+      // several links on a card side: each label in its slot above its ribbon; a lone link: the side its ribbon bends away from
+      const sideOf = (e, bendsUp) => e.n > 1 ? -1 : bendsUp ? 1 : -1;
       labels.push({parts:la, x:xa + 7, y:ya, align:'left', side:sideOf(ea, yb < ya - 2), w, room, dim});
       if (l.b !== 'internet') labels.push({parts:lb, x:xb - 7, y:yb, align:'right', side:eb.n > 1 ? sideOf(eb, false) : (ya > yb + 2 ? -1 : 1), w, room, dim});
-      if (look) pill(look[1], xm, (ya + yb) / 2, look[0]);
+      if (look) pills.push([look[1], xm, (ya + yb) / 2, look[0], dim]);
       ctx.globalAlpha = 1;
       const hit = new Path2D(); hit.moveTo(xa, ya); hit.bezierCurveTo(xm, ya, xm, yb, xb, yb);
       shapes.push({stroke:hit, sw:Math.max(12, w + 6), l, tip:tipOf(l)});
@@ -1116,6 +1148,8 @@ function createTopoMap(host, opts){
       ctx.globalAlpha = lb.dim ? .2 : 1; ctx.fillStyle = 'rgba(9,18,44,.82)'; ctx.fill(rr(x0, top - 2, tw + 8, th + 4, 5));
       ctx.textAlign = lb.align; rows.forEach(([t, f, col], k) => { ctx.font = f; ctx.fillStyle = col; ctx.fillText(t, lb.x, top + 6.5 + 13 * k); }); ctx.globalAlpha = 1;
     }
+    for (const [t, x, y, c, d] of pills) { ctx.globalAlpha = d ? .15 : 1; pill(t, x, y, c); }     // the link states over the labels
+    ctx.globalAlpha = 1;
     if (cloud) {
       const cp = cloudPath(cloud), wl = data.links.filter(l => l.b === 'internet' && pos.has(l.a));
       const dim = onPath && !onPath.has('internet'), on = hover && hover.cloud;
