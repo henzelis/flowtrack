@@ -3,6 +3,18 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Filter by network.** `ip:172.16.0.0/24` keeps the inside hosts of that network on every page (what they send and
+  what they receive, as a host filter does), `dst:203.0.113.0/24` the outside addresses, `-ip:10.10.0.0/16` leaves a
+  network out; several networks and hosts of one key mean any of them; IPv6 too (`ip:2001:db8:1::/64`). A network
+  typed alone (`172.16.0.0/24`) is taken as inside or outside by its addresses. The chip says "network". Events
+  follow it. A host's panel has "The whole network /24".
+- **The search box guides.** A click in it opens every filter with what it does and an example; typing suggests
+  what the word can be (`ser` → `service:`, `dir:` → up / down / internal, `device:` → the devices, an address →
+  inside host or outside address), ↑ ↓ to pick, Enter or Tab to take. A wrong value (`ip:10.0.0.300/24`, a /33)
+  says why and is not applied.
+
 ## 1.8.5 — 2026-10-15
 
 - **Waiting that shows the work.** A page that waits for the database no longer says only "Loading…":

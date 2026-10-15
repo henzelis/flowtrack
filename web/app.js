@@ -2882,10 +2882,11 @@ async function openHost(ip){
     <div><h4>${T('Services')}</h4><div class="tagrow">${d.services.rows.map(g => `<span class="tag">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
     <div><h4>${T('Protocols')}</h4><div class="tagrow">${d.ports.rows.map(g => `<span class="tag mono">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
     <div><h4>${T('Where it goes')}</h4><div class="blist">${d.dests.rows.map(g => `<div class="brow" style="cursor:default"><span class="n"><span class="idot ext"></span>${esc(g.k)} <span class="nat">${esc([g.service, g.city || ccName(g.country)].filter(Boolean).join(' · '))}</span></span><span class="t">${fmtB(tot(g))}</span><span class="p"></span></div>`).join('')}</div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="dfilter">${T('Filter everything by this host')}</button></div>`;
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="dfilter">${T('Filter everything by this host')}</button>${netOf(ip) ? `<button class="btn" id="dnet" title="${esc(netOf(ip))}">${T('The whole network {net}', {net:'/' + netOf(ip).split('/')[1]})}</button>` : ''}</div>`;
   const before = charts.length; trendChart(document.getElementById('cHost'), d.series, true); hc = charts[before];
   document.getElementById('dx').onclick = close;
   document.getElementById('dfilter').onclick = () => { close(); addFilter('ip', ip); };
+  const dn = document.getElementById('dnet'); if (dn) dn.onclick = () => { close(); addFilter(d.host.private ? 'ip' : 'dst', netOf(ip)); };
   document.getElementById('dx').focus();
 }
 
@@ -2897,7 +2898,7 @@ function renderShell(){
   // on narrow screens the menu is a scrolling row: keep the current page in sight
   const cur = document.querySelector('#nav [aria-current="page"]'), navEl = document.getElementById('nav');
   if (cur && navEl.scrollWidth > navEl.clientWidth) navEl.scrollLeft += cur.getBoundingClientRect().left - navEl.getBoundingClientRect().left - (navEl.clientWidth - cur.offsetWidth) / 2;
-  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${FILTER_LABEL[f.k] || f.k}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter')}" data-i="${i}">×</button></span>`).join('')
+  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${chipKey(f)}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter')}" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
@@ -2973,21 +2974,131 @@ function openPeriod(){
 function periodOutside(e){ const el = document.getElementById('periodPop'); if (el && !el.contains(e.target)) closePeriod(); }
 function closePeriod(){ const el = document.getElementById('periodPop'); if (el) el.remove(); document.removeEventListener('mousedown', periodOutside); }
 document.getElementById('trafSel').onchange = e => { state.traffic = e.target.value; state.sel = null; render(); };
+// ===================== the search box: filters typed, with a guide (1.8.6) =====================
+// Typed: key:value (-key:value leaves out), or a bare value whose kind is guessed (an address, a network, AS…, a
+// country code, else a service). On focus a panel lists every filter with an example; while typing it suggests what
+// the word can be (↑ ↓ to pick, Enter or Tab to take) and says what is wrong with a value before it is applied.
 const q = document.getElementById('q');
+const QHELP = () => [
+  [T('Who'), [['ip', T('inside host or network'), '10.0.0.5 · 172.16.0.0/24'], ['dst', T('outside address or network'), '8.8.8.8 · 203.0.113.0/24'],
+    ['asn', T('network owner: AS number or name'), 'AS15169 · Google'], ['country', T('country: two letters'), 'US · UA'], ['city', T('city'), 'Kyiv']]],
+  [T('What'), [['service', T('service by address'), 'Telegram · YouTube'], ['l7', T('protocol by port'), 'HTTPS · DNS'], ['port', T('port of the server'), '443 · 3389'],
+    ['proto', T('L4 protocol number'), T('6 = TCP · 17 = UDP · 1 = ICMP')]]],
+  [T('Where'), [['device', T('device: name or address'), (META.devices && META.devices[0] || {}).name || 'fw-main'], ['iface', T('interface number, in or out'), '5'],
+    ['in_if', T('input interface number'), '5'], ['out_if', T('output interface number'), '1'], ['dir', T('direction: up · down · internal'), 'up']]]];
+const QKEY_INFO = () => Object.fromEntries(QHELP().flatMap(([, rows]) => rows.map(r => [r[0], r])));
+const isPrivate = v => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|f[cd][0-9a-f]{2}:)/i.test(v);
+// an address or a network as typed -> {ok, v (normalised), net, msg}
+function addrCheck(v){
+  const [a, pre, more] = v.split('/');
+  if (more !== undefined) return {ok:false, msg:T('Not an address or network: {v}', {v})};
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(a)) {
+    const o = a.split('.').map(Number); if (o.some(x => x > 255)) return {ok:false, msg:T('Not an address or network: {v}', {v})};
+    if (pre === undefined) return {ok:true, v:a};
+    if (!/^\d{1,2}$/.test(pre) || +pre > 32) return {ok:false, msg:T('A network mask is /0 … /32: {v}', {v})};
+    const n = ((o[0] << 24) >>> 0) + (o[1] << 16) + (o[2] << 8) + o[3], m = +pre ? (0xffffffff << (32 - pre)) >>> 0 : 0, b = (n & m) >>> 0;
+    const net = [b >>> 24, (b >>> 16) & 255, (b >>> 8) & 255, b & 255].join('.') + '/' + pre;
+    return {ok:true, v:net, net:true, size:2 ** (32 - pre)};
+  }
+  if (a.includes(':') && /^[0-9a-f:.]+$/i.test(a) && (a.match(/::/g) || []).length <= 1) {
+    if (pre === undefined) return {ok:true, v:a.toLowerCase()};
+    if (!/^\d{1,3}$/.test(pre) || +pre > 128) return {ok:false, msg:T('A network mask is /0 … /128: {v}', {v})};
+    return {ok:true, v:a.toLowerCase() + '/' + pre, net:true};
+  }
+  return {ok:false, msg:T('Not an address or network: {v}', {v})};
+}
+const netOf = ip => { const c = addrCheck(ip + (ip.includes(':') ? '/64' : '/24')); return c.ok ? c.v : ''; };
+const chipKey = f => (f.k === 'ip' || f.k === 'dst') && String(f.v).includes('/') ? (f.k === 'ip' ? T('network') : T('ext. network')) : FILTER_LABEL[f.k] || f.k;
+// one typed word -> a filter, or an error to show
+function qParse(t){
+  const neg = t.startsWith('-'); if (neg) t = t.slice(1); const i = t.indexOf(':');
+  const key = i > 0 ? t.slice(0, i).toLowerCase() : '';
+  if (key && FILTER_KEYS.includes(key) && t.slice(i + 1)) { let v = t.slice(i + 1);
+    if (key === 'device') { const d = (META.devices || []).find(x => x.ip === v || (x.name || '').toLowerCase() === v.toLowerCase()); if (d) v = d.ip; }   // by name too
+    if (key === 'ip' || key === 'dst') { const c = addrCheck(v); if (!c.ok) return {err:c.msg}; v = c.v; }
+    if (['port', 'proto', 'in_if', 'out_if', 'iface'].includes(key) && !/^\d+$/.test(v)) return {err:T('{key} takes a number: {v}', {key, v})};
+    return {f:{k:key, v, neg}}; }
+  if (/^[\d.]+(\/\d+)?$/.test(t) && t.split('.').length === 4 || /^[0-9a-f]*:[0-9a-f:.]*(\/\d+)?$/i.test(t) && !FILTER_KEYS.includes(key)) { const c = addrCheck(t); if (!c.ok) return {err:c.msg};
+    return {f:{k:isPrivate(c.v) ? 'ip' : 'dst', v:c.v, neg}}; }
+  if (/^AS\d+$/i.test(t)) return {f:{k:'asn', v:t, neg}};
+  if (/^[A-Za-z]{2}$/.test(t)) return {f:{k:'country', v:t.toUpperCase(), neg}};
+  return t ? {f:{k:'service', v:t, neg}} : {};
+}
+function qApply(){
+  const bad = []; let n = 0;
+  for (const t of q.value.trim().split(/\s+/).filter(Boolean)) { const r = qParse(t); if (r.err) bad.push(t); else if (r.f) { putFilter(r.f, true); n++; } }
+  q.value = bad.join(' ');            // what could not be applied stays, with the reason in the guide
+  if (n) render();
+  if (n && !bad.length) qBox.hidden = true; else qGuide();      // applied: the page shows again; a click or a key brings the guide back
+}
+// the guide under the search box
+let qSel = -1, qItems = [];
+const qBox = (() => { const el = document.createElement('div'); el.id = 'qGuide'; el.className = 'qguide'; el.hidden = true; el.setAttribute('role', 'listbox');
+  q.closest('.search').append(el); q.setAttribute('aria-controls', 'qGuide'); q.setAttribute('aria-autocomplete', 'list');
+  el.addEventListener('mousedown', e => e.preventDefault());        // keep the focus in the box
+  el.addEventListener('click', e => { const b = e.target.closest('[data-qi]'); if (b) qTake(qItems[+b.dataset.qi]); });
+  return el; })();
+function qWord(){ const m = q.value.match(/(\S*)$/); return m ? m[1] : ''; }
+function qSuggest(word){
+  const neg = word.startsWith('-'), w = neg ? word.slice(1) : word, pre = neg ? '-' : '', info = QKEY_INFO(), out = [];
+  const i = w.indexOf(':'), key = i > 0 ? w.slice(0, i).toLowerCase() : '', val = i > 0 ? w.slice(i + 1) : '';
+  if (key && info[key]) {                               // key typed: its help and values
+    if (key === 'device') (META.devices || []).filter(d => !val || (d.name || '').toLowerCase().includes(val.toLowerCase()) || d.ip.startsWith(val)).slice(0, 6)
+      .forEach(d => out.push({text:`${pre}device:${d.name}`, label:d.name, note:d.ip, apply:true}));
+    else if (key === 'dir') [['up', T('to the internet')], ['down', T('from the internet')], ['internal', T('between inside hosts')]].filter(([v]) => v.startsWith(val))
+      .forEach(([v, l]) => out.push({text:`${pre}dir:${v}`, label:`dir:${v}`, note:l, apply:true}));
+    else if (key === 'proto') [['6', 'TCP'], ['17', 'UDP'], ['1', 'ICMP'], ['47', 'GRE'], ['50', 'ESP']].filter(([v]) => v.startsWith(val))
+      .forEach(([v, l]) => out.push({text:`${pre}proto:${v}`, label:`proto:${v}`, note:l, apply:true}));
+    else if (val) { const r = qParse(word); if (r.err) out.push({err:r.err});
+      else if (r.f) out.push({text:word, label:`${pre}${key}:${r.f.v}`, note:r.f.v.includes('/') ? T('network') + (addrCheck(r.f.v).size ? ' · ' + T('{n} addresses', {n:addrCheck(r.f.v).size.toLocaleString(LOC)}) : '') : info[key][1], apply:true}); }
+    if (!val) out.push({text:'', label:`${key}:`, note:`${info[key][1]} · ${T('e.g.')} ${info[key][2]}`, hint:true});
+    return out;
+  }
+  if (!w) return null;                                  // empty: the whole guide
+  Object.keys(info).filter(k => k.startsWith(w.toLowerCase()) && k !== w.toLowerCase()).forEach(k => out.push({text:`${pre}${k}:`, label:`${pre}${k}:`, note:info[k][1], key:true}));
+  const r = qParse(word);
+  if (r.err) out.push({err:r.err});
+  else if (r.f) {
+    const addr = r.f.k === 'ip' || r.f.k === 'dst', alt = addr ? (r.f.k === 'ip' ? 'dst' : 'ip') : null;
+    const note = f => f.v.includes('/') ? (f.k === 'ip' ? T('inside network') : T('outside network')) : info[f.k][1];
+    out.push({text:`${pre}${r.f.k}:${r.f.v}`, label:`${pre}${r.f.k}:${r.f.v}`, note:note(r.f), apply:true});
+    if (alt) out.push({text:`${pre}${alt}:${r.f.v}`, label:`${pre}${alt}:${r.f.v}`, note:note({k:alt, v:r.f.v}), apply:true});
+    if (r.f.k === 'service') { (META.devices || []).filter(d => (d.name || '').toLowerCase().includes(w.toLowerCase())).slice(0, 3).forEach(d => out.push({text:`${pre}device:${d.name}`, label:`${pre}device:${d.name}`, note:T('device'), apply:true}));
+      ['l7', 'city', 'asn'].forEach(k => out.push({text:`${pre}${k}:${w}`, label:`${pre}${k}:${w}`, note:info[k][1], apply:true})); }
+  }
+  return out;
+}
+function qGuide(){
+  if (document.activeElement !== q) { qBox.hidden = true; return; }
+  const word = qWord(), list = qSuggest(word);
+  qItems = []; let html = '';
+  if (list === null) {                                  // the whole guide
+    html = `<div class="qgrid">${QHELP().map(([g, rows]) => `<div><h5>${g}</h5>${rows.map(([k, d, ex]) => { qItems.push({text:`${k}:`, key:true});
+      return `<button type="button" class="qrow" data-qi="${qItems.length - 1}" role="option"><code>${k}:</code><span>${d}<small>${esc(ex)}</small></span></button>`; }).join('')}</div>`).join('')}</div>
+      <p class="qtips">${T('<b>-</b>key:value leaves out · two values of one key: either of them · <b>Enter</b> applies · <b>Backspace</b> in an empty box removes the last filter · <b>/</b> opens the search')}</p>`;
+  } else if (!list.length) { qBox.hidden = true; return; }
+  else html = list.map(it => { if (it.err) return `<div class="qerr" role="alert">${esc(it.err)}</div>`;
+    qItems.push(it); return `<button type="button" class="qrow${it.hint ? ' hint' : ''}" data-qi="${qItems.length - 1}" role="option"><code>${esc(it.label)}</code><span>${esc(it.note || '')}</span></button>`; }).join('');
+  qBox.innerHTML = html; qBox.hidden = false; qSel = Math.min(qSel, qItems.length - 1); qMark();
+}
+function qMark(){ qBox.querySelectorAll('[data-qi]').forEach(b => { const on = +b.dataset.qi === qSel; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); if (on) b.scrollIntoView({block:'nearest'}); }); }
+function qTake(it){
+  if (!it) return;
+  if (it.hint) { q.focus(); return; }
+  q.value = q.value.replace(/(\S*)$/, it.text); qSel = -1;
+  if (it.apply) qApply(); else { q.focus(); qGuide(); }
+}
+q.addEventListener('focus', () => { qSel = -1; qGuide(); });
+q.addEventListener('click', () => { if (qBox.hidden) qGuide(); });
+q.addEventListener('blur', () => { qBox.hidden = true; });
+q.addEventListener('input', () => { qSel = -1; qGuide(); });
 q.addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    for (let t of q.value.trim().split(/\s+/).filter(Boolean)) {
-      const neg = t.startsWith('-'); if (neg) t = t.slice(1); const i = t.indexOf(':');
-      if (i > 0 && FILTER_KEYS.includes(t.slice(0, i).toLowerCase()) && t.slice(i + 1)) { const k = t.slice(0, i).toLowerCase(); let v = t.slice(i + 1);
-        if (k === 'device') { const d = META.devices.find(x => x.ip === v || (x.name || '').toLowerCase() === v.toLowerCase()); if (d) v = d.ip; }   // by name too
-        putFilter({k, v, neg}, true); }
-      else if (/^[\d.]+$/.test(t) && t.split('.').length === 4) putFilter({k:/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(t) ? 'ip' : 'dst', v:t, neg}, true);
-      else if (/^AS\d+$/i.test(t)) putFilter({k:'asn', v:t, neg}, true);
-      else if (/^[A-Za-z]{2}$/.test(t)) putFilter({k:'country', v:t.toUpperCase(), neg}, true);
-      else if (t) putFilter({k:'service', v:t, neg}, true);
-    }
-    q.value = ''; render();
-  } else if (e.key === 'Backspace' && !q.value && state.filters.length) { state.filters.pop(); render(); }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (qBox.hidden || !qItems.length) return; e.preventDefault();
+    qSel = (qSel + (e.key === 'ArrowDown' ? 1 : qItems.length - 1 + (qSel < 0 ? 1 : 0))) % qItems.length; qMark(); }
+  else if (e.key === 'Tab' && !qBox.hidden && qItems.length && qWord()) { e.preventDefault(); qTake(qItems[Math.max(0, qSel)]); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (qSel >= 0 && !qBox.hidden) qTake(qItems[qSel]); else qApply(); }
+  else if (e.key === 'Escape') { qBox.hidden = true; q.blur(); }
+  else if (e.key === 'Backspace' && !q.value && state.filters.length) { state.filters.pop(); render(); }
 });
 document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== q && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); } });
 document.getElementById('bell').onclick = () => { state.view = 'threats'; render(); };

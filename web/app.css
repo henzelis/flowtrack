@@ -573,3 +573,18 @@ table.pntbl tr.pnedit td{background:rgba(47,123,255,.08)}
 .seg.evsub{margin-bottom:14px;flex-wrap:wrap}
 .form.rtadd .pnhint{grid-column:1/-1;margin:0}
 @media (max-width:700px){.form.rtadd{grid-template-columns:1fr !important}}
+/* (1.8.6) the search box guide: every filter with an example; suggestions for the word being typed */
+.search{position:relative}
+.qguide{position:absolute;left:0;top:calc(100% + 6px);z-index:60;width:max(100%,min(900px,calc(100vw - 300px)));max-height:min(72vh,600px);overflow-y:auto;padding:12px;border-radius:14px;background:#0B1736;border:1px solid var(--edge-hi);box-shadow:0 18px 48px rgba(0,0,0,.6)}
+.qgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px 14px}
+.qgrid h5{margin:4px 8px 4px;font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--ink3)}
+.qrow{all:unset;box-sizing:border-box;cursor:pointer;display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:baseline;width:100%;padding:6px 8px;border-radius:8px;font-size:12.5px;color:var(--ink2)}
+.qrow code{font:600 12.5px var(--f-mono);color:var(--blue-hi);white-space:nowrap}
+.qrow span{min-width:0}
+.qrow small{display:block;font:11px var(--f-mono);color:var(--ink3)}
+.qrow:hover,.qrow.on{background:rgba(47,123,255,.18);color:var(--ink)}
+.qrow.hint{cursor:default}
+.qtips{margin:8px 8px 2px;padding-top:8px;border-top:1px solid var(--hair);font-size:11.5px;color:var(--ink3);line-height:1.6}
+.qtips b{color:var(--ink2);font-family:var(--f-mono)}
+.qerr{padding:7px 9px;font-size:12.5px;color:var(--crit)}
+@media (max-width:860px){.qgrid{grid-template-columns:1fr}.qguide{width:100%}}

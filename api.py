@@ -160,7 +160,13 @@ def scope(q):
     flt = flt if isinstance(flt, list) else []
     # hosts chosen (positive `ip` filters): the records are read from their point of view (host_view), so the
     # sessions in which one of them is the server count too
+    # (1.8.6) `ip` and `dst` take a network too (172.16.0.0/24): its addresses, any of them
+    for f in flt:
+        if isinstance(f, dict) and f.get('k') in ('ip', 'dst', 'host') and '/' in str(f.get('v', '')):
+            f['v'] = net_value(f['v'])
     host = sorted({str(f.get('v', '')) for f in flt if isinstance(f, dict) and f.get('k') == 'ip' and not f.get('neg') and f.get('v')})
+    hnets = [h for h in host if '/' in h]
+    host = [h for h in host if '/' not in h]
     internal = "dir IN ('internal', 'internal_back')"
     # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
     traffic = q.get('t', ['internet'])[0]
@@ -175,7 +181,11 @@ def scope(q):
         if not isinstance(f, dict):
             continue
         k, v, neg = f.get('k'), str(f.get('v', '')), bool(f.get('neg'))
-        if k == 'ip' and neg:      # leave a host out: at either end
+        if k in ('ip', 'dst', 'host') and '/' in v:      # a network: its addresses (at either end for -ip and host)
+            one = lambda col: f'isIPAddressInRange({col}, {{f{i}:String}})'      # noqa: E731
+            cond = one('ext_ip') if k == 'dst' else f"({one('int_ip')} OR {one('ext_ip')})" if (neg or k == 'host') else one('int_ip')
+            fcols |= {'ext_ip'} if k == 'dst' else {'int_ip', 'ext_ip'} if (neg or k == 'host') else {'int_ip'}
+        elif k == 'ip' and neg:      # leave a host out: at either end
             cond = f'(int_ip = {{f{i}:String}} OR ext_ip = {{f{i}:String}})'
             fcols |= {'int_ip', 'ext_ip'}
         elif k == 'dir' and v == 'internal':
@@ -218,9 +228,10 @@ def scope(q):
         step = next((x for x in NICE_STEPS if rng / x <= 300), NICE_STEPS[-1])
     # for src(): the filters alone, the columns they use and the period ("_" params are not sent to ClickHouse)
     params['_flows'] = 'flows'
-    if host:
+    if host or hnets:
         params['hv'] = host
-        params['_flows'] = host_view(' AND '.join(where[:ntime]))
+        params.update({f'hn{j}': n for j, n in enumerate(hnets)})
+        params['_flows'] = host_view(' AND '.join(where[:ntime]), len(hnets))
         fcols.add('ext_ip')          # no rollup holds both ends: the records are read
     params.update(_filt=' AND '.join(where[ntime:]) or '1', _fcols=fcols, _step=step,
                   _t0=max(t0, params['floor']), _t1=t1 if custom else None)
@@ -230,16 +241,27 @@ def scope(q):
 DIR_HOST = rollups.DIR
 
 
-def host_view(period):
+def net_value(v):
+    """A network as typed (172.16.0.5/24 -> 172.16.0.0/24); BadRequest for one that is not."""
+    try:
+        return str(ipaddress.ip_network(str(v).strip(), strict=False))
+    except ValueError:
+        raise BadRequest(tr('not a network: {value}', value=str(v)[:50])) from None
+
+
+def host_view(period, nets=0):
     """The records of the period with the hosts {hv} (a list) on the inside side. Between inside hosts int_ip is the client:
     a session in which the host is the server (ext_ip) is turned round — int_ip / int_port = the host, ext_ip /
     ext_port = its client — and its directions swapped, so for the host too 'internal' = sent, 'internal_back' =
     received (the queries count dir IN ('up', 'internal') as sent). `turned` = 1 on those records."""
-    r = "(dir IN ('internal', 'internal_back') AND ext_ip IN {hv:Array(String)} AND int_ip NOT IN {hv:Array(String)})"
+    # one of the hosts, or (1.8.6) an address in one of the networks {hn0} … — a session inside a network keeps its sides
+    def of(x):
+        return '(' + ' OR '.join([f'{x} IN {{hv:Array(String)}}'] + [f'isIPAddressInRange({x}, {{hn{j}:String}})' for j in range(nets)]) + ')'
+    r = f"(dir IN ('internal', 'internal_back') AND {of('ext_ip')} AND NOT {of('int_ip')})"
     return (f"(SELECT * REPLACE (if({r}, ext_ip, int_ip) AS int_ip, if({r}, int_ip, ext_ip) AS ext_ip, "
             f"if({r}, ext_port, int_port) AS int_port, if({r}, int_port, ext_port) AS ext_port, "
             f"CAST(if({r}, if(dir = 'internal', 'internal_back', 'internal'), toString(dir)) AS {DIR_HOST}) AS dir), toUInt8({r}) AS turned "
-            f"FROM flows WHERE {period} AND (int_ip IN {{hv:Array(String)}} OR ext_ip IN {{hv:Array(String)}}))")     # IN: the index is used
+            f"FROM flows WHERE {period} AND ({of('int_ip')} OR {of('ext_ip')}))")     # IN: the index is used
 
 
 def src(p, cols, t0=None, t1=None, bucketed=False):
@@ -1235,13 +1257,27 @@ def _alerts_now(kinds):
 EVENT_FILTERS = ('ip', 'dst', 'host', 'device', 'country', 'asn', 'port')
 
 
+def _in_net(addr, net):
+    try:
+        return ipaddress.ip_address(str(addr).split('/')[0]) in net
+    except ValueError:
+        return False
+
+
 def _event_match(a, f):
     """Does the event `a` answer to the filter {k, v} (the negation is the caller's)? Addresses: the source, the
     target and the addresses an event lists (ports scanned on, probing sources) — `ip` and `dst` alike, because an
     event's source may be inside or outside."""
     k, v = f.get('k'), str(f.get('v', ''))
     if k in ('ip', 'dst', 'host'):
-        return v in {a.get('ip'), a.get('src'), a.get('dst')} | set(a.get('addrs') or ())
+        addrs = {a.get('ip'), a.get('src'), a.get('dst')} | set(a.get('addrs') or ())
+        if '/' in v:            # (1.8.6) a network: any of the event's addresses in it
+            try:
+                net = ipaddress.ip_network(v, strict=False)
+            except ValueError:
+                return False
+            return any(_in_net(x, net) for x in addrs if x)
+        return v in addrs
     if k == 'device':
         return v == (a.get('exporter') or a.get('device'))
     if k == 'country':
