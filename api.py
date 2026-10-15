@@ -1110,6 +1110,11 @@ def api_devices(q):
     for ip in exp:
         if ip not in seen:
             stats.append({'exporter': ip, 'version': 0, 'packets': 0, 'records': 0, 'lost': 0, 'no_template': 0, 'errors': 0, 'templates': 0, 'last': 0, 'span': 60, 'sampling_n': 0, 'dup_dropped': 0, 'dup_packets': 0})
+    try:                   # exporters the collector found to send running totals of long sessions (core 1.4.1)
+        with open(os.path.join(STATE_DIR, 'running.json')) as f:
+            running = set(json.load(f))
+    except (OSError, ValueError, TypeError):
+        running = set()
     for s in stats:
         c = exp.get(s['exporter'], {})
         names = c.get('if_names', {})
@@ -1123,6 +1128,7 @@ def api_devices(q):
                     'dup_dropped': int(s.get('dup_dropped') or 0), 'dup_packets': int(s.get('dup_packets') or 0),
                     'dup_pct': round(100 * (int(dups[s['exporter']]['n']) - int(dups[s['exporter']]['u'])) / max(1, int(dups[s['exporter']]['n'])), 2) if s['exporter'] in dups else 0,
                     'direction_field': bool(s['exporter'] in dups and int(dups[s['exporter']]['with_dir'])),
+                    'running_totals': s['exporter'] in running,
                     'sampling': f"1:{int(s['sampling_n'])}" if int(s.get('sampling_n') or 0) > 1 and int(s['last']) > cfg_changed + 120 else c.get('sampling', '1:1'),
                     'wan_ifs': c.get('wan_ifs', []), 'configured': s['exporter'] in exp,
                     'config': {k: c.get(k) for k in ('name', 'vendor', 'protocol', 'model', 'wan_ifs', 'local_if', 'public_ips', 'city', 'country', 'lat', 'lon', 'sampling', 'export_ifs')},

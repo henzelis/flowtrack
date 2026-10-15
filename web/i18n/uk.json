@@ -1157,5 +1157,7 @@
  "{t} on the server": "{t} на сервері",
  "Too much data for this period: choose a shorter period or add a filter.": "Забагато даних за цей період: виберіть коротший період або додайте фільтр.",
  "Not enough memory for this period: choose a shorter period or add a filter.": "Не вистачає пам'яті для цього періоду: виберіть коротший період або додайте фільтр.",
- "No lines from devices without a location — set Latitude and Longitude in Settings → Devices": "Ліній від пристроїв без розташування немає — вкажіть широту й довготу в Налаштування → Пристрої"
+ "No lines from devices without a location — set Latitude and Longitude in Settings → Devices": "Ліній від пристроїв без розташування немає — вкажіть широту й довготу в Налаштування → Пристрої",
+ "This device sends long sessions again at every export with all their bytes since the start (a running total). FlowTrack stores only what each session grew by since its last export.": "Цей пристрій при кожному експорті надсилає довгі сесії знову з усіма байтами від їхнього початку (наростаючий підсумок). FlowTrack зберігає лише те, на скільки сесія виросла з попереднього експорту.",
+ "running totals corrected": "наростаючі підсумки виправлено"
 }

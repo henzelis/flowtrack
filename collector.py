@@ -19,6 +19,7 @@ import struct
 import sys
 import threading
 import time
+import zlib
 from collections import deque
 from datetime import datetime, timezone
 
@@ -39,6 +40,26 @@ COUNTER_COLS = ('if_index', 'if_type', 'speed', 'direction', 'status', 'in_octet
 FORWARD = [(h, int(p)) for h, p in (x.strip().rsplit(':', 1) for x in os.environ.get('FT_FORWARD', '').split(',') if x.strip())]
 ALLOW = {x.strip() for x in os.environ.get('FT_EXPORTERS', '').split(',') if x.strip()}
 TEMPLATES_FILE = os.path.join(STATE_DIR, 'templates.json')
+# exporters found to send running totals of long sessions (ftcore, 1.4.1): {ip: first seen (unix s)}. The receiver
+# writes it when a worker finds one; the workers read it, and the receiver sends all of such an exporter's packets to
+# one worker, which then sees every export of a session.
+RUNNING_FILE = os.path.join(STATE_DIR, 'running.json')
+
+
+def load_running():
+    try:
+        with open(RUNNING_FILE) as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_running(running):
+    tmp = RUNNING_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(running, f)
+    os.replace(tmp, RUNNING_FILE)
 RCVBUF = int(os.environ.get('FT_RCVBUF', str(32 * 1024 * 1024)))   # capped by net.core.rmem_max (install.sh raises it)
 BATCH_SECONDS = 2.0
 BATCH_MAX = 20000
@@ -382,6 +403,18 @@ class Collector:
                 del self.buf[:drop]
                 self.dropped += drop
 
+    def load_running(self):
+        """Exporters known to send running totals (found by any worker, before a restart too)."""
+        try:
+            mt = os.path.getmtime(RUNNING_FILE)
+        except OSError:
+            return
+        if mt == getattr(self, 'running_mtime', None) or not hasattr(self.dec, 'set_running'):
+            return
+        self.running_mtime = mt
+        for ip in load_running():
+            self.dec.set_running(ip, True)
+
     def take_stats(self):
         """Per-exporter decoding counters since the last call, plus this worker's output state."""
         exp = {}
@@ -392,6 +425,7 @@ class Collector:
             if x['records'] or x['no_template'] or x['decode_errors'] or x['dup_dropped']:
                 e = self.exporter(ip)
                 exp[ip] = {k: x[k] for k in ('records', 'no_template', 'decode_errors', 'dup_dropped', 'templates')}
+                exp[ip].update({k: x.get(k, 0) for k in ('running', 'running_fixed', 'running_baseline')})
                 exp[ip]['sampling'] = max(x['sampling'], x['opt_sampling'] or 1, e.cfg_sampling)
         out = {'exp': exp, 'buffered': len(self.buf), 'dropped_rows': self.dropped, 'license_dropped': license_dropped}
         self.dropped = 0
@@ -454,6 +488,7 @@ class Collector:
             if self.worker == 0:            # every worker sees every template; one of them saves them
                 self.save_templates()
             self.reload_config()
+            self.load_running()
             ed = edition()                   # a license change applies without a restart (the core's limiter follows)
             self.keep_days = ed['retention_days']
             if self.rate_limited:
@@ -466,6 +501,7 @@ def worker_main(n, q, results, ppid, workers=1):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     c = Collector(worker=n, accounting=False, workers=workers)
     c.load_templates()
+    c.load_running()
     last_report = time.time()
     while True:
         try:
@@ -510,6 +546,7 @@ class Receiver:
         self.worker_state = {}
         self.rr = 0
         self.last_rx = (0, 0)
+        self.running, self.run_acc, self.run_logged = load_running(), {}, time.time()
 
     @staticmethod
     def empty_col():
@@ -547,6 +584,14 @@ class Receiver:
                     a[k] += x[k]
                 a['templates'] = max(a['templates'], x['templates'])
                 a['sampling'] = max(a['sampling'], x['sampling'])
+                if x.get('running') and ip not in self.running:
+                    self.running[ip] = int(time.time())
+                    save_running(self.running)
+                    log(f'{ip} sends running totals of long sessions (the whole session again at every export): '
+                        f'storing only their growth from now on; its packets go to one worker')
+                r = self.run_acc.setdefault(ip, [0, 0])
+                r[0] += x.get('running_fixed', 0)
+                r[1] += x.get('running_baseline', 0)
 
     def sample_socket(self):
         """Kernel counters of our socket: cumulative drops (receive buffer full) and bytes queued now."""
@@ -560,6 +605,13 @@ class Receiver:
         self.col_acc['rx_queue_peak'] = max(self.col_acc['rx_queue_peak'], rxq)
 
     def write_stats(self):
+        if time.time() - self.run_logged >= 3600:      # what the running-totals correction did in the hour
+            self.run_logged = time.time()
+            for ip, (fixed, base) in self.run_acc.items():
+                if fixed or base:
+                    log(f'{ip} running totals in the last hour: {fixed} record(s) stored as their growth, '
+                        f'{base} first sight(s) of an old session only remembered')
+            self.run_acc = {}
         for ip, x in self.acct.take().items():
             a = self.exp_acc.setdefault(ip, {'packets': 0, 'lost': 0, 'version': 0, 'records': 0, 'no_template': 0, 'dup_dropped': 0,
                                              'decode_errors': 0, 'templates': 0, 'sampling': 1})
@@ -734,6 +786,8 @@ class Receiver:
                     if shared:
                         for i in range(self.n):
                             self.pending[i].append((data, ip, i != self.rr))
+                    elif ip in self.running:             # every export of a session in one worker
+                        self.pending[zlib.crc32(ip.encode()) % self.n].append((data, ip, False))
                     else:
                         self.pending[self.rr].append((data, ip, False))
                     self.rr = (self.rr + 1) % self.n

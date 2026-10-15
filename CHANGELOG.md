@@ -3,6 +3,17 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.8.3 — 2026-10-15
+
+- Devices that send RUNNING TOTALS of long sessions (seen on a FortiGate 200F: a site-to-site tunnel exported every
+  30 minutes with all its bytes since the start — 16 TiB each time, hundreds of TiB a day that never existed) are
+  found by the collector on their own: the same session comes again with the same start and its counters never go
+  down. From then on only what a session grew by since its last export is stored, over that time. The device is
+  remembered across restarts, all its packets go to one collector worker (so every export of a session is seen),
+  and Settings → Devices marks it "running totals corrected". Devices that start a new interval at every export,
+  or whose counters go up and down, are left alone. Core 1.4.1.
+- Data stored before the upgrade is not changed.
+
 ## 1.8.2 — 2026-10-15
 
 - Path analysis opens at once on a busy network: the neighbours found in the background are shown while newer ones
