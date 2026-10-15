@@ -1542,8 +1542,7 @@ function vEventsCfg(){
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Detections'), T('on or off, the priority each event gets, and when it triggers'))}<div id="evkBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('M2 9l14-6-5 14-2-6zM9 11l7-8', T('Notifications'), T('a new event goes out once · what continues is not sent again'))}<div id="evtBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('globe', T('IP reputation'), T('public lists of malicious addresses · downloaded once a day by this server from their publishers · checked every 10 minutes, not per record'))}<div id="evrBox" class="loading"></div></section>
-    <section class="glass panel s7">${ph('dev', T('Services on our side'), T('learned from the last day: what outside addresses call'))}<div id="evsBox" class="loading"></div></section>
-    <section class="glass panel s5">${ph('list', T('Exceptions and ports'))}<div id="evxBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('Exceptions'), T('the roles of our services and ports: Settings → Flow configuration'), `<button class="lnk" id="toFlowCfg">${T('Flow configuration')} →</button>`)}<div id="evxBox" class="loading"></div></section>
     <section class="glass panel s12 evsave"><div><button class="btn primary" id="evSave">${T('Save')}</button> <button class="btn" id="evDef">${T('Restore defaults')}</button></div><p class="err" id="evErr"></p><p class="note" id="evOk" hidden>${T('Saved. The next 10-minute check uses the new settings.')}</p></section></div>`;
   const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
   const load = async () => { const [ev, nt] = await Promise.all([get('api/events/config'), get('api/notify')]); return {...ev, notify:nt}; };
@@ -1617,30 +1616,19 @@ function vEventsCfg(){
         <td><a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.title)}</a></td><td class="note">${cats[l.category] || ''}</td><td class="num mono">${l.count ? l.count.toLocaleString(LOC) : '—'}</td>
         <td>${l.error ? `<span class="pill crit" title="${esc(l.error)}">${T('failed')}</span> ` : ''}<span class="note">${l.updated ? when(l.updated) : l.on ? T('not yet — within 10 min') : ''}</span></td></tr>`).join('')}</tbody></table></div>
       <div class="form evown"><label>${T('Own list — addresses and networks you consider malicious (one per line)')}<textarea id="evOwn" rows="3" placeholder="203.0.113.66&#10;198.51.100.0/24">${esc((cfg.own_list || []).join('\n'))}</textarea></label></div>`);
-    const roles = {'':T('auto'), public:T('public — floods only'), sensitive:T('sensitive — guessing, probes'), normal:T('ordinary — scans only')};
-    box('evsBox', res.services.length ? `<div class="tw form"><table class="evs"><thead><tr><th>${T('Service')}</th><th class="num">${T('Callers / day')}</th><th>${T('Role')}</th></tr></thead><tbody>
-      ${res.services.map(s => `<tr><td class="mono">${esc(s.ep.replace('/6', ' TCP').replace('/17', ' UDP'))}</td><td class="num mono">${s.peers.toLocaleString(LOC)}</td>
-        <td><select data-ep="${esc(s.ep)}">${Object.entries(roles).map(([r, l]) => `<option value="${r}" ${(s.set ? s.role : '') === r ? 'selected' : ''}>${r ? l : `${l}: ${roles[s.role].split(' — ')[0]}`}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>
-      <p class="note">${T('Public services (web sites) get many visitors: only floods and aggressive clients count there. Sensitive ones (SSH, management, VPN) also get password guessing and the daily probe summary.')}</p>`
-      : `<div class="empty">${T('Nothing learned yet — services show up within an hour of traffic.')}</div>`);
-    box('evxBox', `<div class="form">
+    box('evxBox', `<div class="form evx">
       <label>${T('Ignore — addresses, networks, ASNs (one per line)')}<textarea id="evIgn" rows="6" placeholder="203.0.113.7&#10;198.51.100.0/24&#10;AS40934">${esc(cfg.ignore.join('\n'))}</textarea></label>
-      <label>${T('Exclude connections — one per line: up|down|any SOURCE -> TARGET:PORT (* = any)')}<textarea id="evExc" rows="4" placeholder="up 10.0.0.5 -> 203.0.113.7:443&#10;down * -> 10.0.0.9:8443">${esc((cfg.exclude || []).map(exText).join('\n'))}</textarea></label>
-      <p class="note">${T('up = what we send or call out (uploads, contacts, scans from inside); down = what arrives (scans, guessing, floods). The events of such a connection are not shown nor notified.')}</p>
-      <label>${T('Sensitive ports')}<input id="evSens" value="${esc(cfg.sensitive.join(', '))}"></label>
-      <label>${T('Public ports')}<input id="evPub" value="${esc(cfg.public.join(', '))}"></label>
-      <p class="note">${T('The role of a service listed on the left wins over these ports.')}</p></div>`);
+      <label>${T('Exclude connections — one per line: up|down|any SOURCE -> TARGET:PORT (* = any)')}<textarea id="evExc" rows="6" placeholder="up 10.0.0.5 -> 203.0.113.7:443&#10;down * -> 10.0.0.9:8443">${esc((cfg.exclude || []).map(exText).join('\n'))}</textarea></label>
+      <p class="note">${T('up = what we send or call out (uploads, contacts, scans from inside); down = what arrives (scans, guessing, floods). The events of such a connection are not shown nor notified.')}</p></div>`);
   };
   const collect = () => {
     const kinds = {};
     document.querySelectorAll('table.evk tr[data-k]').forEach(tr => { const k = {};
       tr.querySelectorAll('[data-x]').forEach(i => { k[i.dataset.x] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) : i.value; });
       kinds[tr.dataset.k] = k; });
-    const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
     const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
-    return {kinds, roles, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
-      exclude:exParse(document.getElementById('evExc').value),
-      sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value};
+    return {kinds, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
+      exclude:exParse(document.getElementById('evExc').value)};
   };
   const collectNotify = () => { const kinds = {}, email_kinds = {}, v = id => document.getElementById(id);
     document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
@@ -1650,10 +1638,11 @@ function vEventsCfg(){
         user:v('mlUser').value.trim(), password:v('mlPass').value, sender:v('mlFrom').value.trim(), to:v('mlTo').value, min_sev:v('mlSev').value, lang:v('mlLang').value},
       kinds, email_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
   const err = document.getElementById('evErr'), ok = document.getElementById('evOk');
+  document.getElementById('toFlowCfg').onclick = () => { state.setTab = 'flowcfg'; render(); };
   load().then(show).catch(e => { err.textContent = e.message; });
   document.getElementById('evSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
     try { const cfg = collect(), nt = await apiPost('notify', collectNotify()); show({...await apiPost('events/config', cfg), notify:nt}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
-  document.getElementById('evDef').onclick = async () => { if (!confirm(T('Restore the default settings of all events? Exceptions and service roles are cleared too.'))) return;
+  document.getElementById('evDef').onclick = async () => { if (!confirm(T('Restore the default settings of all events? Exceptions are cleared too.'))) return;
     err.textContent = ''; ok.hidden = true;
     try { show({...await apiPost('events/config', {}), notify:await get('api/notify')}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
 }
@@ -1870,7 +1859,7 @@ function editionBadge(){
   b.onclick = () => { state.view = 'settings'; state.setTab = 'license'; render(); };
 }
 // ===================== settings: one page, tabs on top =====================
-const SET_TABS = () => [['general', T('General'), ICO.grid], ['devices', T('Devices'), DEV_ICON],
+const SET_TABS = () => [['general', T('General'), ICO.grid], ['devices', T('Devices'), DEV_ICON], ['flowcfg', T('Flow configuration'), ICO.flow],
   ...(isAdmin() ? [['users', T('Users'), USER_ICON], ['events', T('Events'), ICO.pulse], ['backups', T('Backups'), BK_ICON]] : []), ['license', T('License'), ICO.shield]];
 function vSettings(){
   const tabs = SET_TABS(); if (!tabs.some(t => t[0] === state.setTab)) state.setTab = 'general';
@@ -1883,7 +1872,7 @@ function vSettings(){
   bar.addEventListener('keydown', e => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;   // arrow keys move between tabs
     const i = tabs.findIndex(t => t[0] === state.setTab), n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length][0];
     state.setTab = n; render(); setTimeout(() => { const b = document.querySelector(`.settabs [data-tab="${n}"]`); if (b) b.focus(); }); });
-  ({general:vGeneral, devices:vDevices, users:vUsers, events:vEventsCfg, backups:vBackups, license:vLicense})[state.setTab]();
+  ({general:vGeneral, devices:vDevices, flowcfg:vFlowCfg, users:vUsers, events:vEventsCfg, backups:vBackups, license:vLicense})[state.setTab]();
 }
 function vGeneral(){
   const ed = META.edition || {};
@@ -1896,21 +1885,110 @@ function vGeneral(){
         <div><span>${T('Edition')}</span><b>${ed.status === 'active' ? 'Pro' : 'Community'}</b><button class="lnk" id="toLic">${T('License')} →</button></div>
         <div><span>${T('Source code')}</span><a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">github.com/henzelis/flowtrack</a></div>
         <div><span>${T('Account')}</span><b class="mono">${esc(ME.name)}</b><button class="lnk" id="myPass">${T('Change my password')}</button></div>
-      </div></section>
-    <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowTrack names (e.g. TCP other) in every report'))}
-      <div class="form" id="pnBox"><div class="loading"></div></div></section></div>`;
+      </div></section></div>`;
   document.getElementById('langSel').onchange = e => { if (e.target.value !== LANG) setLang(e.target.value); };
   document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
   document.getElementById('myPass').onclick = openPassword;
-  // (1.8.3) port names: new records get them at once, stored ones (30 days) and the totals are renamed in the background
-  const pn = d => { const el = document.getElementById('pnBox'); if (!el) return; const admin = isAdmin();
-    el.innerHTML = `<label>${T('One per line: protocol/port and the name')}<textarea id="pnText" rows="5" ${admin ? '' : 'readonly'} placeholder="tcp/8443 HTTPS management&#10;udp/5000 Camera stream">${esc(d.lines.join('\n'))}</textarea></label>
+}
+// ===================== Settings → Flow configuration: how FlowTrack names and treats the traffic =====================
+// (1.8.4) own port names (a table, added with a form) and the roles of our services (from the Events tab)
+function vFlowCfg(){
+  const admin = isAdmin();
+  document.getElementById('setBody').innerHTML = `<div class="grid top">
+    <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowTrack names (e.g. TCP other) in every report'))}<div id="pnBox" class="loading"></div></section>
+    ${admin ? `<section class="glass panel s7">${ph('dev', T('Services on our side'), T('learned from the last day: what outside addresses call · the role decides which events they get'))}<div id="evsBox" class="loading"></div></section>
+    <section class="glass panel s5">${ph('shield', T('Port roles'), T('for services not listed on the left'))}<div id="prBox" class="loading"></div></section>
+    <section class="glass panel s12 evsave"><div><button class="btn primary" id="svSave">${T('Save')}</button> <button class="btn" id="svDef">${T('Restore defaults')}</button></div><p class="err" id="svErr"></p><p class="note" id="svOk" hidden>${T('Saved. The next 10-minute check uses the new settings.')}</p></section>` : ''}</div>`;
+  const PROTOS = [['tcp', 'TCP'], ['udp', 'UDP']], up = p => p.toUpperCase();
+  let items = [], known = {}, edit = null;      // edit = index of the row being changed
+  const deflt = (pr, port) => known[`${pr}/${port}`] || (port < 1024 ? `${up(pr)}/${port}` : `${up(pr)} other`);
+  const portOk = v => /^\d{1,5}$/.test(v) && +v >= 1 && +v <= 65535;
+  const save = async list => { const d = await apiPost('ports', {items:list.map(({proto, port, name}) => ({proto, port, name}))}); edit = null; draw(d); return d; };
+  const draw = d => { const el = document.getElementById('pnBox'); if (!el) return;
+    items = d.items; known = d.known || {}; el.classList.remove('loading');
+    const sel = (id, v) => `<select id="${id}" aria-label="${T('Protocol')}">${PROTOS.map(([k, l]) => `<option value="${k}" ${v === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+    const row = (it, i) => i === edit
+      ? `<tr class="pnedit"><td>${sel('pnEdP', it.proto)}</td><td><input id="pnEdN" class="mono" inputmode="numeric" maxlength="5" value="${it.port}" aria-label="${T('Port')}"></td>
+          <td><input id="pnEdT" maxlength="40" value="${esc(it.name)}" aria-label="${T('Name')}"></td><td class="note" id="pnEdD">${esc(deflt(it.proto, it.port))}</td>
+          <td class="acts"><button class="btn primary" id="pnEdOk">${T('Save')}</button> <button class="btn" id="pnEdNo">${T('Cancel')}</button></td></tr>`
+      : `<tr><td><span class="tag">${up(it.proto)}</span></td><td class="mono">${it.port}</td><td><b>${esc(it.name)}</b></td><td class="note">${esc(it.default)}</td>
+          ${admin ? `<td class="acts"><button class="btn" data-pe="${i}" ${edit !== null ? 'disabled' : ''}>${T('Edit')}</button> <button class="btn danger" data-pd="${i}" ${edit !== null ? 'disabled' : ''}>${T('Delete')}</button></td>` : ''}</tr>`;
+    el.innerHTML = `${admin ? `<form class="form pnadd" id="pnAdd" novalidate>
+        <label>${T('Protocol')}${sel('pnP', 'tcp')}</label>
+        <label>${T('Port')}<input id="pnN" class="mono" inputmode="numeric" maxlength="5" placeholder="8443" autocomplete="off"></label>
+        <label class="pnname">${T('Name')}<input id="pnT" maxlength="40" placeholder="${T('HTTPS management')}" autocomplete="off"></label>
+        <button class="btn primary" type="submit" id="pnGo">${T('Add')}</button>
+        <p class="note pnhint" id="pnHint">${T('Pick the protocol, type the port number (1–65535) and the name you want to see in the reports.')}</p></form>` : ''}
+      ${items.length ? `<div class="tw"><table class="pntbl"><thead><tr><th>${T('Protocol')}</th><th>${T('Port')}</th><th>${T('Name')}</th><th>${T('Without your name')}</th>${admin ? '<th></th>' : ''}</tr></thead>
+        <tbody>${items.map(row).join('')}</tbody></table></div>`
+        : `<div class="empty">${T('No own names yet.')}${admin ? ' ' + T('Example: TCP 8443 → HTTPS management.') : ''}</div>`}
       <p class="note">${T('New records get the name at once; the records of the last 30 days within a minute, the totals of longer periods after the current hour.')}${d.applied ? '' : ' <b>' + T('Renaming the totals…') + '</b>'}</p>
-      ${admin ? `<div><button class="btn primary" id="pnSave">${T('Save')}</button></div><p class="err" id="pnErr" hidden></p><p class="note" id="pnOk" hidden>${T('Saved.')}</p>` : ''}`;
-    const b = document.getElementById('pnSave'); if (b) b.onclick = async () => { const err = document.getElementById('pnErr'); err.hidden = true;
-      try { pn(await apiPost('ports', {text:document.getElementById('pnText').value})); document.getElementById('pnOk').hidden = false; }
-      catch (e) { err.textContent = e.message; err.hidden = false; } }; };
-  api('ports').then(pn).catch(e => fill('pnBox', errBox(e)));
+      <p class="err" id="pnErr" hidden></p>`;
+    const fail = e => { const x = document.getElementById('pnErr'); if (x) { x.textContent = e.message || e; x.hidden = false; } };
+    if (!admin) return;
+    // the add form: the button only works with a valid port and a name; the hint says what the port is called now
+    const P = document.getElementById('pnP'), N = document.getElementById('pnN'), Tt = document.getElementById('pnT'), go = document.getElementById('pnGo'), hint = document.getElementById('pnHint');
+    const check = () => { const v = N.value.trim(), pr = P.value; N.value = v.replace(/\D/g, '');
+      const ok = portOk(N.value), dup = ok && items.find(it => it.proto === pr && it.port === +N.value);
+      N.classList.toggle('bad', !!N.value && !ok);
+      go.disabled = !ok || !Tt.value.trim();
+      hint.classList.toggle('warn', !!dup || (!!N.value && !ok));
+      hint.innerHTML = !N.value ? T('Pick the protocol, type the port number (1–65535) and the name you want to see in the reports.')
+        : !ok ? T('A port is a number from 1 to 65535.')
+        : dup ? T('{p} already has the name «{name}» — adding replaces it.', {p:`${up(pr)} ${N.value}`, name:esc(dup.name)})
+        : T('Now FlowTrack calls it: {name}', {name:`<b>${esc(deflt(pr, +N.value))}</b>`}); };
+    [P, N, Tt].forEach(x => x.addEventListener('input', check)); check();
+    document.getElementById('pnAdd').onsubmit = async e => { e.preventDefault(); check(); if (go.disabled) return;
+      const it = {proto:P.value, port:+N.value, name:Tt.value.trim()};
+      try { await save([...items.filter(x => !(x.proto === it.proto && x.port === it.port)), it]); setTimeout(() => { const n = document.getElementById('pnN'); if (n) n.focus(); }); } catch (err) { fail(err); } };
+    el.querySelectorAll('[data-pe]').forEach(b => b.onclick = () => { edit = +b.dataset.pe; draw(d); const t = document.getElementById('pnEdT'); t.focus(); t.select(); });
+    el.querySelectorAll('[data-pd]').forEach(b => b.onclick = async () => { const it = items[+b.dataset.pd];
+      if (!confirm(T('Delete the name «{name}» of {p}? The port gets back the name FlowTrack gives it: {def}.', {name:it.name, p:`${up(it.proto)} ${it.port}`, def:it.default}))) return;
+      try { await save(items.filter(x => x !== it)); } catch (err) { fail(err); } });
+    if (edit !== null) {
+      const eP = document.getElementById('pnEdP'), eN = document.getElementById('pnEdN'), eT = document.getElementById('pnEdT'), ok = document.getElementById('pnEdOk');
+      const echk = () => { eN.value = eN.value.replace(/\D/g, ''); const good = portOk(eN.value), clash = good && items.some((x, i) => i !== edit && x.proto === eP.value && x.port === +eN.value);
+        eN.classList.toggle('bad', !good || clash); ok.disabled = !good || clash || !eT.value.trim();
+        document.getElementById('pnEdD').textContent = clash ? T('already named — edit that row') : good ? deflt(eP.value, +eN.value) : ''; };
+      [eP, eN, eT].forEach(x => x.addEventListener('input', echk)); echk();
+      const commit = async () => { if (ok.disabled) return; const list = items.slice(); list[edit] = {proto:eP.value, port:+eN.value, name:eT.value.trim()};
+        try { await save(list); } catch (err) { fail(err); } };
+      ok.onclick = commit; document.getElementById('pnEdNo').onclick = () => { edit = null; draw(d); };
+      [eN, eT].forEach(x => x.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { edit = null; draw(d); } }));
+    } };
+  api('ports').then(draw).catch(e => fill('pnBox', errBox(e)));
+  if (!admin) return;
+  // the roles of our services and the port lists (detections read them; saved apart from the rest of the Events tab)
+  const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
+  const show = res => { const cfg = res.config;
+    const box = (id, html) => { const el = document.getElementById(id); if (!el) return; el.classList.remove('loading'); el.innerHTML = html; };
+    const roles = {'':T('auto'), public:T('public — floods only'), sensitive:T('sensitive — guessing, probes'), normal:T('ordinary — scans only')};
+    // a busy network has hundreds of services: the busiest and the ones with a role of their own first, a search for the rest
+    const TOP = 12, many = res.services.length > TOP;
+    box('evsBox', res.services.length ? `${many ? `<div class="form svfind"><input id="svQ" type="search" placeholder="${T('Find a service: address or port')}" aria-label="${T('Find a service: address or port')}"></div>` : ''}
+      <div class="tw form"><table class="evs"><thead><tr><th>${T('Service')}</th><th class="num">${T('Callers / day')}</th><th>${T('Role')}</th></tr></thead><tbody>
+      ${res.services.map((s, i) => `<tr data-q="${esc(s.ep.toLowerCase())}" ${many && i >= TOP && !s.set ? 'hidden data-more' : ''}><td class="mono">${esc(s.ep.replace('/6', ' TCP').replace('/17', ' UDP'))}</td><td class="num mono">${s.peers.toLocaleString(LOC)}</td>
+        <td><select data-ep="${esc(s.ep)}">${Object.entries(roles).map(([r, l]) => `<option value="${r}" ${(s.set ? s.role : '') === r ? 'selected' : ''}>${r ? l : `${l}: ${roles[s.role].split(' — ')[0]}`}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>
+      ${many ? `<div class="svmore"><button class="lnk" id="svAll">${T('Show all {n} services', {n:res.services.length.toLocaleString(LOC)})}</button><span class="note" id="svNone" hidden>${T('No service matches.')}</span></div>` : ''}
+      <p class="note">${T('Public services (web sites) get many visitors: only floods and aggressive clients count there. Sensitive ones (SSH, management, VPN) also get password guessing and the daily probe summary.')}</p>`
+      : `<div class="empty">${T('Nothing learned yet — services show up within an hour of traffic.')}</div>`);
+    box('prBox', `<div class="form">
+      <label>${T('Sensitive ports')}<textarea id="evSens" rows="3" placeholder="22, 3389, 8443">${esc(cfg.sensitive.join(', '))}</textarea></label>
+      <label>${T('Public ports')}<textarea id="evPub" rows="2" placeholder="80, 443">${esc(cfg.public.join(', '))}</textarea></label>
+      <p class="note">${T('Port numbers, separated by commas.')} ${T('The role of a service listed on the left wins over these ports.')}</p></div>`);
+    const q = document.getElementById('svQ'), all = document.getElementById('svAll');
+    const filt = () => { const v = q.value.trim().toLowerCase(), showAll = all.dataset.on === '1'; let n = 0;
+      document.querySelectorAll('table.evs tbody tr').forEach(tr => { const hit = v ? tr.dataset.q.includes(v) : (showAll || !tr.hasAttribute('data-more')); tr.hidden = !hit; n += hit; });
+      document.getElementById('svNone').hidden = n > 0; all.hidden = !!v || showAll; };
+    if (q) { q.addEventListener('input', filt); all.onclick = () => { all.dataset.on = '1'; filt(); }; } };
+  const err = document.getElementById('svErr'), ok = document.getElementById('svOk');
+  get('api/events/config').then(show).catch(e => { err.textContent = e.message; });
+  document.getElementById('svSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
+    const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
+    try { show(await apiPost('events/services', {roles, sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value})); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
+  document.getElementById('svDef').onclick = async () => { if (!confirm(T('Restore the default port roles? The roles set per service are cleared too.'))) return;
+    err.textContent = ''; ok.hidden = true;
+    try { show(await apiPost('events/services', {reset:true})); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
 }
 // ===================== backups: data + settings, on a schedule, here and off the server (backup.py runs them as root) =====================
 const BK_ICON = 'M2 4h14v3H2zM3 7v8h12V7M7 10h4';

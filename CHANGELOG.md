@@ -3,6 +3,19 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- Settings → **Flow configuration**, a new tab for how FlowTrack names and treats the traffic: the port names (from
+  General) and the roles of our services with the sensitive / public ports (from Events). Events keeps detections,
+  notifications, IP reputation and exceptions; saving or resetting it no longer touches the service roles.
+- Port names are a table: add one with a form (TCP / UDP, port 1–65535, name up to 40 characters; Add works only when
+  all is right, the hint says what FlowTrack calls the port now and warns when it already has a name), change or
+  delete a row in place. The table shows what each port is called without your name. `POST /api/ports` also takes
+  `items: [{proto, port, name}]`; `GET /api/ports` returns `items` and `known`.
+- The services on our side: the 12 busiest (and those with a role of their own) are shown, a search box and "Show
+  all" for the rest — a busy network had hundreds of rows there. `POST /api/events/services` saves only the roles
+  and the port lists (`{"reset": true}` = the defaults).
+
 ## 1.8.3 — 2026-10-15
 
 - Several values of one filter: typed in the search box, `device:ROUTER-A` and then `device:ROUTER-B` show the traffic

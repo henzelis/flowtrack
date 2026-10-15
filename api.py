@@ -1306,9 +1306,28 @@ def get_events_config():
     return {'config': cfg, 'defaults': detect.defaults(), 'services': svcs, 'lists': lists}
 
 
+# (1.8.4) the roles of our services and the sensitive / public ports are set in Settings → Flow configuration:
+# saving (or resetting) the Events tab keeps them, and that tab saves only them
+SERVICE_KEYS = ('roles', 'sensitive', 'public')
+
+
 def post_events_config(body):
+    cur = detect.load_config()
     try:
-        detect.save_config(detect.validate(body))
+        detect.save_config(detect.validate({**{k: cur[k] for k in SERVICE_KEYS}, **body}))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return get_events_config()
+
+
+def post_events_services(body):
+    """Only the roles of our services and the sensitive / public ports; {'reset': true} = the defaults."""
+    if body.get('reset'):
+        d = detect.defaults()
+        body = {k: d[k] for k in SERVICE_KEYS}
+    cur = detect.load_config()
+    try:
+        detect.save_config(detect.validate({**cur, **{k: body[k] for k in SERVICE_KEYS if k in body}}))
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return get_events_config()
@@ -1375,6 +1394,10 @@ def api_ports(q):
     names = common.load_port_names()
     rev = {v: k for k, v in PROTO_BY_NAME.items()}
     return {'lines': [f"{rev.get(p, p)}/{n} {v}" for (p, n), v in sorted(names.items())],
+            # (1.8.4) the table in Settings → Flow configuration: each name with what FlowTrack calls the port without it
+            'items': [{'proto': rev.get(p, str(p)), 'port': n, 'name': v, 'default': common.default_l7(p, n)}
+                      for (p, n), v in sorted(names.items(), key=lambda x: (x[0][1], x[0][0]))],
+            'known': {f"{rev.get(p, p)}/{n}": v[0] for (p, n), v in common.PORTS.items()},
             'applied': _ports_pending() is None}
 
 
@@ -1390,6 +1413,17 @@ def post_ports(body):
     """'tcp/8443 HTTPS management' per line (also tcp:8443, 8443/tcp; a port alone = TCP) -> ports.json; the collector
     names new records at once and renames the stored ones."""
     out = {}
+    if isinstance(body.get('items'), list):     # (1.8.4) the table: [{proto: tcp|udp, port, name}]
+        lines = []
+        for it in body['items']:
+            if not isinstance(it, dict):
+                raise BadRequest('items')
+            name = ' '.join(str(it.get('name', '')).split())
+            pr = str(it.get('proto', '')).lower()
+            if pr not in PROTO_BY_NAME:
+                raise BadRequest(tr('port name: the protocol must be TCP or UDP'))
+            lines.append(f"{pr}/{it.get('port')} {name}")
+        body = {'text': '\n'.join(lines)}
     for line in str(body.get('text', '')).splitlines():
         line = line.strip()
         if not line or line.startswith('#'):
@@ -1822,6 +1856,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/events/config': lambda: post_events_config(body),
                 '/api/events/ignore': lambda: post_events_ignore(body),
                 '/api/events/exclude': lambda: post_events_exclude(body),
+                '/api/events/services': lambda: post_events_services(body),
                 '/api/ports': lambda: post_ports(body),
                 '/api/notify': lambda: post_notify(body),
                 '/api/notify/test': lambda: post_notify_test(body),
