@@ -50,6 +50,25 @@ def load_exporters():
     return merged
 
 
+UI_HOSTS = os.path.join(STATE_DIR, 'hosts.json')
+
+
+def load_host_names():
+    """(1.8.4) {ip: name} of inside hosts: /etc hosts.json (deployment) overlaid with the names set in the UI
+    (state dir); a UI entry set to null hides a deployment one."""
+    merged = {str(k): str(v) for k, v in (load_json('hosts.json', {}) or {}).items() if v}
+    try:
+        with open(UI_HOSTS) as f:
+            for ip, name in json.load(f).items():
+                if name is None:
+                    merged.pop(ip, None)
+                else:
+                    merged[ip] = str(name)
+    except (FileNotFoundError, ValueError, AttributeError):
+        pass
+    return merged
+
+
 def exporters_mtime():
     mt = []
     for p in (os.path.join(CONFIG_DIR, 'exporters.json'), UI_EXPORTERS):

@@ -102,7 +102,7 @@ class Names:
         self.reload()
 
     def reload(self):
-        self.manual = load_json('hosts.json', {})
+        self.manual = common.load_host_names()
         self.raw = load_exporters()                 # as configured (the settings forms edit this)
         self.exporters = snmp.merge(self.raw)       # + interface names / addresses from SNMP where none were entered
         self.mtime = (exporters_mtime(), snmp.data_mtime())
@@ -1309,15 +1309,74 @@ def get_events_config():
 # (1.8.4) the roles of our services and the sensitive / public ports are set in Settings → Flow configuration:
 # saving (or resetting) the Events tab keeps them, and that tab saves only them
 SERVICE_KEYS = ('roles', 'sensitive', 'public')
+# the exceptions (addresses to ignore, connections excluded) are a table saved row by row (Events → Exceptions)
+EXCEPTION_KEYS = ('ignore', 'exclude')
 
 
 def post_events_config(body):
     cur = detect.load_config()
     try:
-        detect.save_config(detect.validate({**{k: cur[k] for k in SERVICE_KEYS}, **body}))
+        detect.save_config(detect.validate({**{k: cur[k] for k in SERVICE_KEYS + EXCEPTION_KEYS}, **body}))
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return get_events_config()
+
+
+def post_events_exceptions(body):
+    """Only the addresses to ignore and the excluded connections (each list replaced when given)."""
+    cur = detect.load_config()
+    try:
+        detect.save_config(detect.validate({**cur, **{k: body[k] for k in EXCEPTION_KEYS if k in body}}))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    cfg = detect.load_config()
+    return {k: cfg[k] for k in EXCEPTION_KEYS}
+
+
+def api_host_names(q):
+    """(1.8.4) The names of inside hosts set by people: {items: [{ip, name}]}."""
+    names = common.load_host_names()
+    return {'items': [{'ip': ip, 'name': n} for ip, n in sorted(names.items(), key=lambda x: _ip_key(x[0]))]}
+
+
+def _ip_key(ip):
+    try:
+        a = ipaddress.ip_address(ip)
+        return (a.version, int(a))
+    except ValueError:
+        return (9, 0)
+
+
+def post_host_names(body):
+    """The whole table: [{ip, name}] -> STATE_DIR/hosts.json (over /etc hosts.json; one removed there = null)."""
+    items = body.get('items')
+    if not isinstance(items, list):
+        raise BadRequest('items')
+    out = {}
+    for it in items:
+        if not isinstance(it, dict):
+            raise BadRequest('items')
+        try:
+            ip = str(ipaddress.ip_address(str(it.get('ip', '')).strip()))
+        except ValueError:
+            raise BadRequest(tr('not an IP address: {value}', value=str(it.get('ip', ''))[:60])) from None
+        name = ' '.join(str(it.get('name', '')).split())
+        if not name:
+            raise BadRequest(tr('host name: give a name for {ip}', ip=ip))
+        if len(name) > 64:
+            raise BadRequest(tr('host name: at most 64 characters: {name}', name=name[:64] + '…'))
+        out[ip] = name
+    if len(out) > 5000:
+        raise BadRequest(tr('at most 5000 host names'))
+    base = {str(k): v for k, v in (load_json('hosts.json', {}) or {}).items() if v}
+    ui = {ip: n for ip, n in out.items() if base.get(ip) != n}
+    ui.update({ip: None for ip in base if ip not in out})
+    tmp = common.UI_HOSTS + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(ui, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, common.UI_HOSTS)
+    NAMES.reload()
+    return api_host_names({})
 
 
 def post_events_services(body):
@@ -1694,7 +1753,7 @@ class Cache:
 
 CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
-          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
+          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
@@ -1857,6 +1916,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/events/ignore': lambda: post_events_ignore(body),
                 '/api/events/exclude': lambda: post_events_exclude(body),
                 '/api/events/services': lambda: post_events_services(body),
+                '/api/events/exceptions': lambda: post_events_exceptions(body),
+                '/api/hosts/names': lambda: post_host_names(body),
                 '/api/ports': lambda: post_ports(body),
                 '/api/notify': lambda: post_notify(body),
                 '/api/notify/test': lambda: post_notify_test(body),

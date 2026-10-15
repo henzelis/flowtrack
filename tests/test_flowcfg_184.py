@@ -1,5 +1,6 @@
 """1.8.4: Settings → Flow configuration — port names as a table, the roles of our services saved apart from the
 rest of the event settings. Run: python -m unittest discover -s tests"""
+import json
 import os
 import sys
 import tempfile
@@ -63,6 +64,55 @@ class ServiceRoles(unittest.TestCase):
     def test_bad_port(self):
         with self.assertRaises(api.BadRequest):
             api.post_events_services({'sensitive': '22, 70000'})
+
+
+@mock.patch.object(api, 'get_events_config', lambda: {})
+class Exceptions(unittest.TestCase):
+    def tearDown(self):
+        if os.path.exists(detect.CONFIG):
+            os.remove(detect.CONFIG)
+
+    def test_saved_row_by_row_and_kept_by_the_events_tab(self):
+        out = api.post_events_exceptions({'ignore': ['203.0.113.7', 'as40934'],
+                                          'exclude': [{'dir': 'up', 'src': '10.0.0.5', 'dst': '', 'port': 0}]})
+        self.assertEqual(out['ignore'], ['203.0.113.7', 'AS40934'])
+        self.assertEqual(out['exclude'], [{'src': '10.0.0.5', 'dst': '', 'port': 0, 'dir': 'up'}])
+        api.post_events_exceptions({'ignore': []})                          # one list replaced, the other kept
+        api.post_events_config({'kinds': {}})                                # Save / Restore defaults on Events
+        cfg = detect.load_config()
+        self.assertEqual((cfg['ignore'], len(cfg['exclude'])), ([], 1))
+        for bad in ({'ignore': ['not-an-ip']}, {'exclude': [{'dir': 'up', 'src': '', 'dst': '', 'port': 0}]},
+                    {'exclude': [{'dir': 'up', 'src': '10.0.0.0/33', 'dst': '', 'port': 0}]}):
+            with self.assertRaises(api.BadRequest):
+                api.post_events_exceptions(bad)
+
+
+class HostNames(unittest.TestCase):
+    def setUp(self):
+        with open(os.path.join(common.CONFIG_DIR, 'hosts.json'), 'w') as f:
+            f.write('{"10.0.0.1": "router", "10.0.0.2": "old"}')
+
+    def tearDown(self):
+        for p in (common.UI_HOSTS, os.path.join(common.CONFIG_DIR, 'hosts.json')):
+            if os.path.exists(p):
+                os.remove(p)
+
+    def test_over_the_deployment_file(self):
+        self.assertEqual(api.api_host_names({})['items'], [{'ip': '10.0.0.1', 'name': 'router'}, {'ip': '10.0.0.2', 'name': 'old'}])
+        out = api.post_host_names({'items': [{'ip': '10.0.0.1', 'name': 'router'}, {'ip': '10.0.0.10', 'name': '  NAS   office '},
+                                             {'ip': '2001:db8::1', 'name': 'v6 box'}]})
+        self.assertEqual(out['items'], [{'ip': '10.0.0.1', 'name': 'router'}, {'ip': '10.0.0.10', 'name': 'NAS office'},
+                                        {'ip': '2001:db8::1', 'name': 'v6 box'}])
+        with open(common.UI_HOSTS) as f:            # only the differences are stored; 10.0.0.2 removed = null
+            self.assertEqual(json.load(f), {'10.0.0.10': 'NAS office', '2001:db8::1': 'v6 box', '10.0.0.2': None})
+        self.assertEqual(api.NAMES.get('10.0.0.10'), 'NAS office')
+        self.assertNotIn('10.0.0.2', api.NAMES.manual)
+
+    def test_bad_rows(self):
+        for bad in ({'ip': '10.0.0.0/24', 'name': 'x'}, {'ip': '10.0.0.300', 'name': 'x'}, {'ip': '10.0.0.1', 'name': ' '},
+                    {'ip': '10.0.0.1', 'name': 'x' * 65}):
+            with self.assertRaises(api.BadRequest):
+                api.post_host_names({'items': [bad]})
 
 
 if __name__ == '__main__':

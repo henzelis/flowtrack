@@ -1407,8 +1407,9 @@ function vPorts(){
   api('series', {by:'ext_port', top:7}).then(s => { const el = document.getElementById('cPorts'); if (el) stackChart(el, s, k => ':' + k, k => addFilter('port', k)); }).catch(e => fill('cPorts', errBox(e)));
   section('pTbl', async () => { const t = await api('top', {dim:'ext_port', limit:all ? 100 : 11}), rows = all ? t.rows : t.rows.slice(0, 10), max = rows.length ? tot(rows[0]) : 1;
     moreToggle('pMore', 'portsAll', all, t.rows.length > 10);
+    setTimeout(() => document.querySelectorAll('#pTbl [data-pname]').forEach(b => b.onclick = e => { e.stopPropagation(); const [pr, po] = b.dataset.pname.split('/'); openPortName(pr, +po); }));
     return `<div class="tw"><table><thead><tr><th>${T('Port')}</th><th>${T('Protocol')}</th><th>${T('Typical service')}</th><th style="width:24%">${T('Volume')}</th><th class="num">%</th><th class="num">${T('Hosts')}</th><th class="num">${T('col::Outside addresses')}</th><th class="num">Flows</th></tr></thead><tbody>
-      ${rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(dv(r.l7))}</span></td><td>${svcBadge(r.service)}</td>
+      ${rows.map(r => `<tr class="click" data-f="port" data-v="${esc(r.k)}"><td><b class="mono">${esc(r.k)}</b></td><td><span class="tag">${L4[r.proto_n] || r.proto_n} · ${esc(dv(r.l7))}</span>${isAdmin() && (+r.proto_n === 6 || +r.proto_n === 17) && +r.k > 0 ? ` <button class="btn tiny" data-pname="${+r.proto_n === 17 ? 'udp' : 'tcp'}/${esc(r.k)}" title="${T('Give this port a name of yours')}" aria-label="${T('Give this port a name of yours')}">✎</button>` : ''}</td><td>${svcBadge(r.service)}</td>
         <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,#1aa7d6,#27D3F5)"></i></div></td><td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${r.hosts}</td><td class="num mono">${fmtN(r.peers)}</td><td class="num mono">${fmtN(r.fl)}</td></tr>`).join('') || `<tr><td colspan="8"><div class="empty">${T('No data')}</div></td></tr>`}</tbody></table></div>`; });
   section('pL7', async () => { const t = await api('top', {dim:'l7', limit:8});
     setTimeout(() => { const el = document.getElementById('cPL7'); if (el) donut(el, t.rows, k => PAL[t.rows.findIndex(r => r.k === k) % PAL.length], [String(t.rows.length), T('protocols')]); });
@@ -1492,16 +1493,8 @@ function evRange(a, b){
 }
 // the filter an event's button sets: the server names it for stored events (an outside attacker is an outside
 // address), the anomalies computed from flows are about an inside host or a device
-// exclusions (1.8.3): one rule a line — direction, who opened the connection, its target and port:
-// "up 10.0.0.5 -> 203.0.113.7:443", "down * -> 10.0.0.9:8443", "any 198.51.100.0/24 -> *"
-const EX_DIRS = {up:'up', upload:'up', down:'down', download:'down', any:'any', '*':'any'};
-const exText = r => `${r.dir} ${r.src || '*'} -> ${r.dst ? (r.dst.includes(':') && !r.dst.includes('/') && r.port ? `[${r.dst}]` : r.dst) : '*'}${r.port ? ':' + r.port : ''}`;
-function exParse(text){
-  return text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(l => {
-    const m = l.match(/^(\S+)\s+(\S+)\s*->\s*(\S+)$/); if (!m || !EX_DIRS[m[1].toLowerCase()]) throw new Error(T('exclusion: write it as «up SOURCE -> TARGET:PORT»: {line}', {line:l}));
-    let t = m[3], port = 0; const pm = t.match(/^\[(.+)\]:(\d+)$/) || (t.split(':').length === 2 ? t.match(/^(.+):(\d+)$/) : null); if (pm) { t = pm[1]; port = +pm[2]; }
-    return {dir:EX_DIRS[m[1].toLowerCase()], src:m[2] === '*' ? '' : m[2], dst:t === '*' ? '' : t, port}; });
-}
+// an exclusion rule as people read it: "↑ 10.0.0.5 → 203.0.113.7:443", "↓ any → 10.0.0.9:8443"
+const exText = r => `${({up:'↑', down:'↓'})[r.dir] || '⇅'} ${r.src || T('any')} → ${r.dst ? (r.dst.includes(':') && !r.dst.includes('/') && r.port ? `[${r.dst}]` : r.dst) : T('any')}${r.port ? ':' + r.port : ''}`;
 // the rule the Exclude button of an event proposes: this source -> this target:port, in the event's direction
 const UPLOAD_KINDS = ['sustained_upload', 'inside_scan', 'lateral_scan', 'malware_contact', 'listed_contact', 'new_country', 'burst'];
 const exOf = x => (x.src || x.ip) && (x.dst || x.port) ? {dir:UPLOAD_KINDS.includes(x.kind) ? 'up' : 'down', src:x.src || x.ip, dst:x.dst || '', port:x.port || 0} : null;
@@ -1539,11 +1532,17 @@ function vThreats(){
 // Settings → Events (administrators): detections on/off, priority, thresholds; roles of our services; exceptions
 function vEventsCfg(){
   const v = document.getElementById('setBody');
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Detections'), T('on or off, the priority each event gets, and when it triggers'))}<div id="evkBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('M2 9l14-6-5 14-2-6zM9 11l7-8', T('Notifications'), T('a new event goes out once · what continues is not sent again'))}<div id="evtBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('globe', T('IP reputation'), T('public lists of malicious addresses · downloaded once a day by this server from their publishers · checked every 10 minutes, not per record'))}<div id="evrBox" class="loading"></div></section>
-    <section class="glass panel s12">${ph('list', T('Exceptions'), T('the roles of our services and ports: Settings → Flow configuration'), `<button class="lnk" id="toFlowCfg">${T('Flow configuration')} →</button>`)}<div id="evxBox" class="loading"></div></section>
-    <section class="glass panel s12 evsave"><div><button class="btn primary" id="evSave">${T('Save')}</button> <button class="btn" id="evDef">${T('Restore defaults')}</button></div><p class="err" id="evErr"></p><p class="note" id="evOk" hidden>${T('Saved. The next 10-minute check uses the new settings.')}</p></section></div>`;
+  // (1.8.4) four parts, one shown at a time; Detections, Notifications and IP reputation share Save, the exceptions
+  // are saved row by row
+  const SUBS = [['det', T('Detections')], ['notify', T('Notifications')], ['rep', T('IP reputation')], ['exc', T('Exceptions')]];
+  const sub = SUBS.some(x => x[0] === state.evSub) ? state.evSub : 'det';
+  v.innerHTML = `<div class="seg evsub" id="evSub" role="tablist" aria-label="${T('Events')}">${SUBS.map(([k, l]) => `<button type="button" role="tab" data-sub="${k}" aria-selected="${k === sub}" aria-pressed="${k === sub}">${l}</button>`).join('')}</div>
+    <div class="grid"><section class="glass panel s12" data-part="det">${ph('shield', T('Detections'), T('on or off, the priority each event gets, and when it triggers'))}<div id="evkBox" class="loading"></div></section>
+    <section class="glass panel s12" data-part="notify">${ph('M2 9l14-6-5 14-2-6zM9 11l7-8', T('Notifications'), T('a new event goes out once · what continues is not sent again'))}<div id="evtBox" class="loading"></div></section>
+    <section class="glass panel s12" data-part="rep">${ph('globe', T('IP reputation'), T('public lists of malicious addresses · downloaded once a day by this server from their publishers · checked every 10 minutes, not per record'))}<div id="evrBox" class="loading"></div></section>
+    <section class="glass panel s12" data-part="exc">${ph('M4 9h10M9 4v10', T('Exclude connections'), T('the events of a connection in one direction are neither shown nor notified — e.g. a nightly backup to a server of yours'))}<div id="excBox" class="loading"></div></section>
+    <section class="glass panel s12" data-part="exc">${ph('list', T('Ignore addresses'), T('no events at all about these addresses, networks or ASNs'), `<button class="lnk" id="toFlowCfg">${T('Roles of our services')} →</button>`)}<div id="ignBox" class="loading"></div></section>
+    <section class="glass panel s12 evsave" data-part="det notify rep"><div><button class="btn primary" id="evSave">${T('Save')}</button> <button class="btn" id="evDef">${T('Restore defaults')}</button></div><p class="err" id="evErr"></p><p class="note" id="evOk" hidden>${T('Saved. The next 10-minute check uses the new settings.')}</p></section></div>`;
   const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
   const load = async () => { const [ev, nt] = await Promise.all([get('api/events/config'), get('api/notify')]); return {...ev, notify:nt}; };
   const show = res => {
@@ -1616,10 +1615,8 @@ function vEventsCfg(){
         <td><a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.title)}</a></td><td class="note">${cats[l.category] || ''}</td><td class="num mono">${l.count ? l.count.toLocaleString(LOC) : '—'}</td>
         <td>${l.error ? `<span class="pill crit" title="${esc(l.error)}">${T('failed')}</span> ` : ''}<span class="note">${l.updated ? when(l.updated) : l.on ? T('not yet — within 10 min') : ''}</span></td></tr>`).join('')}</tbody></table></div>
       <div class="form evown"><label>${T('Own list — addresses and networks you consider malicious (one per line)')}<textarea id="evOwn" rows="3" placeholder="203.0.113.66&#10;198.51.100.0/24">${esc((cfg.own_list || []).join('\n'))}</textarea></label></div>`);
-    box('evxBox', `<div class="form evx">
-      <label>${T('Ignore — addresses, networks, ASNs (one per line)')}<textarea id="evIgn" rows="6" placeholder="203.0.113.7&#10;198.51.100.0/24&#10;AS40934">${esc(cfg.ignore.join('\n'))}</textarea></label>
-      <label>${T('Exclude connections — one per line: up|down|any SOURCE -> TARGET:PORT (* = any)')}<textarea id="evExc" rows="6" placeholder="up 10.0.0.5 -> 203.0.113.7:443&#10;down * -> 10.0.0.9:8443">${esc((cfg.exclude || []).map(exText).join('\n'))}</textarea></label>
-      <p class="note">${T('up = what we send or call out (uploads, contacts, scans from inside); down = what arrives (scans, guessing, floods). The events of such a connection are not shown nor notified.')}</p></div>`);
+    excTables(cfg);
+    mark();
   };
   const collect = () => {
     const kinds = {};
@@ -1627,8 +1624,7 @@ function vEventsCfg(){
       tr.querySelectorAll('[data-x]').forEach(i => { k[i.dataset.x] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) : i.value; });
       kinds[tr.dataset.k] = k; });
     const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
-    return {kinds, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean), ignore:document.getElementById('evIgn').value.split(/[\s,]+/).filter(Boolean),
-      exclude:exParse(document.getElementById('evExc').value)};
+    return {kinds, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean)};
   };
   const collectNotify = () => { const kinds = {}, email_kinds = {}, v = id => document.getElementById(id);
     document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
@@ -1637,6 +1633,52 @@ function vEventsCfg(){
       email:{on:v('mlOn').checked, host:v('mlHost').value.trim(), port:Number(v('mlPort').value), security:v('mlSec').value, verify:v('mlVerify').checked,
         user:v('mlUser').value.trim(), password:v('mlPass').value, sender:v('mlFrom').value.trim(), to:v('mlTo').value, min_sev:v('mlSev').value, lang:v('mlLang').value},
       kinds, email_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
+  // the parts: one at a time, remembered for the session
+  const part = k => { state.evSub = k;
+    document.querySelectorAll('#evSub [data-sub]').forEach(b => { const on = b.dataset.sub === k; b.setAttribute('aria-selected', String(on)); b.setAttribute('aria-pressed', String(on)); });
+    document.querySelectorAll('[data-part]').forEach(x => { x.hidden = !x.dataset.part.split(' ').includes(k); }); };
+  document.querySelectorAll('#evSub [data-sub]').forEach(b => b.onclick = () => part(b.dataset.sub)); part(sub);
+  // the exceptions: connections excluded in one direction, addresses ignored — tables, saved at once
+  let exc = null, ign = null;
+  const DIRS = [['up', T('Outgoing — we send or call out')], ['down', T('Incoming — arrives to us')], ['any', T('Both directions')]];
+  const dirShort = {up:'↑ ' + T('outgoing'), down:'↓ ' + T('incoming'), any:'⇅ ' + T('both')};
+  const anyCell = v => v ? `<span class="mono">${esc(v)}</span>` : `<span class="note">${T('any')}</span>`;
+  const excTables = cfg => {
+    const rows = (cfg.exclude || []).map(x => ({dir:x.dir, src:x.src || '', dst:x.dst || '', port:x.port ? String(x.port) : ''}));
+    let cur = rows;
+    const same = (a, b) => a.dir === b.dir && a.src === b.src && a.dst === b.dst && (+a.port || 0) === (+b.port || 0);
+    exc = rowTable(document.getElementById('excBox'), {id:'ex', admin:true, items:rows, cols:'minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr) 100px auto',
+      fields:[{k:'dir', label:T('Direction'), opts:DIRS}, {k:'src', label:T('Source (who opens it)'), ph:T('any'), mono:true, max:50},
+        {k:'dst', label:T('Target'), ph:T('any'), mono:true, max:50}, {k:'port', label:T('Target port'), ph:T('any'), mono:true, num:true, max:5}],
+      hint:T('A source or a target is needed: an address or a network (10.0.0.0/24); an empty field means any. Outgoing = what we send or call out (uploads, contacts, scans from inside); incoming = what arrives (scans, guessing, floods).'),
+      check:(r, at) => { const bad = [];
+        if (r.src && !addrOk(r.src, true, false)) bad.push('src');
+        if (r.dst && !addrOk(r.dst, true, false)) bad.push('dst');
+        if (r.port && !(+r.port >= 1 && +r.port <= 65535)) bad.push('port');
+        if (bad.length) return {bad, err:bad.includes('port') ? T('A port is a number from 1 to 65535.') : T('Not an address or network: {v}', {v:r[bad[0]]})};
+        if (!r.src && !r.dst) return {bad:['src', 'dst'], err:T('Give a source or a target address.')};
+        if (cur.some((x, i) => i !== at && same(x, r))) return {err:T('This rule is already in the list.')};
+        return {hint:T('Events of this connection will no longer be shown or notified.')}; },
+      show:(it, k) => k === 'dir' ? `<span class="tag">${dirShort[it.dir]}</span>` : k === 'port' ? anyCell(it.port) : anyCell(it[k]),
+      save:async list => { const r = await apiPost('events/exceptions', {exclude:list.map(x => ({dir:x.dir, src:x.src, dst:x.dst, port:+x.port || 0}))});
+        cur = r.exclude.map(x => ({dir:x.dir, src:x.src || '', dst:x.dst || '', port:x.port ? String(x.port) : ''})); return cur; },
+      delAsk:it => T('Delete the rule {rule}? Such events are shown and notified again.', {rule:exText({...it, port:+it.port || 0})}),
+      empty:T('No excluded connections. The Exclude button of an event adds its rule here.')});
+    let curI = (cfg.ignore || []).map(v => ({v}));
+    const kind = v => /^AS\d/i.test(v) ? T('ASN') : v.includes('/') ? T('network') : T('address');
+    ign = rowTable(document.getElementById('ignBox'), {id:'ig', admin:true, items:curI, cols:'minmax(0,1fr) auto',
+      fields:[{k:'v', label:T('Address, network or ASN'), ph:'203.0.113.7 · 198.51.100.0/24 · AS40934', mono:true, max:50}],
+      extraHead:T('Kind'), extra:it => kind(it.v),
+      hint:T('Their events are neither recorded nor shown — use it for your own scanners, monitoring, partners.'),
+      check:(r, at) => !addrOk(r.v, true, true) ? {bad:['v'], err:T('Not an address, network or ASN: {v}', {v:r.v})}
+        : curI.some((x, i) => i !== at && x.v.toLowerCase() === r.v.toLowerCase()) ? {err:T('Already in the list.')} : {hint:kind(r.v)},
+      show:it => `<span class="mono">${esc(it.v)}</span>`,
+      save:async list => { const r = await apiPost('events/exceptions', {ignore:list.map(x => x.v)}); curI = r.ignore.map(v => ({v})); return curI; },
+      delAsk:it => T('Stop ignoring {addr}? Its events are recorded again.', {addr:it.v}),
+      empty:T('Nothing ignored. The Ignore button of an event adds its address here.')});
+  };
+  const mark = dirtyGuard(() => { if (!document.getElementById('evOwn')) throw new Error('not drawn'); return [collect(), collectNotify()]; }), cfgDirty = state.dirty;
+  state.dirty = () => cfgDirty() || !!(exc && exc.dirty()) || !!(ign && ign.dirty());
   const err = document.getElementById('evErr'), ok = document.getElementById('evOk');
   document.getElementById('toFlowCfg').onclick = () => { state.setTab = 'flowcfg'; render(); };
   load().then(show).catch(e => { err.textContent = e.message; });
@@ -1890,17 +1932,101 @@ function vGeneral(){
   document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
   document.getElementById('myPass').onclick = openPassword;
 }
+// (1.8.4) a table of settings rows: each added with a checked form, changed or deleted in its row, saved at once.
+// o: {id, admin, fields:[{k, label, opts:[[v, label]], ph, max, mono, num, def}], cols (grid of the form), items,
+//     check(row, index of the row being changed or -1) -> {err, bad:[keys], hint, warn}, show(item, key) -> html,
+//     extraHead / extra(item) for more columns, save(list) -> Promise of the new items, delAsk(item) -> text, empty, hint}
+function rowTable(el, o){
+  let items = o.items.slice(), edit = null;
+  const F = o.fields, ID = o.id;
+  const ctl = (f, v, id) => f.opts
+    ? `<select id="${id}" aria-label="${esc(f.label)}">${f.opts.map(([k, l]) => `<option value="${esc(k)}" ${String(v) === String(k) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`
+    : `<input id="${id}" class="${f.mono ? 'mono' : ''}" ${f.num ? 'inputmode="numeric"' : ''} maxlength="${f.max || 64}" placeholder="${esc(f.ph || '')}" value="${esc(v == null ? '' : v)}" autocomplete="off" aria-label="${esc(f.label)}">`;
+  const read = pre => Object.fromEntries(F.map((f, i) => { const x = document.getElementById(pre + i); if (!x) return [f.k, ''];
+    if (f.num && x.value !== x.value.replace(/\D/g, '')) x.value = x.value.replace(/\D/g, ''); return [f.k, x.value.trim()]; }));
+  const cell = (it, f) => o.show ? o.show(it, f.k) : esc(it[f.k]);
+  const fail = e => { const x = el.querySelector('.rterr'); if (x) { x.textContent = e ? e.message || e : ''; x.hidden = !e; } };
+  const save = async list => { fail(''); try { items = await o.save(list); edit = null; draw(); return true; } catch (e) { fail(e); return false; } };
+  const draw = () => {
+    el.classList.remove('loading');
+    el.innerHTML = `${o.admin ? `<form class="form pnadd rtadd" id="${ID}Add" novalidate style="grid-template-columns:${o.cols}">
+        ${F.map((f, i) => `<label>${esc(f.label)}${ctl(f, f.def == null ? '' : f.def, ID + 'A' + i)}</label>`).join('')}
+        <button class="btn primary" type="submit" id="${ID}Go">${T('Add')}</button><p class="note pnhint" id="${ID}Hint"></p></form>` : ''}
+      ${items.length ? `<div class="tw"><table class="pntbl"><thead><tr>${F.map(f => `<th>${esc(f.label)}</th>`).join('')}${o.extraHead ? `<th>${o.extraHead}</th>` : ''}${o.admin ? '<th></th>' : ''}</tr></thead><tbody>
+        ${items.map((it, i) => i === edit
+          ? `<tr class="pnedit">${F.map((f, j) => `<td>${ctl(f, it[f.k], ID + 'E' + j)}</td>`).join('')}${o.extraHead ? `<td class="note" id="${ID}EHint"></td>` : ''}
+            <td class="acts"><button class="btn primary" id="${ID}EOk">${T('Save')}</button> <button class="btn" id="${ID}ENo">${T('Cancel')}</button></td></tr>`
+          : `<tr>${F.map(f => `<td>${cell(it, f)}</td>`).join('')}${o.extraHead ? `<td class="note">${o.extra(it)}</td>` : ''}
+            ${o.admin ? `<td class="acts"><button class="btn" data-re="${i}" ${edit !== null ? 'disabled' : ''}>${T('Edit')}</button> <button class="btn danger" data-rd="${i}" ${edit !== null ? 'disabled' : ''}>${T('Delete')}</button></td>` : ''}</tr>`).join('')}
+        </tbody></table></div>` : `<div class="empty">${o.empty}</div>`}
+      <p class="err rterr" hidden></p>`;
+    if (!o.admin) return;
+    const go = document.getElementById(ID + 'Go'), hint = document.getElementById(ID + 'Hint');
+    const check = () => { const row = read(ID + 'A'), filled = F.some(f => !f.opts && row[f.k]);
+      const r = filled ? o.check(row, -1) || {} : {};
+      F.forEach((f, i) => document.getElementById(ID + 'A' + i).classList.toggle('bad', (r.bad || []).includes(f.k)));
+      go.disabled = !filled || !!r.err || !!(r.bad || []).length;
+      hint.classList.toggle('warn', !!r.err || !!r.warn);
+      hint.innerHTML = !filled ? o.hint : r.err ? esc(r.err) : (r.hint || ''); };
+    F.forEach((f, i) => document.getElementById(ID + 'A' + i).addEventListener('input', check)); check();
+    document.getElementById(ID + 'Add').onsubmit = async e => { e.preventDefault(); check(); if (go.disabled) return;
+      const row = read(ID + 'A'), r = o.check(row, -1) || {};
+      if (await save(r.replace != null ? items.map((x, i) => i === r.replace ? row : x) : [...items, row])) { const f = document.getElementById(ID + 'A' + F.findIndex(x => !x.opts)); if (f) f.focus(); } };
+    el.querySelectorAll('[data-re]').forEach(b => b.onclick = () => { edit = +b.dataset.re; draw(); const f = document.getElementById(ID + 'E' + F.findIndex(x => !x.opts)); if (f) { f.focus(); f.select(); } });
+    el.querySelectorAll('[data-rd]').forEach(b => b.onclick = async () => { const it = items[+b.dataset.rd];
+      if (confirm(o.delAsk(it))) await save(items.filter(x => x !== it)); });
+    if (edit !== null) {
+      const ok = document.getElementById(ID + 'EOk'), eh = document.getElementById(ID + 'EHint');
+      const echk = () => { const row = read(ID + 'E'), r = o.check(row, edit) || {};
+        F.forEach((f, i) => document.getElementById(ID + 'E' + i).classList.toggle('bad', (r.bad || []).includes(f.k)));
+        ok.disabled = !!r.err || !!(r.bad || []).length; ok.title = r.err || '';
+        if (eh) eh.textContent = r.err || ''; };
+      F.forEach((f, i) => document.getElementById(ID + 'E' + i).addEventListener('input', echk)); echk();
+      const commit = () => { if (!ok.disabled) save(items.map((x, i) => i === edit ? read(ID + 'E') : x)); };
+      ok.onclick = commit; document.getElementById(ID + 'ENo').onclick = () => { edit = null; draw(); };
+      F.forEach((f, i) => document.getElementById(ID + 'E' + i).addEventListener('keydown', e => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { edit = null; draw(); } }));
+    } };
+  draw();
+  // something typed in the add form or a row being changed counts as unsaved
+  return {dirty:() => edit !== null || (o.admin && F.some((f, i) => { const x = document.getElementById(ID + 'A' + i); return x && !f.opts && x.value.trim() !== ''; }))};
+}
+// addresses as people type them: an IPv4 / IPv6 address, a network with net=true, AS<number> with asn=true
+function addrOk(v, net, asn){
+  if (asn && /^AS\d{1,10}$/i.test(v)) return true;
+  const [a, pre, extra] = v.split('/');
+  if (extra !== undefined || (pre !== undefined && (!net || !/^\d{1,3}$/.test(pre)))) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(a)) return a.split('.').every(x => +x <= 255) && (pre === undefined || +pre <= 32);
+  return a.includes(':') && /^[0-9a-f:.]+$/i.test(a) && (a.match(/::/g) || []).length <= 1 && (pre === undefined || +pre <= 128);
+}
+// (1.8.4) a name of yours for one port, from the report (Ports page): the same rules as the table in Flow configuration
+async function openPortName(proto, port){
+  let d; try { d = await api('ports'); } catch (e) { alert(e.message); return; }
+  const have = d.items.find(x => x.proto === proto && x.port === port), def = have ? have.default : (d.known[`${proto}/${port}`] || (port < 1024 ? `${proto.toUpperCase()}/${port}` : `${proto.toUpperCase()} other`));
+  const m = openModal(T('Name of {p}', {p:`${proto.toUpperCase()} ${port}`}), T('FlowTrack calls it: {name}', {name:esc(def)}), `<form class="form" id="opnForm" novalidate>
+    <label>${T('Name')}<input id="opnName" maxlength="40" value="${esc(have ? have.name : '')}" placeholder="${T('HTTPS management')}" autocomplete="off"></label>
+    <p class="note" style="margin:0">${T('New records get the name at once; the records of the last 30 days within a minute, the totals of longer periods after the current hour.')} ${T('All names: Settings → Flow configuration.')}</p>
+    <p class="err" id="opnErr" hidden></p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit" id="opnOk">${T('Save')}</button>${have ? `<button class="btn danger" type="button" id="opnDel">${T('Delete the name')}</button>` : ''}</div></form>`);
+  const inp = document.getElementById('opnName'), ok = document.getElementById('opnOk');
+  const chk = () => { ok.disabled = !inp.value.trim(); }; inp.addEventListener('input', chk); chk(); inp.focus(); inp.select();
+  const put = async list => { try { await apiPost('ports', {items:list.map(({proto, port, name}) => ({proto, port, name}))}); m.close(); render(); } catch (e) { formErr('opnErr', e.message); } };
+  const rest = d.items.filter(x => !(x.proto === proto && x.port === port));
+  document.getElementById('opnForm').onsubmit = e => { e.preventDefault(); if (!ok.disabled) put([...rest, {proto, port, name:inp.value.trim()}]); };
+  const del = document.getElementById('opnDel'); if (del) del.onclick = () => put(rest);
+}
 // ===================== Settings → Flow configuration: how FlowTrack names and treats the traffic =====================
 // (1.8.4) own port names (a table, added with a form) and the roles of our services (from the Events tab)
 function vFlowCfg(){
   const admin = isAdmin();
   document.getElementById('setBody').innerHTML = `<div class="grid top">
     <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowTrack names (e.g. TCP other) in every report'))}<div id="pnBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('dev', T('Host names'), T('your own names of the hosts in your network: shown next to their addresses everywhere, over the names from DNS'))}<div id="hnBox" class="loading"></div></section>
     ${admin ? `<section class="glass panel s7">${ph('dev', T('Services on our side'), T('learned from the last day: what outside addresses call · the role decides which events they get'))}<div id="evsBox" class="loading"></div></section>
     <section class="glass panel s5">${ph('shield', T('Port roles'), T('for services not listed on the left'))}<div id="prBox" class="loading"></div></section>
     <section class="glass panel s12 evsave"><div><button class="btn primary" id="svSave">${T('Save')}</button> <button class="btn" id="svDef">${T('Restore defaults')}</button></div><p class="err" id="svErr"></p><p class="note" id="svOk" hidden>${T('Saved. The next 10-minute check uses the new settings.')}</p></section>` : ''}</div>`;
   const PROTOS = [['tcp', 'TCP'], ['udp', 'UDP']], up = p => p.toUpperCase();
   let items = [], known = {}, edit = null;      // edit = index of the row being changed
+  const pnDirty = () => edit !== null || ['pnN', 'pnT'].some(id => { const x = document.getElementById(id); return x && x.value.trim() !== ''; });
   const deflt = (pr, port) => known[`${pr}/${port}`] || (port < 1024 ? `${up(pr)}/${port}` : `${up(pr)} other`);
   const portOk = v => /^\d{1,5}$/.test(v) && +v >= 1 && +v <= 65535;
   const save = async list => { const d = await apiPost('ports', {items:list.map(({proto, port, name}) => ({proto, port, name}))}); edit = null; draw(d); return d; };
@@ -1957,6 +2083,23 @@ function vFlowCfg(){
       [eN, eT].forEach(x => x.addEventListener('keydown', e => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { edit = null; draw(d); } }));
     } };
   api('ports').then(draw).catch(e => fill('pnBox', errBox(e)));
+  // host names: the IP of a host and the name to show
+  let hn = null;
+  api('hosts/names').then(d => { if (!document.getElementById('hnBox')) return;
+    let cur = d.items; const hnItems = () => cur;
+    hn = rowTable(document.getElementById('hnBox'), {id:'hn', admin, items:d.items, cols:'minmax(0,220px) minmax(0,1fr) auto',
+      fields:[{k:'ip', label:T('IP address'), ph:'10.0.0.15', mono:true, max:45}, {k:'name', label:T('Name'), ph:T('NAS in the office'), max:64}],
+      hint:T('Type the address of a host of yours and the name to show for it.'),
+      check:(r, at) => { const bad = [], dup = r.ip ? hnItems().findIndex((x, i) => i !== at && x.ip === r.ip) : -1;
+        if (r.ip && !addrOk(r.ip, false, false)) return {bad:['ip'], err:T('Not an IP address: {v}', {v:r.ip})};
+        if (!r.ip) bad.push('ip'); if (!r.name) bad.push('name');
+        if (at >= 0 && dup >= 0) return {bad:['ip'], err:T('This address already has a name — change that row')};
+        return {bad, replace:dup >= 0 ? dup : null, warn:dup >= 0, hint:dup >= 0 ? T('{ip} is already named «{name}» — adding replaces it.', {ip:esc(r.ip), name:esc(hnItems()[dup].name)}) : ''}; },
+      show:(it, k) => k === 'ip' ? `<span class="mono">${esc(it.ip)}</span>` : `<b>${esc(it.name)}</b>`,
+      save:async list => { const r = await apiPost('hosts/names', {items:list}); cur = r.items; return r.items; },
+      delAsk:it => T('Delete the name «{name}» of {ip}?', {name:it.name, ip:it.ip}),
+      empty:T('No own host names yet.') + (admin ? ' ' + T('Example: 10.0.0.15 → NAS in the office.') : '')});
+  }).catch(e => fill('hnBox', errBox(e)));
   if (!admin) return;
   // the roles of our services and the port lists (detections read them; saved apart from the rest of the Events tab)
   const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
@@ -1980,12 +2123,17 @@ function vFlowCfg(){
     const filt = () => { const v = q.value.trim().toLowerCase(), showAll = all.dataset.on === '1'; let n = 0;
       document.querySelectorAll('table.evs tbody tr').forEach(tr => { const hit = v ? tr.dataset.q.includes(v) : (showAll || !tr.hasAttribute('data-more')); tr.hidden = !hit; n += hit; });
       document.getElementById('svNone').hidden = n > 0; all.hidden = !!v || showAll; };
-    if (q) { q.addEventListener('input', filt); all.onclick = () => { all.dataset.on = '1'; filt(); }; } };
+    if (q) { q.addEventListener('input', filt); all.onclick = () => { all.dataset.on = '1'; filt(); }; }
+    mark(); };
+  const svCollect = () => { const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
+    const sens = document.getElementById('evSens'); if (!sens) throw new Error('not drawn');
+    return {roles, sensitive:sens.value, public:document.getElementById('evPub').value}; };
+  const mark = dirtyGuard(svCollect), svDirty = state.dirty;
+  state.dirty = () => svDirty() || pnDirty() || !!(hn && hn.dirty());
   const err = document.getElementById('svErr'), ok = document.getElementById('svOk');
   get('api/events/config').then(show).catch(e => { err.textContent = e.message; });
   document.getElementById('svSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
-    const roles = {}; document.querySelectorAll('table.evs select[data-ep]').forEach(s => { if (s.value) roles[s.dataset.ep] = s.value; });
-    try { show(await apiPost('events/services', {roles, sensitive:document.getElementById('evSens').value, public:document.getElementById('evPub').value})); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
+    try { show(await apiPost('events/services', svCollect())); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
   document.getElementById('svDef').onclick = async () => { if (!confirm(T('Restore the default port roles? The roles set per service are cleared too.'))) return;
     err.textContent = ''; ok.hidden = true;
     try { show(await apiPost('events/services', {reset:true})); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
@@ -2135,13 +2283,14 @@ function vBackups(){
       s3:{on:$('s3On').checked, endpoint:val('s3Ep'), region:val('s3Reg'), bucket:val('s3Bk'), prefix:val('s3Pre'), key_id:val('s3Key'), secret:$('s3Sec').value},
       sftp:{on:$('sfOn').checked, host:val('sfHost'), port:+$('sfPort').value || 22, user:val('sfUser'), auth:$('sfAuth').value, path:val('sfPath'), key:$('sfKey').value.trim(), password:$('sfPass').value, fingerprint:fp},
       ftp:{on:$('ftOn').checked, host:val('ftHost'), port:+$('ftPort').value || 21, tls:$('ftTls').value === 'tls', verify:$('ftVerify').checked, user:val('ftUser'), password:$('ftPass').value, path:val('ftPath')}}; };
+  const bkMark = dirtyGuard(collect);
   document.getElementById('bkSave').onclick = async () => { const a = document.getElementById('bkPass').value, b2 = document.getElementById('bkPass2').value;
     document.getElementById('bkOk').hidden = true;
     if (a !== b2) return formErr('bkErr', T('The passphrases differ'));
     formErr('bkErr', '');
     try { const r = await apiPost('backups/config', collect()); d.config = r.config; d.next = r.next;
       ['bkPass', 'bkPass2', 's3Sec', 'sfKey', 'sfPass', 'ftPass'].forEach(id => { document.getElementById(id).value = ''; });
-      forms(); draw(); document.getElementById('bkOk').hidden = false;
+      forms(); bkMark(); draw(); document.getElementById('bkOk').hidden = false;
     } catch (e) { formErr('bkErr', e.message); } };
   document.getElementById('bkNow').onclick = async () => { formErr('bkErr', '');
     try { await apiPost('backups/run', {full:document.getElementById('bkFull').checked}); d.pending = true; asked = Math.floor(Date.now() / 1000); draw(); poll(); }
@@ -2158,7 +2307,7 @@ function vBackups(){
       } catch (e) { setTimeout(tick, 5000); return; }
       polling = false; };
     setTimeout(tick, 1500); };
-  load().then(n => { if (seq !== renderSeq) return; d = n; forms(); draw(); if (busy()) poll(); })
+  load().then(n => { if (seq !== renderSeq) return; d = n; forms(); bkMark(); draw(); if (busy()) poll(); })
     .catch(e => { box('bkList', errBox(e)); box('bkDest', ''); });
   every(30000, () => { if (!polling && d) load().then(n => { if (seq === renderSeq) { d = {...n, config:d.config}; draw(); if (busy()) poll(); } }).catch(() => {}); });
 }
@@ -2579,7 +2728,18 @@ function renderShell(){
 }
 function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.view === 'settings') p.set('tab', state.setTab || 'general'); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
 function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') === 'devices' || p.get('v') === 'users') { state.view = 'settings'; state.setTab = p.get('v'); } else if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('tab')) state.setTab = p.get('tab'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
-function render(){ if (state.view === 'devices' || state.view === 'users') { state.setTab = state.view; state.view = 'settings'; } renderSeq++;
+// (1.8.4) unsaved changes: a settings form sets state.dirty; leaving it (another page, tab, filter …) asks first
+const SHOWN_KEYS = ['view', 'setTab', 'filters', 'range', 'from', 'to', 'traffic', 'prevRange'];
+let SHOWN = null;
+function dirtyGuard(collect){ let snap = null; const now = () => { try { return JSON.stringify(collect()); } catch (e) { return null; } };
+  state.dirty = () => snap !== null && now() !== null && now() !== snap;
+  return () => { snap = now(); }; }
+window.addEventListener('beforeunload', e => { if (state.dirty && state.dirty()) { e.preventDefault(); e.returnValue = ''; } });
+function render(){ if (state.view === 'devices' || state.view === 'users') { state.setTab = state.view; state.view = 'settings'; }
+  if (state.dirty && SHOWN && state.dirty()) {
+    if (!confirm(T('Leave without saving? The changes on this page are lost.'))) { SHOWN_KEYS.forEach(k => { state[k] = SHOWN[k]; }); renderShell(); saveUrl(); return; } }
+  state.dirty = null; SHOWN = Object.fromEntries(SHOWN_KEYS.map(k => [k, Array.isArray(state[k]) ? state[k].slice() : state[k]]));
+  renderSeq++;
   PAGE_ID = Math.random().toString(36).slice(2, 12);     // a new view: the server cancels what the old one still runs
   PAGE_AC.abort(); PAGE_AC = new AbortController();       // and the browser stops waiting for it
   for (const [k, v] of API_SHARED) if (!v.done) API_SHARED.delete(k);     // nor is a cancelled answer shared with it

@@ -88,10 +88,10 @@ exporters ── UDP 2055 ──▶ collector ──▶ ClickHouse ◀── API
   sustained upload, bursts, new countries and export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
   goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
-  ignored (Settings → Events). New events can go to Telegram through your own bot and by e-mail through any SMTP server (STARTTLS, SSL/TLS) —
+  ignored and a connection excluded in one direction (Settings → Events → Exceptions). New events can go to Telegram through your own bot and by e-mail through any SMTP server (STARTTLS, SSL/TLS) —
   once each, by priority and kind, per channel.
-- *Settings* — tabs for language and version, devices (exporters and interfaces), users, events, and the edition /
-  license.
+- *Settings* — tabs for language and version, devices (exporters and interfaces), flow configuration (your own names
+  of ports and hosts, the roles of your services), users, events, backups, and the edition / license.
 - Any period within the kept flow details (30 days in Community, see [Editions](#editions)): a preset, *Custom period…* (from / to, to the minute) or
   drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
   incident view can be bookmarked or shared.

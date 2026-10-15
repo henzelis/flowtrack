@@ -3,18 +3,29 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.8.4 — 2026-10-15
 
-- Settings → **Flow configuration**, a new tab for how FlowTrack names and treats the traffic: the port names (from
-  General) and the roles of our services with the sensitive / public ports (from Events). Events keeps detections,
-  notifications, IP reputation and exceptions; saving or resetting it no longer touches the service roles.
-- Port names are a table: add one with a form (TCP / UDP, port 1–65535, name up to 40 characters; Add works only when
-  all is right, the hint says what FlowTrack calls the port now and warns when it already has a name), change or
-  delete a row in place. The table shows what each port is called without your name. `POST /api/ports` also takes
-  `items: [{proto, port, name}]`; `GET /api/ports` returns `items` and `known`.
+A service release: the settings are easier to find and harder to get wrong.
+
+- Settings → **Flow configuration**, a new tab for how FlowTrack names and treats the traffic: port names (from
+  General), host names (new), the roles of our services with the sensitive / public ports (from Events).
+- **Port names** are a table: add one with a form (TCP / UDP, port 1–65535, a name up to 40 characters — Add works
+  only when everything is right; the hint says what FlowTrack calls the port now, or that it already has a name),
+  change or delete a row in place. The table shows what each port is called without your name.
+- **Name a port from the report:** on the Ports page a ✎ next to the protocol opens the same name for that port.
+- **Host names** of your network in the UI (IP → name, shown next to the address everywhere, over the names from
+  DNS). Stored in the state folder over /etc/flowtrack/hosts.json, which stays as it is.
+- Settings → **Events** in four parts — Detections, Notifications, IP reputation, Exceptions — one at a time.
+- **Exceptions** are two tables with a checked form instead of free text: excluded connections (direction, source,
+  target, port; any field empty = any) and ignored addresses, networks or ASNs. Saved row by row; the Events Save and
+  Restore defaults keep them, and the service roles.
+- **Unsaved changes:** leaving Events, Backups or Flow configuration (another tab, page or filter, closing the
+  browser tab) with changes not saved asks first.
 - The services on our side: the 12 busiest (and those with a role of their own) are shown, a search box and "Show
-  all" for the rest — a busy network had hundreds of rows there. `POST /api/events/services` saves only the roles
-  and the port lists (`{"reset": true}` = the defaults).
+  all" for the rest — a busy network had hundreds of rows there.
+- An exclusion reads "↑ 10.0.0.5 → 203.0.113.7:443" in the dialogs.
+- API: `GET/POST /api/hosts/names`, `POST /api/events/exceptions`, `POST /api/events/services`; `GET /api/ports`
+  returns `items` and `known`, `POST /api/ports` takes `items: [{proto, port, name}]`.
 
 ## 1.8.3 — 2026-10-15
 

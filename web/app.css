@@ -519,14 +519,19 @@ table.evr a{color:var(--blue-hi);font-weight:700;text-decoration:none}
 .pnhint.warn{color:var(--warn)}
 .form input.bad,table.pntbl input.bad{border-color:var(--crit)}
 table.pntbl td{vertical-align:middle}
-table.pntbl th:nth-child(1){width:110px} table.pntbl th:nth-child(2){width:110px} table.pntbl th:nth-child(4){width:22%}
+#pnBox table.pntbl th:nth-child(1){width:110px} #pnBox table.pntbl th:nth-child(2){width:110px} #pnBox table.pntbl th:nth-child(4){width:22%}
+#excBox table.pntbl th:nth-child(1){width:300px} #excBox table.pntbl th:nth-child(4){width:110px}
+#hnBox table.pntbl th:nth-child(1){width:240px}
 .form.svfind{margin-bottom:8px}
 .svmore{display:flex;gap:12px;align-items:center;margin:8px 0 0}
 table.pntbl td.acts{text-align:right;white-space:nowrap}
 table.pntbl input,table.pntbl select{border:1px solid var(--edge);border-radius:8px;padding:6px 9px;background:rgba(0,0,0,.3);font-size:13px;color:var(--ink);outline:none;width:100%;box-sizing:border-box;min-width:0}
 table.pntbl select option{background:#0c1838}
 table.pntbl tr.pnedit td{background:rgba(47,123,255,.08)}
-.form.evx{grid-template-columns:1fr 1fr}
-.form.evx .note{grid-column:2}
 @media (max-width:700px){.form.pnadd{grid-template-columns:1fr 1fr}.form.pnadd .pnname,.form.pnadd .btn{grid-column:1/-1}
-  .form.evx{grid-template-columns:1fr}.form.evx .note{grid-column:auto}}
+}
+.btn.tiny{padding:1px 7px;font-size:11.5px;border-radius:7px;vertical-align:middle}
+/* (1.8.4) Settings → Events: one part at a time */
+.seg.evsub{margin-bottom:14px;flex-wrap:wrap}
+.form.rtadd .pnhint{grid-column:1/-1;margin:0}
+@media (max-width:700px){.form.rtadd{grid-template-columns:1fr !important}}
