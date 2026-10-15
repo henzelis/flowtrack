@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.8.5 — 2026-10-15
 
 - **Waiting that shows the work.** A page that waits for the database no longer says only "Loading…":
   - *Through device* draws a sketch of the map at once — the device with its real interface names, the hosts as dots —
