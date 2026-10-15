@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Icons drawn true.** The circles of several icons were drawn with their centre one radius to the side (the
+  start point of the arc lay on the circle): Path analysis (its nodes cut by the edge), Top hosts and Add user (heads
+  beside the bodies), Geolocation (the dot off the pin's centre), the nodes of the panels. Through device connects
+  all six ports; Settings is a gear instead of a sun (brightness); the bell's clapper is round like every other line.
+
 ## 1.8.6 — 2026-10-15
 
 - **Filter by network.** `ip:172.16.0.0/24` keeps the inside hosts of that network on every page (what they send and
