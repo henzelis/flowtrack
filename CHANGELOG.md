@@ -15,6 +15,9 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **Waiting fills in.** Tables waited for show rows with bars while the data is read (they showed one cycling value),
   and the answer fills in as in the waiting mock-up: the rows settle one after another, the bars grow to their value,
   share rings fill round. Through device, Path analysis, Ports, Top hosts and every other page.
+- **Fixed: a port name added and removed within half a minute** left an empty rename waiting, and the collector
+  logged a database error about it every minute from then on. Nothing was renamed wrongly; the waiting entry is
+  cleared on upgrade.
 - **Icons drawn true.** The circles of several icons were drawn with their centre one radius to the side (the
   start point of the arc lay on the circle): Path analysis (its nodes cut by the edge), Top hosts and Add user (heads
   beside the bodies), Geolocation (the dot off the pin's centre), the nodes of the panels. Through device connects

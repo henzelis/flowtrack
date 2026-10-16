@@ -703,6 +703,9 @@ class Receiver:
                     time.sleep(30)                 # the workers take the new names within 10 s
                     want = {f'{p}/{n}': v for (p, n), v in load_port_names().items()}
                     change = {key(k): want.get(k) or default_l7(*key(k)) for k in set(want) | set(had) if want.get(k) != had.get(k)}
+                    if not change:          # named and taken back within the half minute: nothing to rename
+                        save({**st, 'names': want})
+                        continue
                     rollups.relabel_records(change)
                     pend = st.get('pending') or {'protos': [], 'labels': []}
                     pend['protos'] = sorted(set(pend['protos']) | {p for p, _ in change})
@@ -714,6 +717,9 @@ class Receiver:
                         f"{time.strftime('%H:%M', time.gmtime(pend['until'] + 600))} UTC")
                     continue
                 pend = st.get('pending')
+                if pend and not (pend.get('protos') and pend.get('labels')):     # (1.8.7) left empty by 1.8.3–1.8.6
+                    save({'names': st.get('names', {})})
+                    continue
                 if pend and time.time() >= pend['until'] + 600:
                     at = rollups.relabel_rollups(pend['protos'], pend['labels'], pend['until'], pend.get('at') or None, log)
                     if at:

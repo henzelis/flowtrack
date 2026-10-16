@@ -339,6 +339,8 @@ def relabel_rollups(protos, labels, until, at=None, log=print, stop=None):
     """Sum the rollup buckets before `until` (a full hour) that hold these L7 names (old and new) again from the
     records, newest day first — a day per DELETE, an hour per INSERT (bounded memory). -> where it stopped (unix s,
     to go on from), 0 when done. Buckets older than the records keep their names."""
+    if not protos or not labels:        # nothing to sum again (an empty IN () is an SQL error)
+        return 0
     old = ch("SELECT toUnixTimestamp(min(ts)) AS t, count() AS n FROM flows", fmt='JSON')
     if not old or not int(old[0]['n']):
         return 0
