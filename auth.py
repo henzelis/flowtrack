@@ -98,7 +98,24 @@ class Auth:
     def public(self, name):
         u = self.users[name]
         return {'name': name, 'role': u['role'], 'created': u.get('created', 0), 'last_login': u.get('last_login', 0),
-                'default_password': bool(u.get('default'))}
+                'default_password': bool(u.get('default')), 'prefs': dict(u.get('prefs') or {})}
+
+    # (1.9.0) what a user chose for themself, kept with the account (any browser): the Path analysis map view
+    PREFS = {'path_view': ('classic', 'lines', 'stars', 'metro', 'river')}
+
+    def set_prefs(self, name, prefs):
+        if not isinstance(prefs, dict):
+            raise AuthError('bad prefs')
+        with self.lock:
+            u = self.users[name]
+            cur = dict(u.get('prefs') or {})
+            for k, v in prefs.items():
+                if k not in self.PREFS or v not in self.PREFS[k]:
+                    raise AuthError(f'bad value for {k}'[:60])
+                cur[k] = v
+            u['prefs'] = cur
+            self._save_users()
+        return self.public(name)
 
     # ------------------------------------------------------------ login / sessions
     def _verify(self, name, password, ip, wrong):

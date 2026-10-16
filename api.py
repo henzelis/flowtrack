@@ -2034,6 +2034,8 @@ class H(BaseHTTPRequestHandler):
                 AUTH.logout(tok)
                 self.set_cookie('', 0)
                 return self.json(200, {'ok': True})
+            if u.path == '/api/me/prefs':        # (1.9.0) any user: their own choices
+                return self.json(200, AUTH.set_prefs(user, body.get('prefs')))
             if u.path == '/api/me/password':
                 AUTH.change_own_password(user, body.get('current'), body.get('new'), tok)
                 return self.json(200, AUTH.public(user))

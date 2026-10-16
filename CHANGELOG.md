@@ -3,8 +3,21 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.9.0 — 2026-10-16
 
+- **Path analysis comes alive: five map views.** A switch over the map: **Classic** (as before), **Lines** (the same
+  places, thin lines, the traffic running along them as light), **Stars** (the Point of View in the middle, the
+  neighbours on rings around it by hops, comets on arcs, a ring with each device's share of the traffic), **Metro**
+  (stations and lines at 0 / 45 / 90 degrees, the packets as trains — clean from across the room) and **River**
+  (columns by hops from the internet, bands as wide as their traffic with strands flowing by direction). The motion is
+  the data: each link's traffic moves the way it really goes, as dense and as fast as its rate over the last
+  2 minutes (live) or the period's average, cyan from the internet, orange to it, violet inside; gaps and links
+  without traffic stay dashed. Hover, the tooltips, a click to look from a device and the path search work in every
+  view; interface labels are placed where they overlap nothing. Light on the computer: one canvas, 30 frames a
+  second at most, the still part drawn once; nothing moves in a hidden tab or with reduced motion.
+- **Each user's own view.** A lamp marks your default view; «Make it my default» keeps it with your account, so it
+  opens the same in any browser — a wall screen can stay on Stars while a desk keeps Classic.
+- **Wall mode on Path analysis.** The full-screen button next to the title, as on the Overview.
 - **Path analysis: the internet is a compact sign.** The big cloud over the map is now the same small «Internet» pill
   as in the waiting animation; the map gets its top third back, the WAN links go up into it as before.
 

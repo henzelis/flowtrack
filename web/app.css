@@ -601,7 +601,7 @@ table.pntbl tr.pnedit td{background:rgba(47,123,255,.08)}
 section.panel.is-max{position:fixed;inset:0;z-index:70;margin:0;border-radius:0;display:flex;flex-direction:column;overflow:auto;
   background:linear-gradient(180deg,var(--bg0),var(--bg1) 55%,var(--bg2));padding:20px max(20px, env(safe-area-inset-right, 0px)) max(20px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px))}
 section.panel.is-max > .ph{flex:0 0 auto}
-section.panel.is-max > :not(.ph):not(.heronote):not(#heroOvl){flex:1 1 auto;min-height:0}
+section.panel.is-max > :where(:not(.ph):not(.heronote):not(#heroOvl)){flex:1 1 auto;min-height:0}
 section.panel.is-max > .chart{height:auto;min-height:300px}
 section.panel.is-max > .river{min-height:0}
 section.panel:fullscreen{width:100vw;height:100vh}
@@ -612,3 +612,12 @@ section.panel.is-max .donut-wrap .dl{font-size:14px}
 .maxbtn:hover,.maxbtn:focus-visible{color:var(--ink);border-color:var(--edge-hi)}
 .maxbtn:focus-visible{outline:2px solid var(--blue-hi, #4C93FF);outline-offset:1px}
 section.panel.is-max .maxbtn{color:var(--ink);border-color:var(--edge-hi)}
+/* (1.9.0) Path analysis: the map view switch; the lamp marks each user's default view */
+.netviews{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:-4px 0 10px}
+.netviews .seg button{display:inline-flex;align-items:center;gap:5px}
+.lamp{display:inline-grid;place-items:center;line-height:0;color:var(--ink3)}
+.lamp.on{color:#FFC34D;filter:drop-shadow(0 0 5px rgba(255,195,77,.75))}
+.lampbtn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;font-size:12px}
+.lampbtn[disabled]{opacity:1;cursor:default;background:rgba(255,195,77,.08);border-color:rgba(255,195,77,.35);color:var(--ink)}
+section.panel.is-max > .netviews,section.panel.is-max > .legend,section.panel.is-max > .note{flex:0 0 auto}
+section.panel.is-max > .river.netmap{flex:1 1 auto;height:auto;min-height:0}

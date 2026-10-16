@@ -1198,13 +1198,15 @@ const RED = '#FF5C7A';
 const devIcon = n => n.ip === 'internet' ? ICO.globe : DEV_ICON;
 function createTopoMap(host, opts){
   host.innerHTML = '<div class="netin"><canvas></canvas><div class="rtip" hidden></div></div>';
-  const box = host.firstChild, cv = box.querySelector('canvas'), tip = box.querySelector('.rtip'), ctx = cv.getContext('2d');
+  const box = host.firstChild, cv = box.querySelector('canvas'), tip = box.querySelector('.rtip'), main = cv.getContext('2d');
+  let ctx = main;          // (1.9.0) the live views draw their still part into a hidden canvas (ctx), then move over it
+  const mode = () => (opts.mode ? opts.mode() : 'classic'), thin = () => mode() !== 'classic';
   let W = 0, H = 0, dpr = 1, data = null, hover = null, shapes = [], centred = null, GAP = 184;
   const CW = 136, CH = 74;                // card size; GAP: room between columns for the interface labels
   const BASE = host.getBoundingClientRect().height || 560;     // the map grows taller than this when the cards need it
   // ribbon width by volume; one link end on a card side takes a slot: its label (name over address) above its ribbon
   const v = x => state.scale === 'lin' ? x : Math.sqrt(x), vol2 = l => Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in);
-  let vmax = 1; const lw = x => x > 0 ? 2 + 14 * v(x) / vmax : 0, slot = l => 40 + lw(vol2(l)), WAN_PAD = 40;
+  let vmax = 1; const lw = x => x > 0 && !thin() ? 2 + 14 * v(x) / vmax : 0, slot = l => 40 + lw(vol2(l)), WAN_PAD = 40;
   const CLW = 132, CLH = 36, UP = 84;     // (1.8.10) the internet as in the waiting sketch: a pill on top; UP: room under it for the WAN ribbons and their labels
   function size(){ const r = host.getBoundingClientRect(); H = r.height; dpr = Math.min(2, devicePixelRatio || 1); draw(); }
   const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
@@ -1264,7 +1266,14 @@ function createTopoMap(host, opts){
   }
   // the internet: a rounded pill, as in the waiting sketch (it was a big cloud)
   const cloudPath = ({x, y, w, h}) => rr(x - w / 2, y - h / 2, w, h, h / 2);
-  function draw(){
+  // (1.9.0) shared by every view: names, tooltips
+  const nmOf = d => esc(d === 'internet' ? T('Internet') : ((data && data.nodes.find(n => n.ip === d)) || {}).name || d);
+  const linkTip = l => `<b>${nmOf(l.a)} ${esc(l.a_name)} ↔ ${nmOf(l.b)} ${esc(l.b_name)}</b>${l.net ? ` <span class="nat">${esc(l.net)}</span>` : ''}<div style="color:${l.state === 'observed' ? C.ext : l.state === 'adjacent' || l.state === 'one_sided' ? C.ink2 : RED}">${LINK_STATE[l.state][0]} — ${LINK_STATE[l.state][1]}</div>`
+      + (l.b === 'internet' ? `<div>${T('to the internet')}: <b class="mono">${fmtB(l.a_out)}</b> · ${T('from it')}: <b class="mono">${fmtB(l.a_in)}</b></div>`
+        : [[l.a, l.b, l.a_out, l.b_in], [l.b, l.a, l.b_out, l.a_in]].map(([f, t, s, g]) => `<div>${nmOf(f)} → ${nmOf(t)}: <b class="mono">${fmtB(s)}</b> ${T('sent')} · <b class="mono">${fmtB(g)}</b> ${T('received')}</div>`).join(''));
+  const nodeTip = n => `<b>${nmOf(n.ip)}</b>${n.ip !== 'internet' ? ` <span class="nat">${esc(n.ip)}</span><div>${n.exporting ? T('sends NetFlow') : T('sent no NetFlow in this period')}</div>` : ''}${n.more ? `<div>${Tn(n.more, '{n} more neighbour beyond', '{n} more neighbours beyond')}</div>` : ''}${n.ip !== data.pov && n.ip !== 'internet' ? `<div class="nat">${T('Click: look from this device')}</div>` : ''}`;
+  const inetTip = () => `<b>${T('Internet')}</b>` + data.links.filter(l => l.b === 'internet').map(l => `<div>${nmOf(l.a)} <span class="mono">${esc(l.a_name)}</span>: ↗ <b class="mono">${fmtB(l.a_out)}</b> · ↘ <b class="mono">${fmtB(l.a_in)}</b></div>`).join('');
+  function drawClassic(){
     if (!H) return;
     if (!data) { W = host.clientWidth; return; }
     vmax = Math.max(1e-9, ...data.links.map(l => v(vol2(l))));
@@ -1272,13 +1281,13 @@ function createTopoMap(host, opts){
     if (!data.nodes.length) { W = host.clientWidth; H = BASE; }
     const hs = H > BASE ? H + 'px' : '';
     if (host.style.height !== hs) host.style.height = hs;     // the ResizeObserver draws again at the new height
-    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr;
+    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; sizeBg();
     if (centred !== data.pov && pos.has(data.pov)) { centred = data.pov; host.scrollLeft = Math.max(0, pos.get(data.pov).x - host.clientWidth / 2); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
     ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
     if (!data.nodes.length) { ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No device has sent data yet'), W / 2, H / 2); return; }
     const node = new Map(data.nodes.map(n => [n.ip, n])), onPath = opts.pathSet ? opts.pathSet() : null;
-    const nm = d => esc(d === 'internet' ? T('Internet') : (node.get(d) || {}).name || d);
+    const nm = nmOf;
     // a ribbon of three strands (from the internet, to the internet, internal) along a path, as one end measured it
     const ribbon = (curve, l, w, horizontal) => {
       const dirs = l.a_dir.up + l.a_dir.down + l.a_dir.internal >= ((l.b_dir || {}).up || 0) + ((l.b_dir || {}).down || 0) + ((l.b_dir || {}).internal || 0) ? l.a_dir : l.b_dir;
@@ -1292,9 +1301,7 @@ function createTopoMap(host, opts){
       ctx.fillStyle = 'rgba(8,16,40,.92)'; ctx.fill(rr(x - tw / 2, y - 9, tw, 18, 9)); ctx.strokeStyle = hexA(colr, .6); ctx.lineWidth = 1; ctx.stroke(rr(x - tw / 2, y - 9, tw, 18, 9));
       ctx.fillStyle = colr; ctx.textAlign = 'center'; ctx.fillText(text, x, y + .5); };
     const stateLook = l => l.state === 'adjacent' ? ['rgba(170,190,230,.55)', T('no traffic')] : l.state === 'gap' || l.state === 'unobserved' ? [RED, '⨯ ' + LINK_STATE[l.state][0]] : null;
-    const tipOf = l => `<b>${nm(l.a)} ${esc(l.a_name)} ↔ ${nm(l.b)} ${esc(l.b_name)}</b>${l.net ? ` <span class="nat">${esc(l.net)}</span>` : ''}<div style="color:${l.state === 'observed' ? C.ext : l.state === 'adjacent' || l.state === 'one_sided' ? C.ink2 : RED}">${LINK_STATE[l.state][0]} — ${LINK_STATE[l.state][1]}</div>`
-      + (l.b === 'internet' ? `<div>${T('to the internet')}: <b class="mono">${fmtB(l.a_out)}</b> · ${T('from it')}: <b class="mono">${fmtB(l.a_in)}</b></div>`
-        : [[l.a, l.b, l.a_out, l.b_in], [l.b, l.a, l.b_out, l.a_in]].map(([f, t, s, g]) => `<div>${nm(f)} → ${nm(t)}: <b class="mono">${fmtB(s)}</b> ${T('sent')} · <b class="mono">${fmtB(g)}</b> ${T('received')}</div>`).join(''));
+    const tipOf = linkTip;
     // where each link meets a card: the links on one side of a card get a slot each down its height, ordered by the
     // far end; the ribbon leaves at the bottom of its slot, its label sits above it
     const ends = new Map(), anchor = new Map();
@@ -1325,6 +1332,7 @@ function createTopoMap(host, opts){
         const e = up.get(l); if (!A || !e) { ctx.globalAlpha = 1; continue; }
         const rw = Math.min(w, 14), xd = A.x + e.dx, yd = A.y - A.h / 2, xc = e.cx, yc = cloud.y + cloud.h / 2 - 1, ym = (yd + yc) / 2;
         const curve = off => { const p = new Path2D(); p.moveTo(xd + off, yd); p.bezierCurveTo(xd + off, ym, xc + off, ym, xc + off, yc); return p; };
+        if (thin()) { thinLine(curve(0), l); geoms.set(l, mkGeo(cubicPts([xd, yd], [xd, ym], [xc, ym], [xc, yc]), false)); }
         if (w && l.state !== 'adjacent') ribbon(curve, l, rw, false);
         if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? rw / 2 + 4 : 0)); ctx.setLineDash([]); }
         const inward = xc >= xd;                  // the label on the cloud's side of the ribbon: it stays inside the map
@@ -1341,6 +1349,7 @@ function createTopoMap(host, opts){
         const xu = U.x + U.w / 2 - 22 - 16 * (k % 3), yu = U.y + U.h / 2, yd2 = D.y - D.h / 2, rw = Math.min(w, 10);
         const out = (U.c < 0 ? -1 : 1) * ([...pos.values()].some(P => P.c === U.c && P.y > U.y && P.y < D.y) ? U.w / 2 + 40 : 0);
         const curve = off => { const p = new Path2D(); p.moveTo(xu + off, yu); p.bezierCurveTo(xu + off + out, yu + 30, xu + off + out, yd2 - 30, xu + off, yd2); return p; };
+        if (thin()) { thinLine(curve(0), l); geoms.set(l, mkGeo(cubicPts([xu, yu], [xu + out, yu + 30], [xu + out, yd2 - 30], [xu, yd2]), U !== A)); }
         if (w && l.state !== 'adjacent') ribbon(curve, l, rw, false);
         if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? rw / 2 + 4 : 0)); ctx.setLineDash([]); }
         if (look) pills.push([look[1], xu + out * .75, (yu + yd2) / 2, look[0], dim]);
@@ -1351,6 +1360,7 @@ function createTopoMap(host, opts){
       const L = A.x <= B.x ? A : B, R = L === A ? B : A, flip = L !== A, an = anchor.get(l) || {}, ea = (flip ? an.b : an.a) || {dy:0, n:1}, eb = (flip ? an.a : an.b) || {dy:0, n:1};
       const xa = L.x + L.w / 2, xb = R.x - R.w / 2, ya = L.y + ea.dy, yb = R.y + eb.dy, xm = (xa + xb) / 2;
       const curve = off => { const p = new Path2D(); p.moveTo(xa, ya + off); p.bezierCurveTo(xm, ya + off, xm, yb + off, xb, yb + off); return p; };
+      if (thin()) { thinLine(curve(0), l); geoms.set(l, mkGeo(cubicPts([xa, ya], [xm, ya], [xm, yb], [xb, yb]), flip)); }
       if (w && l.state !== 'adjacent') ribbon(curve, l, w, true);
       if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? w / 2 + 4 : 0)); ctx.setLineDash([]); }
       // interface · address at each end, on the side the ribbon bends away from (two lines when one does not fit)
@@ -1386,7 +1396,7 @@ function createTopoMap(host, opts){
       ctx.save(); ctx.translate(gx, cloud.y - 8); ctx.scale(.9, .9); ctx.strokeStyle = C.ext; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
       ctx.textAlign = 'left'; ctx.fillStyle = C.ink; ctx.fillText(T('Internet'), gx + 24, cloud.y + .5);
       ctx.globalAlpha = 1;
-      shapes.push({path:cp, cloud:true, tip:`<b>${T('Internet')}</b>` + wl.map(l => `<div>${nm(l.a)} <span class="mono">${esc(l.a_name)}</span>: ↗ <b class="mono">${fmtB(l.a_out)}</b> · ↘ <b class="mono">${fmtB(l.a_in)}</b></div>`).join('')});
+      shapes.push({path:cp, cloud:true, tip:inetTip()}); void wl;
     }
     // device cards
     for (const n of data.nodes) {
@@ -1406,8 +1416,306 @@ function createTopoMap(host, opts){
       const k = onPath && opts.hopNo ? opts.hopNo(n.ip) : 0;
       if (k) { ctx.beginPath(); ctx.arc(x + 2, y + 2, 10, 0, 7); ctx.fillStyle = '#27D3F5'; ctx.fill(); ctx.font = '800 11px Manrope, sans-serif'; ctx.fillStyle = '#04102A'; ctx.textAlign = 'center'; ctx.fillText(k, x + 2, y + 2.5); }
       ctx.globalAlpha = 1;
-      shapes.push({path:card, n, tip:`<b>${nm(n.ip)}</b>${n.ip !== 'internet' ? ` <span class="nat">${esc(n.ip)}</span><div>${n.exporting ? T('sends NetFlow') : T('sent no NetFlow in this period')}</div>` : ''}${n.more ? `<div>${Tn(n.more, '{n} more neighbour beyond', '{n} more neighbours beyond')}</div>` : ''}${n.ip !== data.pov && n.ip !== 'internet' ? `<div class="nat">${T('Click: look from this device')}</div>` : ''}`});
+      shapes.push({path:card, n, tip:nodeTip(n)});
     }
+  }
+  // ===================== (1.9.0) live views: Lines, Stars, Metro, River =====================
+  // The still part (lines, devices, labels) is drawn once into a hidden canvas and copied each frame; over it the
+  // traffic moves: light particles along each link in the direction it really goes, as many and as fast as its rate
+  // (Mbit/s over the window: the last 2 min live, else the period's average), coloured by direction — from the
+  // internet, to the internet, inside. 30 fps at most, nothing moves when the tab is hidden or motion is reduced.
+  const geoms = new Map(), bands = new Map();
+  let bgCv = null, parts = [], acc = new Map(), raf = 0, lastT = 0, dist = new Map(), placed = [];
+  const sizeBg = () => { if (ctx !== main && bgCv) { bgCv.width = cv.width; bgCv.height = cv.height; } };
+  const cubicPts = (p0, p1, p2, p3, n = 40) => Array.from({length:n + 1}, (_, i) => { const t = i / n, u = 1 - t;
+    return [u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0], u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1]]; });
+  function mkGeo(pts, rev){
+    const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const len = cum[cum.length - 1] || 1, path = new Path2D(); path.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) path.lineTo(pts[i][0], pts[i][1]);
+    const at = t => { const d = Math.max(0, Math.min(1, t)) * len; let lo = 0, hi = cum.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cum[m] < d) lo = m; else hi = m; }
+      const k = (d - cum[lo]) / ((cum[hi] - cum[lo]) || 1), a = pts[lo], b = pts[hi];
+      return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, Math.atan2(b[1] - a[1], b[0] - a[0])]; };
+    return {pts, len, path, at, rev};
+  }
+  // straight, 45°, straight, with rounded corners (Metro)
+  function roundPoly(P, R = 16){
+    const out = [P[0]];
+    for (let i = 1; i < P.length - 1; i++) { const p = P[i], u = P[i - 1], w = P[i + 1], d1 = Math.hypot(p[0] - u[0], p[1] - u[1]), d2 = Math.hypot(w[0] - p[0], w[1] - p[1]);
+      if (d1 < .5 || d2 < .5) continue; const r = Math.min(R, d1 / 2, d2 / 2);
+      const s = [p[0] + (u[0] - p[0]) * r / d1, p[1] + (u[1] - p[1]) * r / d1], e = [p[0] + (w[0] - p[0]) * r / d2, p[1] + (w[1] - p[1]) * r / d2];
+      out.push(s); for (let k = 1; k <= 8; k++) { const t = k / 8, q = 1 - t; out.push([q * q * s[0] + 2 * q * t * p[0] + t * t * e[0], q * q * s[1] + 2 * q * t * p[1] + t * t * e[1]]); } }
+    out.push(P[P.length - 1]);
+    const dense = [out[0]]; for (let i = 1; i < out.length; i++) { const a = out[i - 1], b = out[i], n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 12));
+      for (let k = 1; k <= n; k++) dense.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]); }
+    return dense;
+  }
+  function octo(a, b, first){
+    const dx = b[0] - a[0], dy = b[1] - a[1], ax = Math.abs(dx), ay = Math.abs(dy), sx = Math.sign(dx) || 1, sy = Math.sign(dy) || 1;
+    const mid = (first || (ax >= ay ? 'h' : 'v')) === 'h' ? (ax >= ay ? [[a[0] + sx * (ax - ay) / 2, a[1]], [b[0] - sx * (ax - ay) / 2, b[1]]] : [[a[0], a[1]], [a[0], a[1]]])
+      : (ay >= ax ? [[a[0], a[1] + sy * (ay - ax) / 2], [b[0], b[1] - sy * (ay - ax) / 2]] : [[a[0] + sx * (ax - ay) / 2, a[1]], [b[0] - sx * (ax - ay) / 2, b[1]]]);
+    return roundPoly([a, ...mid, b]);
+  }
+  const thinLine = (p, l) => { if (l.state === 'adjacent') return; ctx.lineWidth = hover && hover.l === l ? 2 : 1.3;
+    ctx.strokeStyle = l.b === 'internet' ? 'rgba(46,229,157,.55)' : 'rgba(120,160,255,.55)'; ctx.stroke(p); };
+  const winSecs = () => Math.max(1, data.window || data.range || 120);
+  const mbit = bytes => bytes * 8 / winSecs() / 1e6;
+  const dirsOf = l => { const a = l.a_dir || {}, b = l.b_dir || {}; return (a.up || 0) + (a.down || 0) + (a.internal || 0) >= (b.up || 0) + (b.down || 0) + (b.internal || 0) ? a : b; };
+  // hops from the internet (WAN links first): the end nearer to it sends the traffic that comes from the internet
+  function hopsFromInternet(){
+    const m = new Map([['internet', 0]]), q = ['internet'];
+    while (q.length) { const c = q.shift(); for (const l of data.links) { const o = l.a === c ? l.b : l.b === c ? l.a : null; if (o && !m.has(o)) { m.set(o, m.get(c) + 1); q.push(o); } } }
+    return m;
+  }
+  function colourPick(l, fwd){
+    const d = dirsOf(l), nearA = (dist.get(l.a) ?? 99) <= (dist.get(l.b) ?? 99), inward = fwd ? nearA : !nearA;
+    const w = inward ? [[d.down || 0, C.down], [d.internal || 0, C.int]] : [[d.up || 0, C.up], [d.internal || 0, C.int]];
+    const sum = w[0][0] + w[1][0]; if (!sum) return l.b === 'internet' ? (fwd ? C.up : C.down) : '#4C93FF';
+    let r = Math.random() * sum; for (const [x, c] of w) { if ((r -= x) <= 0) return c; } return w[1][1];
+  }
+  const SPR = {};
+  const sprite = col => { if (SPR[col]) return SPR[col]; const c = document.createElement('canvas'), n = 32; c.width = c.height = n; const g = c.getContext('2d');
+    const gr = g.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2); gr.addColorStop(0, '#ffffff'); gr.addColorStop(.2, col); gr.addColorStop(.5, col + '55'); gr.addColorStop(1, col + '00');
+    g.fillStyle = gr; g.fillRect(0, 0, n, n); return (SPR[col] = c); };
+  const dimOf = l => { const onPath = opts.pathSet ? opts.pathSet() : null; if (onPath && !(onPath.has(l.a) && onPath.has(l.b))) return .1;
+    if (hover && hover.l) return hover.l === l ? 1 : .3; if (hover && hover.n) return l.a === hover.n.ip || l.b === hover.n.ip ? 1 : .3; return 1; };
+  function spawn(dt){
+    const k = mode() === 'river' ? .12 : mode() === 'metro' ? .3 : mode() === 'stars' ? .34 : .42;
+    for (const [l, g] of geoms) for (const fwd of [true, false]) {
+      const m = mbit(fwd ? Math.max(l.a_out || 0, l.b_in || 0) : Math.max(l.b_out || 0, l.a_in || 0)); if (m <= 0.0005 || l.state === 'adjacent') continue;
+      const key = (fwd ? '>' : '<') + l.a + '|' + l.b + '|' + l.a_name; let a = (acc.get(key) ?? Math.random()) + Math.min(18, k * Math.sqrt(m)) * dt;
+      while (a >= 1) { a -= 1; parts.push({l, g, fwd, s:0, v:(70 + 26 * Math.log10(1 + m)) * (mode() === 'stars' ? .75 : mode() === 'metro' ? .85 : 1) / g.len, col:colourPick(l, fwd), size:1.5 + Math.min(1.3, Math.log10(1 + m) * .45)}); }
+      acc.set(key, a);
+    }
+    if (parts.length > 700) parts.splice(0, parts.length - 700);
+  }
+  function paint(dt, t){
+    main.setTransform(1, 0, 0, 1, 0, 0); main.clearRect(0, 0, cv.width, cv.height); if (bgCv) main.drawImage(bgCv, 0, 0); main.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (mode() === 'river') for (const [l, b] of bands) {          // the liquid: strands per direction, thin streaks flowing in them
+      let off = -b.w / 2; const dim = dimOf(l);
+      for (const [sw, col, dir, val] of b.strands) {
+        main.save(); main.translate(0, off + sw / 2); main.globalAlpha = .26 * dim; main.lineWidth = sw * .92; main.strokeStyle = col; main.stroke(b.g.path);
+        if (!REDUCED.matches) { main.globalAlpha = .85 * dim; main.lineWidth = Math.min(1.6, sw * .4); main.lineCap = 'round';
+          for (const [kk, len, gap] of [[0, 14, 26], [1, 8, 34]]) { if (sw < 5 && kk) continue;
+            main.save(); main.translate(0, sw * (kk ? .22 : -.18)); main.setLineDash([len, gap]); main.lineDashOffset = -(t * (38 + Math.sqrt(val) * 2.4) + kk * 20) * dir; main.stroke(b.g.path); main.restore(); }
+          main.setLineDash([]); main.lineCap = 'butt'; }
+        main.restore(); off += sw; } }
+    main.globalAlpha = 1;
+    if (REDUCED.matches) return;
+    main.globalCompositeOperation = 'lighter';
+    for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.s += p.v * dt; p.g = geoms.get(p.l); if (p.s >= 1 || !p.g) { parts.splice(i, 1); continue; }
+      const u = p.fwd !== !!p.g.rev ? p.s : 1 - p.s, [x, y, ang] = p.g.at(u), a = dimOf(p.l) * .95 * Math.min(1, p.s * 6, (1 - p.s) * 6);
+      if (mode() === 'metro') { main.save(); main.translate(x, y); main.rotate(ang); main.globalAlpha = a; main.fillStyle = p.col; main.fill(rr(-6, -2.2, 12, 4.4, 2.2)); main.restore(); }
+      else if (mode() === 'stars') for (let k = 2; k >= 0; k--) { const [tx, ty] = k ? p.g.at(u + (p.fwd !== !!p.g.rev ? -1 : 1) * k * .014) : [x, y]; main.globalAlpha = a * (k ? .42 - k * .14 : 1); const d = p.size * (k ? 1 - k * .3 : 1) * 5; main.drawImage(sprite(p.col), tx - d / 2, ty - d / 2, d, d); }
+      else { main.globalAlpha = a; const d = p.size * 5; main.drawImage(sprite(p.col), x - d / 2, y - d / 2, d, d); } }
+    main.globalCompositeOperation = 'source-over'; main.globalAlpha = 1;
+  }
+  function tickLive(now){
+    raf = 0; if (!cv.isConnected || mode() === 'classic' || document.hidden) return;
+    if (now - lastT >= 32) { const dt = Math.min(.1, (now - lastT) / 1000); lastT = now; spawn(dt); paint(dt, now / 1000); }
+    if (!REDUCED.matches) raf = requestAnimationFrame(tickLive);
+  }
+  const kickLive = () => { if (!raf && !REDUCED.matches) { lastT = performance.now(); raf = requestAnimationFrame(tickLive); } };
+  const stopLive = () => { cancelAnimationFrame(raf); raf = 0; parts = []; };
+  const onVis = () => { if (!document.hidden && mode() !== 'classic') kickLive(); };
+  document.addEventListener('visibilitychange', onVis); onCleanup(() => { stopLive(); document.removeEventListener('visibilitychange', onVis); });
+
+  // labels: an interface name over its address on a dark plate, put where it overlaps nothing drawn yet
+  const reg = (x, y, w, h) => placed.push([x - 3, y - 3, w + 6, h + 6]);
+  const free = (x, y, w, h) => x >= 2 && y >= 2 && x + w <= W - 2 && y + h <= H - 2 && !placed.some(([a, b, c, d]) => x < a + c && a < x + w && y < b + d && b < y + h);
+  const NAME_FL = '700 11px JetBrains Mono, monospace', ADDR_FL = '500 10px JetBrains Mono, monospace';
+  function endLabel(g, atStart, name, addr, gap, alpha){
+    if (!name && !addr) return;
+    ctx.font = NAME_FL; const w1 = ctx.measureText(name || '').width; ctx.font = ADDR_FL; const w2 = addr ? ctx.measureText(addr).width : 0;
+    const bw = Math.max(w1, w2) + 10, bh = addr ? 30 : 17, dir = atStart === !g.rev ? 1 : -1;
+    let best = null, room = false;
+    outer: for (const extra of [0, 18]) for (const step of [.07, .14, .22, .3, .4, .5]) for (const flip of [1, -1]) {
+      const t = atStart === !g.rev ? step : 1 - step, [x, y, ang] = g.at(t), tx = Math.cos(ang) * dir, ty = Math.sin(ang) * dir;
+      let nx = -ty, ny = tx; if (ny > 0 || (Math.abs(ny) < .2 && nx < 0)) { nx = -nx; ny = -ny; } nx *= flip; ny *= flip;
+      const gp = gap + extra, vertical = Math.abs(ty) > .85, cx = x + nx * (gp + (vertical ? 0 : bh / 2 - 6)), cy = y + ny * (gp + bh / 2 - 4);
+      const x0 = vertical ? (nx >= 0 ? cx : cx - bw) : cx - bw / 2, c = {x0, y0:cy - bh / 2};
+      if (free(c.x0, c.y0, bw, bh)) { best = c; room = true; break outer; } }
+    if (!room) return;                // no free place near this end: the interface stays in the tooltip and the table
+    reg(best.x0, best.y0, bw, bh);
+    ctx.globalAlpha = alpha; ctx.fillStyle = 'rgba(6,13,34,.86)'; ctx.fill(rr(best.x0, best.y0, bw, bh, 6));
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = NAME_FL; ctx.fillStyle = C.ink; ctx.fillText(name || '', best.x0 + 5, addr ? best.y0 + 8 : best.y0 + bh / 2 + .5);
+    if (addr) { ctx.font = ADDR_FL; ctx.fillStyle = C.ink2; ctx.fillText(addr, best.x0 + 5, best.y0 + 22); } ctx.globalAlpha = 1;
+  }
+  const linkAlpha = l => { const onPath = opts.pathSet ? opts.pathSet() : null; return onPath && !(onPath.has(l.a) && onPath.has(l.b)) ? .15 : 1; };
+  const nodeAlpha = ip => { const onPath = opts.pathSet ? opts.pathSet() : null; return onPath && !onPath.has(ip) ? .3 : 1; };
+  const devices = () => data.nodes.filter(n => n.ip !== 'internet');
+  const nodeVol = ip => data.links.filter(l => l.a === ip || l.b === ip).reduce((s, l) => s + vol2(l), 0);
+  // the canvas as tall as the view needs (never narrower than the panel)
+  function sizeTo(w, h){ W = w; H = Math.max(BASE, h); const hs = H > BASE ? H + 'px' : ''; if (host.style.height !== hs) host.style.height = hs;
+    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; sizeBg(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    shapes = []; placed = []; ctx.textBaseline = 'middle'; ctx.lineCap = 'round'; }
+  const stateDash = (p, l) => { if (l.state === 'adjacent') { ctx.setLineDash([4, 5]); ctx.strokeStyle = 'rgba(170,190,230,.55)'; ctx.lineWidth = 1.4; ctx.stroke(p); ctx.setLineDash([]); return true; }
+    if (l.state === 'gap' || l.state === 'unobserved') { ctx.setLineDash([5, 5]); ctx.strokeStyle = RED; ctx.lineWidth = 1.6; ctx.stroke(p); ctx.setLineDash([]); return true; } return false; };
+  function inetPill(x, y, w, h){
+    const p = rr(x - w / 2, y - h / 2, w, h, h / 2); ctx.globalAlpha = nodeAlpha('internet'); ctx.fillStyle = 'rgba(11,23,54,.97)'; ctx.fill(p);
+    ctx.strokeStyle = hover && hover.cloud ? 'rgba(46,229,157,.95)' : 'rgba(46,229,157,.65)'; ctx.lineWidth = 1.6; ctx.stroke(p);
+    ctx.font = '700 13px Manrope, sans-serif'; const tw = ctx.measureText(T('Internet')).width, gx = x - (tw + 24) / 2;
+    ctx.save(); ctx.translate(gx, y - 8); ctx.scale(.9, .9); ctx.strokeStyle = C.ext; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
+    ctx.textAlign = 'left'; ctx.fillStyle = C.ink; ctx.fillText(T('Internet'), gx + 24, y + .5); ctx.globalAlpha = 1;
+    reg(x - w / 2, y - h / 2, w, h); shapes.push({path:p, cloud:true, tip:inetTip()});
+  }
+
+  // ---- Metro: the classic places, stations, lines at 0 / 45 / 90 degrees
+  function drawMetro(){
+    if (!H || !data) return; vmax = Math.max(1e-9, ...data.links.map(l => v(vol2(l))));
+    if (!devices().length) { sizeTo(host.clientWidth, BASE); return noDevices(); }
+    const {pos, cloud} = layout(); sizeTo(W, H);
+    const pt = ip => pos.get(ip), wan = data.links.filter(l => l.b === 'internet' && pos.has(l.a));
+    const ix = cloud ? cloud.x : W / 2, iy = cloud ? cloud.y : 24, iw = 128;
+    wan.sort((a, b) => pt(a.a).x - pt(b.a).x);
+    const sameCol = new Map();
+    for (const l of data.links) { const A = pt(l.a); if (!A) continue; let pts;
+      if (l.b === 'internet') { const k = wan.indexOf(l), xs = ix + (wan.length === 1 ? 0 : -Math.min(iw * .7, 18 * (wan.length - 1)) / 2 + Math.min(iw * .7, 18 * (wan.length - 1)) * k / (wan.length - 1));
+        pts = octo([A.x + (wan.filter(x => x.a === l.a).indexOf(l) - (wan.filter(x => x.a === l.a).length - 1) / 2) * 10, A.y], [xs, iy + 15], 'v'); }
+      else { const B = pt(l.b); if (!B) continue;
+        if (A.c === B.c) { const U = A.y < B.y ? A : B, D = U === A ? B : A, k = sameCol.get(U.c) || 0; sameCol.set(U.c, k + 1);
+          const between = [...pos.values()].some(P => P.c === U.c && P.y > U.y && P.y < D.y), off = (U.c < 0 ? -1 : 1) * (between ? 48 + 12 * k : 0);
+          pts = between ? roundPoly([[U.x, U.y], [U.x + off, U.y + Math.abs(off)], [U.x + off, D.y - Math.abs(off)], [D.x, D.y]]) : octo([U.x, U.y], [D.x, D.y], 'v');
+          if (U !== A) pts.reverse(); }
+        else pts = octo([A.x, A.y], [B.x, B.y], 'h'); }
+      const g = mkGeo(pts, false); geoms.set(l, g);
+      ctx.globalAlpha = linkAlpha(l); ctx.lineJoin = 'round';
+      if (!stateDash(g.path, l)) { const on = hover && hover.l === l; ctx.lineWidth = 7; ctx.strokeStyle = on ? '#2F5FC0' : '#21386F'; ctx.stroke(g.path); ctx.lineWidth = 2; ctx.strokeStyle = l.b === 'internet' ? (on ? '#7DF2C4' : '#3FB98C') : (on ? '#9DB9FF' : '#5577C8'); ctx.stroke(g.path); }
+      ctx.globalAlpha = 1; shapes.push({stroke:g.path, sw:12, l, tip:linkTip(l)}); }
+    if (cloud) inetPill(ix, iy, iw, 30);
+    // stations and their names, where no line runs
+    for (const n of devices()) { const p = pt(n.ip); if (!p) continue; const pov = n.ip === data.pov, a = nodeAlpha(n.ip); ctx.globalAlpha = a;
+      const sh = pov ? rr(p.x - 26, p.y - 12, 52, 24, 12) : (() => { const c = new Path2D(); c.arc(p.x, p.y, 9, 0, 6.2832); return c; })();
+      ctx.fillStyle = '#EAF0FF'; ctx.fill(sh); ctx.lineWidth = pov ? 3.5 : 3; ctx.strokeStyle = pov ? '#27D3F5' : hover && hover.n === n ? '#9DB9FF' : '#3B5FB0'; ctx.stroke(sh);
+      if (!n.exporting) { ctx.fillStyle = C.ink3; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 6.2832); ctx.fill(); }
+      reg(p.x - 28, p.y - 14, 56, 28); shapes.push({path:sh, n, tip:nodeTip(n)});
+      const t1 = n.name || n.ip, t2 = [n.model || n.vendor, n.ip].filter(Boolean).join(' · '), half = pov ? 26 : 9;
+      ctx.font = '800 13.5px Manrope, sans-serif'; const w1 = ctx.measureText(t1).width; ctx.font = '500 11px Manrope, sans-serif'; const w2 = ctx.measureText(t2).width, w = Math.max(w1, w2), hh = 32;
+      // below, left, right, above the station: the first place where nothing is drawn; [anchor x, top, align]
+      const cands = [[p.x, p.y + 17, 'center'], [p.x - half - 10, p.y - hh / 2, 'right'], [p.x + half + 10, p.y - hh / 2, 'left'], [p.x, p.y - 17 - hh, 'center']];
+      const box0 = ([x, y, al]) => [al === 'center' ? x - w / 2 : al === 'right' ? x - w : x, y];
+      const pick0 = cands.find(c => { const [x0, y0] = box0(c); return free(x0, y0, w, hh); }) || cands[0], [bx, by] = box0(pick0); reg(bx, by, w, hh);
+      ctx.textAlign = pick0[2]; ctx.font = '800 13.5px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(t1, pick0[0], by + 8);
+      ctx.font = '500 11px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.fillText(t2, pick0[0], by + 24);
+      ctx.globalAlpha = 1; }
+    for (const l of data.links) { const g = geoms.get(l); if (!g) continue; const a = linkAlpha(l) < 1 ? .18 : 1;
+      endLabel(g, true, l.a_name, l.a_addr, 14, a); if (l.b !== 'internet') endLabel(g, false, l.b_name, l.b_addr, 14, a); }
+  }
+
+  // ---- Stars: the Point of View in the middle, neighbours on rings by hops, the internet above
+  function drawStars(){
+    if (!H || !data) return; vmax = Math.max(1e-9, ...data.links.map(l => v(vol2(l))));
+    if (!devices().length) { sizeTo(host.clientWidth, BASE); return noDevices(); }
+    const L0 = layout(), hop = new Map([[data.pov, 0]]), q = [data.pov];
+    while (q.length) { const c = q.shift(); for (const l of data.links) { if (l.b === 'internet') continue; const o = l.a === c ? l.b : l.b === c ? l.a : null; if (o && !hop.has(o)) { hop.set(o, hop.get(c) + 1); q.push(o); } } }
+    const maxHop = Math.max(1, ...[...hop.values()]), ringN = new Map(); devices().forEach(n => { if (!hop.has(n.ip)) hop.set(n.ip, maxHop); });
+    const w0 = host.clientWidth, perRing = Math.max(...[...hop.values()].map(h => [...hop.values()].filter(x => x === h).length));
+    const Rmax = Math.max(170, Math.min(w0 / 2 - 110, 140 + 40 * perRing)), hh = Math.max(BASE, Rmax * 1.25 + 210);
+    sizeTo(w0, hh); const cx = W / 2, cy = Math.max(H * .56, 150 + Rmax * .55), R = h => Math.min(Rmax, Rmax * h / maxHop);
+    const P = new Map([['internet', {x:cx, y:52, r:26}]]);
+    for (let h = 1; h <= maxHop; h++) {
+      const ring = devices().filter(n => n.ip !== data.pov && hop.get(n.ip) === h).sort((a, b) => ((L0.pos.get(a.ip) || {}).y || 0) - ((L0.pos.get(b.ip) || {}).y || 0));
+      const right = ring.filter(n => ((L0.pos.get(n.ip) || {}).c || 0) > 0), left = ring.filter(n => !right.includes(n));
+      while (Math.abs(right.length - left.length) > 1) (right.length > left.length ? left : right).push((right.length > left.length ? right : left).pop());
+      for (const [side, list] of [[1, right], [-1, left]]) list.forEach((n, i) => { const t = list.length === 1 ? .35 : i / (list.length - 1), a = (-40 + 110 * t) * Math.PI / 180;
+        P.set(n.ip, {x:cx + side * Math.cos(a) * R(h) * 1.15, y:cy + Math.sin(a) * R(h) * .82, r:22}); });
+      ringN.set(h, ring.length); }
+    P.set(data.pov, {x:cx, y:cy, r:30});
+    // a faint sky: rings and still stars
+    ctx.strokeStyle = 'rgba(120,160,255,.07)'; ctx.lineWidth = 1;
+    for (let h = 1; h <= maxHop; h++) { ctx.beginPath(); ctx.ellipse(cx, cy, R(h) * 1.15, R(h) * .82, 0, 0, 6.2832); ctx.stroke(); }
+    let sd = 7; const rnd = () => (sd = (sd * 9301 + 49297) % 233280) / 233280;
+    for (let i = 0; i < 110; i++) { ctx.globalAlpha = .1 + rnd() * .28; ctx.fillStyle = '#9fb8ff'; ctx.fillRect(rnd() * W, rnd() * H, 1.2, 1.2); } ctx.globalAlpha = 1;
+    const wanBy = new Map(); data.links.filter(l => l.b === 'internet').forEach(l => { wanBy.set(l.a, (wanBy.get(l.a) || 0) + 1); });
+    const seen = new Map();
+    for (const l of data.links) { const A = P.get(l.a), B = P.get(l.b); if (!A || !B) continue;
+      const k = seen.get(l.a + l.b) || 0; seen.set(l.a + l.b, k + 1); const n = l.b === 'internet' ? wanBy.get(l.a) : 1, bend = (n > 1 ? (k - (n - 1) / 2) * .28 : .1) + (n > 1 ? 0 : (A.x < cx ? -.06 : .06));
+      const dx = B.x - A.x, dy = B.y - A.y, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d, s = [A.x + ux * (A.r + 7), A.y + uy * (A.r + 7)], e = [B.x - ux * (B.r + 7), B.y - uy * (B.r + 7)], nx = -uy * d * bend, ny = ux * d * bend;
+      const g = mkGeo(cubicPts(s, [s[0] + dx * .3 + nx, s[1] + dy * .3 + ny], [e[0] - dx * .3 + nx, e[1] - dy * .3 + ny], e), false); geoms.set(l, g);
+      ctx.globalAlpha = linkAlpha(l);
+      if (!stateDash(g.path, l)) { ctx.lineWidth = hover && hover.l === l ? 1.8 : 1.1; ctx.strokeStyle = l.b === 'internet' ? 'rgba(46,229,157,.42)' : 'rgba(150,180,255,.36)'; ctx.setLineDash([1, 5]); ctx.stroke(g.path); ctx.setLineDash([]); }
+      ctx.globalAlpha = 1; shapes.push({stroke:g.path, sw:12, l, tip:linkTip(l)}); }
+    // the internet and the devices: a circle with the share of the busiest device's traffic around it
+    { const I = P.get('internet'), c = new Path2D(); c.arc(I.x, I.y, I.r, 0, 6.2832); ctx.globalAlpha = nodeAlpha('internet'); ctx.fillStyle = 'rgba(8,24,40,.96)'; ctx.fill(c); ctx.lineWidth = 1.5;
+      ctx.strokeStyle = hover && hover.cloud ? C.ext : 'rgba(46,229,157,.7)'; ctx.stroke(c); ctx.save(); ctx.translate(I.x - 8, I.y - 8); ctx.strokeStyle = C.ext; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
+      ctx.font = '700 12.5px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.fillText(T('Internet'), I.x, I.y + I.r + 13); ctx.globalAlpha = 1;
+      reg(I.x - 40, I.y - I.r - 4, 80, 2 * I.r + 26); if (data.links.some(l => l.b === 'internet')) shapes.push({path:c, cloud:true, tip:inetTip()}); }
+    const top = Math.max(1, ...devices().map(n => nodeVol(n.ip)));
+    for (const n of devices()) { const p = P.get(n.ip); if (!p) continue; const pov = n.ip === data.pov, share = nodeVol(n.ip) / top, c = new Path2D(); c.arc(p.x, p.y, p.r, 0, 6.2832);
+      ctx.globalAlpha = nodeAlpha(n.ip); ctx.fillStyle = pov ? 'rgba(18,44,86,.97)' : 'rgba(9,20,48,.96)'; ctx.fill(c); ctx.lineWidth = pov ? 2 : 1.3;
+      ctx.strokeStyle = pov ? '#27D3F5' : hover && hover.n === n ? 'rgba(170,200,255,.95)' : 'rgba(130,175,255,.6)'; ctx.stroke(c);
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 6, 0, 6.2832); ctx.stroke();
+      const gr = ctx.createLinearGradient(p.x - p.r, p.y, p.x + p.r, p.y); gr.addColorStop(0, C.down); gr.addColorStop(1, '#4C93FF');
+      ctx.strokeStyle = gr; ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 6, -Math.PI / 2, -Math.PI / 2 + share * 6.2832); ctx.stroke(); ctx.lineCap = 'round';
+      ctx.font = '700 11px JetBrains Mono, monospace'; ctx.fillStyle = C.ink2; ctx.textAlign = 'center'; ctx.fillText(Math.round(share * 100) + '%', p.x, p.y + .5);
+      const t2 = [n.model || n.vendor, n.ip].filter(Boolean).join(' · ');
+      ctx.font = '700 13px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(n.name || n.ip, p.x, p.y + p.r + 18); ctx.font = '500 11px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.fillText(t2, p.x, p.y + p.r + 34);
+      ctx.font = '700 13px Manrope, sans-serif'; const w = Math.max(ctx.measureText(n.name || n.ip).width, ctx.measureText(t2).width * .9);
+      reg(p.x - p.r - 8, p.y - p.r - 8, 2 * p.r + 16, 2 * p.r + 16); reg(p.x - w / 2, p.y + p.r + 8, w, 34);
+      if (!n.exporting) { ctx.fillStyle = C.ink3; ctx.beginPath(); ctx.arc(p.x + p.r * .7, p.y - p.r * .7, 3.5, 0, 6.2832); ctx.fill(); }
+      ctx.globalAlpha = 1; shapes.push({path:c, n, tip:nodeTip(n)}); }
+    for (const l of data.links) { const g = geoms.get(l); if (!g) continue; const a = linkAlpha(l) < 1 ? .18 : 1;
+      endLabel(g, true, l.a_name, l.a_addr, 12, a); if (l.b !== 'internet') endLabel(g, false, l.b_name, l.b_addr, 12, a); }
+    void ringN;
+  }
+
+  // ---- River: columns by hops from the internet, bands as wide as their traffic, strands flowing by direction
+  function drawRiver(){
+    if (!H || !data) return; bands.clear();
+    if (!devices().length) { sizeTo(host.clientWidth, BASE); return noDevices(); }
+    dist = hopsFromInternet(); const L0 = layout();
+    const ids = ['internet', ...devices().map(n => n.ip)], maxD = Math.max(1, ...devices().map(n => dist.get(n.ip) ?? 0));
+    const depth = ip => ip === 'internet' ? 0 : (dist.get(ip) ?? maxD + 1), D = Math.max(...ids.map(depth));
+    const vmaxR = Math.max(1, ...data.links.map(vol2)), bw = l => 2 + 30 * Math.sqrt(vol2(l) / vmaxR);
+    const left = (l, ip) => (l.a === ip ? depth(l.b) : depth(l.a)) < depth(ip);       // the link enters ip from the internet's side
+    const sideH = (ip, lft) => { const ls = data.links.filter(l => (l.a === ip || l.b === ip) && left(l, ip) === lft); return ls.reduce((s, l) => s + bw(l), 0) + 4 * Math.max(0, ls.length - 1); };
+    const hOf = ip => Math.max(26, sideH(ip, true), sideH(ip, false));
+    const cols = []; ids.forEach(ip => { (cols[depth(ip)] = cols[depth(ip)] || []).push(ip); });
+    const w0 = host.clientWidth, pad = 30, nameRoom = 120, colX = c => pad + 6 + (w0 - 2 * pad - 12 - nameRoom) * c / Math.max(1, D);
+    const yOf = new Map(), gapY = 46;
+    const tall = Math.max(...cols.filter(Boolean).map(c => c.reduce((s, ip) => s + hOf(ip), 0) + gapY * (c.length - 1)));
+    sizeTo(w0, tall + 120);
+    cols.forEach((c, k) => { if (!c) return;
+      c.sort((x, y) => { const up = ip => { const ls = data.links.filter(l => (l.a === ip || l.b === ip) && left(l, ip)); return ls.length ? ls.reduce((s, l) => s + (yOf.get(l.a === ip ? l.b : l.a) || 0), 0) / ls.length : ((L0.pos.get(ip) || {}).y || 0); }; return up(x) - up(y); });
+      const total = c.reduce((s, ip) => s + hOf(ip), 0) + gapY * (c.length - 1); let y = (H - total) / 2 + 20;
+      c.forEach(ip => { yOf.set(ip, y + hOf(ip) / 2); y += hOf(ip) + gapY; }); void k; });
+    const X = ip => colX(depth(ip)), off = new Map();
+    for (const ip of ids) for (const lft of [true, false]) {
+      const ls = data.links.filter(l => (l.a === ip || l.b === ip) && left(l, ip) === lft).sort((p, q) => yOf.get(p.a === ip ? p.b : p.a) - yOf.get(q.a === ip ? q.b : q.a));
+      let y = yOf.get(ip) - sideH(ip, lft) / 2; for (const l of ls) { off.set(l.a + l.b + l.a_name + (l.a === ip ? 'A' : 'B'), y + bw(l) / 2); y += bw(l) + 4; } }
+    for (const l of data.links) {
+      const inA = depth(l.a) <= depth(l.b), U = inA ? l.a : l.b, V = inA ? l.b : l.a, same = depth(l.a) === depth(l.b);
+      const yu = off.get(l.a + l.b + l.a_name + (U === l.a ? 'A' : 'B')), yv = off.get(l.a + l.b + l.a_name + (V === l.a ? 'A' : 'B')), xu = X(U) + 6, xv = same ? X(V) + 6 : X(V) - 6;
+      const pts = same ? cubicPts([xu, yu], [xu + 90, yu], [xv + 90, yv], [xv, yv], 60) : cubicPts([xu, yu], [(xu + xv) / 2, yu], [(xu + xv) / 2, yv], [xv, yv], 60);
+      const g = mkGeo(pts, U !== l.a), w = bw(l); geoms.set(l, g);
+      ctx.globalAlpha = linkAlpha(l); ctx.lineWidth = w; ctx.strokeStyle = hover && hover.l === l ? 'rgba(76,147,255,.3)' : 'rgba(76,147,255,.14)'; ctx.stroke(g.path); stateDash(g.path, l); ctx.globalAlpha = 1;
+      // strands: from the internet (towards V), to it (towards U), inside (the busier way), their widths by share
+      const d = dirsOf(l), tsum = (d.down || 0) + (d.up || 0) + (d.internal || 0) || 1, ab = Math.max(l.a_out || 0, l.b_in || 0) >= Math.max(l.b_out || 0, l.a_in || 0);
+      const mb = mbit(vol2(l));
+      bands.set(l, {g, w, strands:[[w * (d.down || 0) / tsum, C.down, 1], [w * (d.up || 0) / tsum, C.up, -1], [w * (d.internal || 0) / tsum, C.int, (ab === (U === l.a)) ? 1 : -1]].filter(x => x[0] > .4).map(x => [Math.max(1, x[0]), x[1], x[2], mb])});
+      shapes.push({stroke:g.path, sw:Math.max(10, w + 4), l, tip:linkTip(l)}); }
+    for (const ip of ids) { const x = X(ip), y = yOf.get(ip), h = hOf(ip), isI = ip === 'internet', n = data.nodes.find(z => z.ip === ip) || {ip};
+      const p = rr(x - 6, y - h / 2, 12, h, 5), gr = ctx.createLinearGradient(x, y - h / 2, x, y + h / 2);
+      gr.addColorStop(0, isI ? '#2EE59D' : ip === data.pov ? '#27D3F5' : '#4C93FF'); gr.addColorStop(1, isI ? '#1aa97a' : ip === data.pov ? '#1aa7d6' : '#2F7BFF');
+      ctx.globalAlpha = nodeAlpha(ip); ctx.fillStyle = gr; ctx.fill(p); if (hover && (hover.n === n || (isI && hover.cloud))) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2; ctx.stroke(p); }
+      const last = depth(ip) === D && D > 0, t1 = isI ? T('Internet') : n.name || ip, t2 = isI ? '' : [n.model || n.vendor, n.ip].filter(Boolean).join(' · ');
+      ctx.textAlign = last ? 'right' : 'left'; ctx.font = '700 13px Manrope, sans-serif'; ctx.fillStyle = C.ink; const tx = last ? x + 4 : x - 4;
+      ctx.fillText(t1, tx, y - h / 2 - (t2 ? 26 : 12)); if (t2) { ctx.font = '500 10.5px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.fillText(t2, tx, y - h / 2 - 11); }
+      ctx.font = '700 13px Manrope, sans-serif'; const tw = Math.max(ctx.measureText(t1).width, t2 ? ctx.measureText(t2).width * .85 : 0);
+      reg(last ? tx - tw : tx, y - h / 2 - 36, tw, 32); reg(x - 8, y - h / 2, 16, h); ctx.globalAlpha = 1;
+      shapes.push(isI ? {path:p, cloud:true, tip:inetTip()} : {path:p, n, tip:nodeTip(n)}); }
+    for (const l of data.links) { const b = bands.get(l); if (!b) continue; const a = linkAlpha(l) < 1 ? .18 : 1, gap = b.w / 2 + 8;
+      endLabel(b.g, true, l.a_name, l.a_addr, gap, a); if (l.b !== 'internet') endLabel(b.g, false, l.b_name, l.b_addr, gap, a); }
+  }
+  function noDevices(){ ctx.font = '600 13px Manrope, sans-serif'; ctx.fillStyle = C.ink3; ctx.textAlign = 'center'; ctx.fillText(T('No device has sent data yet'), W / 2, H / 2); }
+
+  function draw(){
+    const m = mode(); geoms.clear(); bands.clear();
+    if (m !== 'classic') { if (!bgCv) bgCv = document.createElement('canvas'); ctx = bgCv.getContext('2d'); }
+    try { if (data) dist = hopsFromInternet(); (m === 'metro' ? drawMetro : m === 'stars' ? drawStars : m === 'river' ? drawRiver : drawClassic)(); }
+    finally { ctx = main; }
+    if (m !== 'classic' && data) { if (m !== 'river') bands.clear(); main.setTransform(dpr, 0, 0, dpr, 0, 0); paint(0, performance.now() / 1000); kickLive(); }
+    else stopLive();
   }
   const pick = e => { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
     for (let i = shapes.length - 1; i >= 0; i--) { const sh = shapes[i];
@@ -1424,10 +1732,11 @@ function createTopoMap(host, opts){
 function vNetwork(){
   const v = document.getElementById('view'), live = !!state.netLive && !isCustom(), depth = state.netDepth || 1;
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s9">${ph('nodes', T('Path analysis'), T('layer-3 neighbours of the Point of View · width = volume · click a device to look from it'),
+    <section class="glass panel s9" id="netSec">${ph('nodes', T('Path analysis'), T('layer-3 neighbours of the Point of View · width = volume · click a device to look from it'),
       `<span id="nPovSeg"></span>` + seg('nDepthSeg', [['1', '1'], ['2', '2'], ['3', '3']].map(([k, l]) => [k, l, Tn(+k, 'Neighbours up to {n} hop away', 'Neighbours up to {n} hops away')]), String(depth))
       + seg('nScaleSeg', [['sqrt', T('Compressed'), T('Width ∝ √volume — small links stay visible next to big ones')], ['lin', T('Linear')]], state.scale)
-      + seg('nLiveSeg', [['live', T('Live')], ['period', T('toggle::Period')]], live ? 'live' : 'period'))}
+      + seg('nLiveSeg', [['live', T('Live')], ['period', T('toggle::Period')]], live ? 'live' : 'period'), false, maxBtn())}
+      <div class="netviews" id="netViews" role="group" aria-label="${T('Map view')}"></div>
       <div class="legend" style="margin:-6px 0 10px"><span><i class="bar" style="background:${C.down}"></i>${T('from the internet')}</span><span><i class="bar" style="background:${C.up}"></i>${T('to the internet')}</span><span><i class="bar" style="background:${C.int}"></i>${T('internal')}</span><span><i class="bar dash" style="border-color:${RED}"></i>${T('no observation / gap')}</span><span><i class="bar dash" style="border-color:#AABEE6"></i>${T('L3 adjacency, no traffic')}</span></div>
       <div class="river netmap" id="cNet"></div>
       <p class="note">${T('Devices are neighbours when their interfaces share a subnet (Settings → Devices → Interfaces) or when one records the other’s addresses on an interface. The volumes on the links follow the selector at the top (Internet, Internal or All traffic); neighbours, gaps and the path search always use all traffic, and the device filter does not apply — choose the Point of View instead.')}</p></section>
@@ -1447,8 +1756,19 @@ function vNetwork(){
   const seq = renderSeq, P = () => ({t:state.traffic, live:live ? 1 : 0, win:120});
   let topo = null, path = null;
   const hopIndex = () => { const m = new Map(); if (path) path.hops.forEach((h, k) => { if (!m.has(h.device) && h.state !== 'unplaced' && h.state !== 'branch') m.set(h.device, k + 1); }); return m; };
-  const map = createTopoMap(document.getElementById('cNet'), {onNode:n => { if (n.ip === 'internet' || n.ip === state.netPov) return; state.netPov = n.ip; if (n.more) state.netDepth = Math.max(depth, 1); render(); },
+  // (1.9.0) the map view: each user's own default (the lamp), switched here for now
+  const NET_VIEWS = () => [['classic', T('Classic')], ['lines', T('Lines')], ['stars', T('Stars')], ['metro', T('Metro')], ['river', T('River')]];
+  const defView = () => ((ME && ME.prefs) || {}).path_view || 'classic', curView = () => state.netView || defView();
+  const LAMP = 'M9 2.2a5 5 0 0 0-3 9c.6.5.9 1.1.9 1.8h4.2c0-.7.3-1.3.9-1.8a5 5 0 0 0-3-9M7 15.2h4M7.6 17h2.8';
+  const drawViews = () => { const box = document.getElementById('netViews'); if (!box) return; const cur = curView(), def = defView();
+    box.innerHTML = `<span class="nat">${T('View')}</span><div class="seg">${NET_VIEWS().map(([k, l]) => `<button type="button" data-nv="${k}" aria-pressed="${k === cur}"${k === def ? ` title="${T('Your default view')}"` : ''}>${k === def ? `<span class="lamp on" aria-hidden="true">${icon(LAMP, 13)}</span>` : ''}${l}</button>`).join('')}</div>
+      <button type="button" class="btn lampbtn" id="nvDef" ${cur === def ? 'disabled' : ''}><span class="lamp${cur === def ? ' on' : ''}" aria-hidden="true">${icon(LAMP, 14)}</span>${cur === def ? T('Your default view') : T('Make it my default')}</button>`;
+    box.querySelectorAll('[data-nv]').forEach(b => b.onclick = () => { if (b.dataset.nv === curView()) return; state.netView = b.dataset.nv; drawViews(); map.redraw(); });
+    document.getElementById('nvDef').onclick = async () => { const b = document.getElementById('nvDef'); b.disabled = true;
+      try { ME = await apiPost('me/prefs', {prefs:{path_view:curView()}}); } catch (e) { b.disabled = false; alert(e.message); return; } drawViews(); }; };
+  const map = createTopoMap(document.getElementById('cNet'), {mode:curView, onNode:n => { if (n.ip === 'internet' || n.ip === state.netPov) return; state.netPov = n.ip; if (n.more) state.netDepth = Math.max(depth, 1); render(); },
     pathSet:() => path && path.hops.length ? new Set(path.hops.filter(h => h.state !== 'unplaced').map(h => h.device)) : null, hopNo:ip => hopIndex().get(ip)});
+  drawViews();
   let wb = waitBig(document.getElementById('cNet'), 'graph', sketchGraph((META.devices || []).slice().sort((a, b) => a.name.localeCompare(b.name))));   // (1.8.5) a sketch until the first answer
   const nm = ip => ip === 'internet' ? T('Internet') : ((topo && topo.devices.find(d => d.ip === ip)) || {}).name || ip;
   const drawSide = () => {

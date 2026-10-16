@@ -48,6 +48,14 @@ class DeleteApi(unittest.TestCase):
             api.AUTH.login('boss', 'nope', '10.0.0.6')
         api.AUTH.check_password('boss', 'right-password-1', '10.0.0.6')      # a right one clears the count
 
+    def test_own_map_view(self):                 # (1.9.0) each user's default Path analysis view, kept with the account
+        self.assertEqual(api.AUTH.public('boss')['prefs'], {})
+        self.assertEqual(api.AUTH.set_prefs('boss', {'path_view': 'metro'})['prefs'], {'path_view': 'metro'})
+        self.assertEqual(Auth().public('boss')['prefs'], {'path_view': 'metro'})          # saved: a new instance reads it
+        for bad in ({'path_view': 'nope'}, {'colour': 'red'}, 'x'):
+            with self.assertRaises(AuthError):
+                api.AUTH.set_prefs('boss', bad)
+
     def test_bad_ids(self):
         for ids in ([], ['../etc'], 'x', ['20261008-030000'] * 101):
             with self.assertRaises(api.BadRequest):

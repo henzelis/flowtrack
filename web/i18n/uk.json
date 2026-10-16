@@ -1343,5 +1343,14 @@
  "Wrong password": "Неправильний пароль",
  "Your password ({user}) to confirm": "Ваш пароль ({user}) для підтвердження",
  "Full screen": "На весь екран",
- "Leave full screen": "Вийти з повноекранного режиму"
+ "Leave full screen": "Вийти з повноекранного режиму",
+ "Classic": "Класичний",
+ "Lines": "Лінії",
+ "Make it my default": "Зробити моїм типовим",
+ "Map view": "Вигляд карти",
+ "Metro": "Метро",
+ "River": "Ріка",
+ "Stars": "Сузір'я",
+ "View": "Вигляд",
+ "Your default view": "Ваш типовий вигляд"
 }
