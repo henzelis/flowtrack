@@ -505,7 +505,23 @@ const icon = (d, s = 18) => `<svg width="${s}" height="${s}" viewBox="0 0 18 18"
 const ICO = {pulse:'M2 9h3l2-5 3 10 2-5h4', nodes:'M6.9 4a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M1.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M11.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M7.57 6.86L5.43 11.14M10.43 6.86L12.57 11.14', ip:'M3 5h12v6H3zM6 14h6M7 8h.01M10 8h.01', grid:navIcon('apps'), flow:navIcon('flows'),
   globe:'M9 2a7 7 0 1 0 0 14A7 7 0 0 0 9 2zM2 9h14M9 2c2.5 2.5 2.5 11.5 0 14M9 2c-2.5 2.5-2.5 11.5 0 14', chart:'M2 15l4-6 3 3 5-8 2 2', conv:'M3 5h8l-2-2M15 13H7l2 2', list:'M3 5h12M3 9h12M3 13h8',
   users:navIcon('talkers'), key:'M12 3a3 3 0 1 0 .01 0M9.9 8.1L3 15M5 13l2 2M7 11l2 2', shield:navIcon('threats'), dev:DEV_ICON, pie:'M9 2v7h7A7 7 0 1 1 9 2z', search:'M8 8m-5 0a5 5 0 1 0 10 0a5 5 0 1 0-10 0M12 12l4 4'};
-const ph = (ic, title, sub, right = '', big = false) => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
+const ph = (ic, title, sub, right = '', big = false, tools = '') => `<div class="ph"><div class="ttl"><span class="ico">${icon(ICO[ic] || ic)}</span><div><h2${big ? ' class="big"' : ''}>${title}${tools}</h2>${sub ? `<span class="sub">${sub}</span>` : ''}</div></div>${right ? `<div class="right">${right}</div>` : ''}</div>`;
+// (1.8.8) a panel of the Overview opens full screen: the browser's own (Esc leaves it), or, where a page cannot have
+// it (iPhone), over the whole window; the charts and the map follow the size by themselves (ResizeObserver)
+const MAX_IN = 'M2 6.5V2h4.5M11.5 2H16v4.5M16 11.5V16h-4.5M6.5 16H2v-4.5', MAX_OUT = 'M6.5 2v4.5H2M16 6.5h-4.5V2M11.5 16v-4.5H16M2 11.5h4.5V16';
+const maxBtn = () => `<button type="button" class="maxbtn" data-max title="${T('Full screen')}" aria-label="${T('Full screen')}">${icon(MAX_IN, 14)}</button>`;
+function maxMark(){ document.querySelectorAll('[data-max]').forEach(b => { const on = b.closest('section').classList.contains('is-max');
+  b.innerHTML = icon(on ? MAX_OUT : MAX_IN, 14); b.title = on ? T('Leave full screen') : T('Full screen'); b.setAttribute('aria-label', b.title); b.setAttribute('aria-pressed', String(on)); }); }
+function maxToggle(sec){
+  if (sec.classList.contains('is-max')) { sec.classList.remove('is-max'); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); maxMark(); return; }
+  document.querySelectorAll('section.is-max').forEach(x => x.classList.remove('is-max'));
+  sec.classList.add('is-max'); maxMark();
+  if (sec.requestFullscreen) sec.requestFullscreen().catch(() => {});      // refused: it stays over the window
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-max]'); if (b) maxToggle(b.closest('section')); });
+function maxLeave(){ const x = document.querySelector('section.is-max'); if (x) maxToggle(x); }
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) { document.querySelectorAll('section.is-max').forEach(x => x.classList.remove('is-max')); maxMark(); } });
+document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; const x = document.querySelector('section.is-max'); if (x) maxToggle(x); });
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const flowLive = () => state.flowLive && !isCustom();
 const heroLive = () => state.heroLive && !isCustom();
@@ -761,9 +777,9 @@ function mountHero(){
         : `<span class="legend"><span><i class="bar" style="background:${C.down}"></i>download</span><span><i class="bar" style="background:${C.up}"></i>upload</span>${g ? '' : `<span><i style="background:${C.int}"></i>${T('inside')}</span><span><i style="background:${C.ext}"></i>${T('outside')}</span>`}</span>`)
       + (g ? seg('scaleSeg', [['sqrt', T('Compressed'), T('Width ∝ √volume — small flows stand out next to large ones')], ['lin', T('Linear'), T('Width proportional to volume')]], state.scale) : '')
       + seg('heroLiveSeg', [['live', T('Live'), T('The last 2 minutes of data, updated as it arrives')], ['period', T('toggle::Period'), T('The whole selected period')]], live ? 'live' : 'period')
-      + (isInternal() ? '' : seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode)))}
+      + (isInternal() ? '' : seg('heroSeg', [['map', 'Map'], ['graph', 'Graph'], ['3d', '3D']], state.heroMode)), false, maxBtn())}
     <div id="heroBody" class="${g ? 'river' : 'chart hero-h'}"></div><div id="heroNote" class="heronote" hidden></div><div id="heroOvl"></div>`);
-  lockLive('heroLiveSeg');
+  lockLive('heroLiveSeg'); maxMark();
   wireSeg('heroSeg', m => { if (m === state.heroMode) return; state.heroMode = m; mountHero(); });
   wireSeg('heroLiveSeg', m => { const l = m === 'live'; if (l === !!state.heroLive) return; state.heroLive = l; mountHero(); });
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
@@ -798,12 +814,12 @@ function vOverview(){
   v.innerHTML = `<div class="grid"><div id="kpis" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
     <section class="glass panel s8 hero" id="heroSec"></section>
     <div class="col s4">
-      <section class="glass panel">${ph('pie', T('Top services'), T('by traffic volume'))}<div id="svcBox" class="loading"></div></section>
-      <section class="glass panel">${ph('users', T('Top hosts'), T('inside addresses'))}<div id="hostBox" class="loading"></div></section>
+      <section class="glass panel">${ph('pie', T('Top services'), T('by traffic volume'), '', false, maxBtn())}<div id="svcBox" class="loading"></div></section>
+      <section class="glass panel">${ph('users', T('Top hosts'), T('inside addresses'), '', false, maxBtn())}<div id="hostBox" class="loading"></div></section>
     </div>
-    <section class="glass panel s4">${ph('chart', T('Traffic trend'), rangeLabel())}<div class="chart" id="cTrend"></div></section>
-    <section class="glass panel s4">${ph('conv', T('Top conversations'), (isInternal() ? T('client → server') : T('inside → outside address')))}<div id="convBox" class="loading"></div></section>
-    <section class="glass panel s4">${ph('list', T('Recent flows'), T('new network activity'), `<button class="lnk" id="toFlows">${T('All')}</button>`)}<div id="recentBox" class="loading"></div></section></div>`;
+    <section class="glass panel s4">${ph('chart', T('Traffic trend'), rangeLabel(), '', false, maxBtn())}<div class="chart" id="cTrend"></div></section>
+    <section class="glass panel s4">${ph('conv', T('Top conversations'), (isInternal() ? T('client → server') : T('inside → outside address')), '', false, maxBtn())}<div id="convBox" class="loading"></div></section>
+    <section class="glass panel s4">${ph('list', T('Recent flows'), T('new network activity'), `<button class="lnk" id="toFlows">${T('All')}</button>`, false, maxBtn())}<div id="recentBox" class="loading"></div></section></div>`;
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
   mountHero();
@@ -2027,6 +2043,10 @@ function copyText(text, btn){
   const ta = Object.assign(document.createElement('textarea'), {value:text}); document.body.appendChild(ta); ta.select();   // plain-HTTP installs
   try { document.execCommand('copy'); done(); } finally { ta.remove(); }
 }
+// (1.8.8) a ready-made text (device configuration, a command) with a Copy button over it; the button copies what the
+// box shows at the moment (the configuration follows the form)
+const codeBox = (text, id = '', cls = 'codebox', style = '') => `<div class="codewrap"><pre class="${cls}"${id ? ` id="${id}"` : ''}${style ? ` style="${style}"` : ''}>${esc(text)}</pre><button type="button" class="btn copybtn" data-copy>${T('Copy')}</button></div>`;
+document.addEventListener('click', e => { const b = e.target.closest('[data-copy]'); if (b) copyText(b.parentElement.querySelector('pre').textContent, b); });
 function saveText(name, text){
   const a = Object.assign(document.createElement('a'), {href:URL.createObjectURL(new Blob([text], {type:'text/plain'})), download:name});
   document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); });
@@ -2467,7 +2487,7 @@ function vBackups(){
   const openRestore = m => openModal(T('Restore a backup'), when(m.t), `<div class="form" style="padding:4px 2px">
       <p class="note" style="margin:0">${T('Restoring stops collecting and the web interface for a few minutes, replaces the flow data and the settings with the backup, and starts them again. Records that arrive meanwhile are lost. The current data is set aside until the backup is in place and comes back if the restore fails.')}</p>
       <p class="note" style="margin:0">${T('Run on the server:')}</p>
-      <pre class="mono" style="margin:0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap">sudo flowtrack restore ${esc(m.id)}</pre>
+      ${codeBox(`sudo flowtrack restore ${m.id}`, '', 'mono', 'margin:0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap')}
       <p class="note" style="margin:0">${T('Options: --only-settings (keep the flow data), --only-data (keep the settings), --with-license (also the license files — only on the same server). On a new server: install FlowTrack, set the same place here (S3, SFTP or FTP), then run sudo flowtrack restore --from s3 (or sftp, ftp, a folder) and pick the backup.')}</p>
       ${m.encrypted ? `<p class="note" style="margin:0;color:var(--warn)">${T('The copies of this backup are encrypted: a restore from them asks for the passphrase.')}</p>` : ''}</div>`);
   // ---- the forms: drawn once, so a refresh while a backup runs never clears what is being typed
@@ -2722,6 +2742,7 @@ function wireIfaces(box, x, devices){
   };
 }
 function openModal(title, sub, body, wide){
+  maxLeave();                // a full-screen panel would hide it
   const root = document.getElementById('drawerRoot');
   root.innerHTML = `<div class="scrim" id="scrim"></div><div class="modal glass${wide ? '' : ' narrow'}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
     <header><div><h3>${esc(title)}</h3>${sub ? `<span class="nat">${sub}</span>` : ''}</div><button class="btn x" id="dx">${T('Close')}</button></header>${body}</div>`;
@@ -2792,7 +2813,7 @@ function openDevice(dev){
     const m = openModal(editing ? T('Device {name}', {name: dev.name}) : T('Connect a device'), editing ? esc(dev.ip) : T('Set up export on the device and describe it here'), `
       <div class="vendors" role="group">${VENDOR_LIST().map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(vendorLabel(k))}</button>`).join('')}</div>
       ${protoSeg()}
-      <div class="cols"><div><h4>${T('1. Configuration on the device')}</h4><pre class="codebox" id="devCode">${esc(code())}</pre></div>
+      <div class="cols"><div><h4>${T('1. Configuration on the device')}</h4>${codeBox(code(), 'devCode')}</div>
       <form class="form" id="devForm" autocomplete="off"><h4 style="margin:0">${T('2. Description for FlowTrack')}</h4>
         <div class="two"><label>${T('IP the export comes from')}<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>${T('Name')}<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
         <div class="two"><label>${T('Model')}<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>${T('form::Sampling')}<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
@@ -2951,6 +2972,7 @@ function showLogin(msg){
 }
 
 async function openHost(ip){
+  maxLeave();
   const root = document.getElementById('drawerRoot');
   root.innerHTML = `<div class="scrim" id="scrim"></div><aside class="drawer glass" role="dialog" aria-modal="true" aria-label="${T('Host')} ${esc(ip)}"><div class="loading" style="min-height:200px"></div></aside>`;
   const close = () => { if (hc) { hc.dispose(); const i = charts.indexOf(hc); if (i >= 0) charts.splice(i, 1); } root.innerHTML = ''; document.removeEventListener('keydown', onKey); };

@@ -1341,5 +1341,7 @@
  "This backup goes:": "Буде видалено цей бекап:",
  "Which backup? flowtrack backup delete ID [--copies]": "Який бекап? flowtrack backup delete ID [--copies]",
  "Wrong password": "Неправильний пароль",
- "Your password ({user}) to confirm": "Ваш пароль ({user}) для підтвердження"
+ "Your password ({user}) to confirm": "Ваш пароль ({user}) для підтвердження",
+ "Full screen": "На весь екран",
+ "Leave full screen": "Вийти з повноекранного режиму"
 }

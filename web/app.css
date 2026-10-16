@@ -593,3 +593,22 @@ table.pntbl tr.pnedit td{background:rgba(47,123,255,.08)}
 .qtips b{color:var(--ink2);font-family:var(--f-mono)}
 .qerr{padding:7px 9px;font-size:12.5px;color:var(--crit)}
 @media (max-width:860px){.qgrid{grid-template-columns:1fr}.qguide{width:100%}}
+/* (1.8.8) Copy over a ready-made text (device configuration, a command) */
+.codewrap{position:relative;min-width:0}
+.codewrap > pre{margin:0}
+.codewrap > .copybtn{position:absolute;top:8px;right:8px;padding:4px 10px;font-size:12px;background:rgba(11,23,54,.92);backdrop-filter:blur(4px)}
+/* (1.8.8) an Overview panel full screen: the browser's own (:fullscreen) or over the whole window */
+section.panel.is-max{position:fixed;inset:0;z-index:70;margin:0;border-radius:0;display:flex;flex-direction:column;overflow:auto;
+  background:linear-gradient(180deg,var(--bg0),var(--bg1) 55%,var(--bg2));padding:20px max(20px, env(safe-area-inset-right, 0px)) max(20px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px))}
+section.panel.is-max > .ph{flex:0 0 auto}
+section.panel.is-max > :not(.ph):not(.heronote):not(#heroOvl){flex:1 1 auto;min-height:0}
+section.panel.is-max > .chart{height:auto;min-height:300px}
+section.panel.is-max > .river{min-height:0}
+section.panel:fullscreen{width:100vw;height:100vh}
+section.panel.is-max .donut-wrap{grid-template-columns:min(50vh,440px) minmax(0,1fr);gap:28px}
+section.panel.is-max .chart.donut{height:min(50vh,440px)}
+section.panel.is-max .donut-wrap .dl{font-size:14px}
+.maxbtn{all:unset;box-sizing:border-box;display:inline-grid;place-items:center;width:22px;height:22px;margin-left:6px;vertical-align:-4px;border-radius:6px;cursor:pointer;color:var(--ink3);border:1px solid transparent}
+.maxbtn:hover,.maxbtn:focus-visible{color:var(--ink);border-color:var(--edge-hi)}
+.maxbtn:focus-visible{outline:2px solid var(--blue-hi, #4C93FF);outline-offset:1px}
+section.panel.is-max .maxbtn{color:var(--ink);border-color:var(--edge-hi)}

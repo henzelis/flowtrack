@@ -3,8 +3,15 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.8.8 — 2026-10-16
 
+- **Overview panels full screen.** A small button next to each panel's title (the map / graph / 3D, Top services,
+  Top hosts, Traffic trend, Top conversations, Recent flows) opens it over the whole screen — the browser's own full
+  screen, so it suits a wall display; the map, the charts and the share ring grow with it. The button again or Esc
+  brings it back; opening a host card or a dialog leaves full screen first.
+- **Copy buttons on ready-made texts.** The configuration for the device (Settings → Devices → Connect a device) and
+  the restore command have a Copy button; it copies what the box shows at that moment (after choosing another
+  vendor, protocol, sampling or interfaces).
 - **Delete backups in Settings → Backups.** Delete… on a backup shows what goes (a full backup takes its changes with
   it: they cannot be restored without it), how much it frees, and when no full backup would be left; the signed-in
   administrator's own password confirms it (wrong ones count with the failed logins: 5 in 5 minutes and it waits).
