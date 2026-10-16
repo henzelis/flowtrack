@@ -86,7 +86,8 @@ class Subnets(unittest.TestCase):
         t = T.build(self.cfg, [], [iface(A, 9, 5_000_000, 6_000_000), iface(B, 1, 6_000_000, 5_000_000)], {A, B})
         T.set_volumes(t, [iface(A, 9, 100, 0)])
         ab = links(t)[frozenset((A, B))]
-        self.assertEqual((ab['state'], ab['a_out'], ab['b_in'], ab['all']['b_in']), ('observed', 100, 0, 5_000_000))
+        ea, eb = ('a', 'b') if ab['a'] == A else ('b', 'a')        # the order of a link's ends is not fixed
+        self.assertEqual((ab['state'], ab[ea + '_out'], ab[eb + '_in'], ab['all'][eb + '_in']), ('observed', 100, 0, 5_000_000))
 
     def test_wan_towards_device_is_no_internet(self):
         cfg = {**self.cfg, A: {**self.cfg[A], 'wan_ifs': [9]}}
