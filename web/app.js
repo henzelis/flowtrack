@@ -1205,7 +1205,7 @@ function createTopoMap(host, opts){
   // ribbon width by volume; one link end on a card side takes a slot: its label (name over address) above its ribbon
   const v = x => state.scale === 'lin' ? x : Math.sqrt(x), vol2 = l => Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in);
   let vmax = 1; const lw = x => x > 0 ? 2 + 14 * v(x) / vmax : 0, slot = l => 40 + lw(vol2(l)), WAN_PAD = 40;
-  const CLW = 210, CLH = 72, UP = 84;     // the internet cloud on top; UP: room under it for the WAN ribbons and their labels
+  const CLW = 132, CLH = 36, UP = 84;     // (1.8.10) the internet as in the waiting sketch: a pill on top; UP: room under it for the WAN ribbons and their labels
   function size(){ const r = host.getBoundingClientRect(); H = r.height; dpr = Math.min(2, devicePixelRatio || 1); draw(); }
   const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
   const rr = (x, y, w, h, r) => { const p = new Path2D(); p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r); p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath(); return p; };
@@ -1262,13 +1262,8 @@ function createTopoMap(host, opts){
     const wx = wan.map(l => pos.get(l.a).x), cx = wx.length ? Math.max(14 + CLW / 2, Math.min(W - 14 - CLW / 2, (Math.min(...wx) + Math.max(...wx)) / 2)) : W / 2;
     return {pos, cloud:wan.length ? {x:cx, y:12 + CLH / 2, w:CLW, h:CLH} : null};
   }
-  // a cloud: flat bottom, bumps on top
-  const cloudPath = ({x, y, w, h}) => { const x0 = x - w / 2, y0 = y - h / 2, y1 = y + h / 2, p = new Path2D();
-    p.moveTo(x0 + .2 * w, y1); p.lineTo(x0 + .8 * w, y1);
-    p.bezierCurveTo(x0 + 1.04 * w, y1, x0 + 1.04 * w, y0 + .42 * h, x0 + .83 * w, y0 + .4 * h);
-    p.bezierCurveTo(x0 + .86 * w, y0 - .02 * h, x0 + .58 * w, y0 - .12 * h, x0 + .5 * w, y0 + .16 * h);
-    p.bezierCurveTo(x0 + .4 * w, y0 - .08 * h, x0 + .14 * w, y0 + .02 * h, x0 + .19 * w, y0 + .38 * h);
-    p.bezierCurveTo(x0 - .04 * w, y0 + .38 * h, x0 - .04 * w, y1, x0 + .2 * w, y1); p.closePath(); return p; };
+  // the internet: a rounded pill, as in the waiting sketch (it was a big cloud)
+  const cloudPath = ({x, y, w, h}) => rr(x - w / 2, y - h / 2, w, h, h / 2);
   function draw(){
     if (!H) return;
     if (!data) { W = host.clientWidth; return; }
@@ -1316,7 +1311,7 @@ function createTopoMap(host, opts){
       const wl = data.links.filter(l => l.b === 'internet' && pos.has(l.a)), per = new Map();
       wl.forEach(l => { if (!per.has(l.a)) per.set(l.a, []); per.get(l.a).push(l); });
       for (const list of per.values()) list.forEach((l, k) => up.set(l, {dx:list.length === 1 ? 0 : -24 + 48 * k / (list.length - 1)}));
-      const order = [...wl].sort((a, b) => pos.get(a.a).x + up.get(a).dx - pos.get(b.a).x - up.get(b).dx), span = Math.min(cloud.w * .5, 22 * (order.length - 1));
+      const order = [...wl].sort((a, b) => pos.get(a.a).x + up.get(a).dx - pos.get(b.a).x - up.get(b).dx), span = Math.min(cloud.w * .7, 22 * (order.length - 1));
       order.forEach((l, k) => { up.get(l).cx = cloud.x + (order.length === 1 ? 0 : -span / 2 + span * k / (order.length - 1)); });
     }
     const labels = [], pills = [], sameK = new Map();
@@ -1328,7 +1323,7 @@ function createTopoMap(host, opts){
       if (l.b === 'internet') {
         // up from the top of the card into the cloud; the WAN interface (name over address) beside the ribbon
         const e = up.get(l); if (!A || !e) { ctx.globalAlpha = 1; continue; }
-        const rw = Math.min(w, 14), xd = A.x + e.dx, yd = A.y - A.h / 2, xc = e.cx, yc = cloud.y + cloud.h / 2 - 4, ym = (yd + yc) / 2;
+        const rw = Math.min(w, 14), xd = A.x + e.dx, yd = A.y - A.h / 2, xc = e.cx, yc = cloud.y + cloud.h / 2 - 1, ym = (yd + yc) / 2;
         const curve = off => { const p = new Path2D(); p.moveTo(xd + off, yd); p.bezierCurveTo(xd + off, ym, xc + off, ym, xc + off, yc); return p; };
         if (w && l.state !== 'adjacent') ribbon(curve, l, rw, false);
         if (look) { ctx.setLineDash([5, 5]); ctx.strokeStyle = look[0]; ctx.lineWidth = 1.6; ctx.stroke(curve(w ? rw / 2 + 4 : 0)); ctx.setLineDash([]); }
@@ -1387,8 +1382,9 @@ function createTopoMap(host, opts){
       ctx.globalAlpha = dim ? .35 : 1;
       ctx.fillStyle = 'rgba(14,30,66,.97)'; ctx.fill(cp);
       ctx.strokeStyle = on ? 'rgba(46,229,157,.95)' : 'rgba(46,229,157,.6)'; ctx.lineWidth = 1.4; ctx.shadowColor = 'rgba(46,229,157,.45)'; ctx.shadowBlur = on ? 18 : 10; ctx.stroke(cp); ctx.shadowBlur = 0;
-      ctx.save(); ctx.translate(cloud.x - 46, cloud.y); ctx.strokeStyle = C.ext; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
-      ctx.textAlign = 'left'; ctx.font = '700 14px Manrope, sans-serif'; ctx.fillStyle = C.ink; ctx.fillText(T('Internet'), cloud.x - 20, cloud.y + 12);
+      ctx.font = '700 13px Manrope, sans-serif'; const tw = ctx.measureText(T('Internet')).width, gx = cloud.x - (tw + 24) / 2;      // the globe and the word, centred
+      ctx.save(); ctx.translate(gx, cloud.y - 8); ctx.scale(.9, .9); ctx.strokeStyle = C.ext; ctx.lineWidth = 1.5; ctx.stroke(new Path2D(ICO.globe)); ctx.restore();
+      ctx.textAlign = 'left'; ctx.fillStyle = C.ink; ctx.fillText(T('Internet'), gx + 24, cloud.y + .5);
       ctx.globalAlpha = 1;
       shapes.push({path:cp, cloud:true, tip:`<b>${T('Internet')}</b>` + wl.map(l => `<div>${nm(l.a)} <span class="mono">${esc(l.a_name)}</span>: ↗ <b class="mono">${fmtB(l.a_out)}</b> · ↘ <b class="mono">${fmtB(l.a_in)}</b></div>`).join('')});
     }

@@ -3,6 +3,11 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Path analysis: the internet is a compact sign.** The big cloud over the map is now the same small «Internet» pill
+  as in the waiting animation; the map gets its top third back, the WAN links go up into it as before.
+
 ## 1.8.9 — 2026-10-16
 
 - **Full-screen lists show more.** Top hosts, Top conversations and Recent flows show 20 rows on the full screen,
