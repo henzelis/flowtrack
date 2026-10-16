@@ -232,7 +232,10 @@ function sparkSvg(vals, color, w = 200, h = 26){
 const metricFmt = v => state.metric === 'bytes' ? fmtB(v) : state.metric === 'packets' ? fmtN(v) + T(' pkt') : fmtN(v) + ' flows';
 const RIVERS = new Set();   // kick() of every mounted river (scale toggles wake them up)
 function createRiver(host, opts){
-  const {compact, onSelect, fetchData, refreshMs} = opts;
+  const {onSelect, fetchData, refreshMs} = opts;
+  // (1.8.9) compact in a panel, full-size cards when its panel is full screen; fitTop(H, compact): as many pairs as the
+  // height holds — asked again (debounced) when the size changes the number
+  let compact = opts.compact, top = null, refit = 0;
   host.innerHTML = '<canvas></canvas><div class="rtip" hidden></div>';
   const cv = host.querySelector('canvas'), tip = host.querySelector('.rtip'), ctx = cv.getContext('2d');
   let W = 0, H = 0, dpr = 1, raf = 0, hover = null, sticky = state.sel, data = null, first = true;
@@ -243,7 +246,7 @@ function createRiver(host, opts){
   const ease = (m, k, target) => { const v = m.has(k) ? m.get(k) : target; let n = v + (target - v) * 0.1; if (Math.abs(target - n) < 0.003) n = target; else moving = true; m.set(k, n); return n; };
   const kick = () => { if (!raf) raf = requestAnimationFrame(frame); };
   async function load(){
-    try { data = await fetchData(); } catch (e) { host.querySelector('.rtip').hidden = true; return; }
+    try { data = await fetchData(top); } catch (e) { host.querySelector('.rtip').hidden = true; return; }
     left = data.left.map(h => h.ip).concat(data.more_left ? ['__other'] : []);
     right = data.right.map(r => r.ip).concat(data.more_right ? ['__other'] : []);
     info = {L:new Map(data.left.map(h => [h.ip, h])), R:new Map(data.right.map(r => [r.ip, r]))};
@@ -254,10 +257,13 @@ function createRiver(host, opts){
     if (opts.onData) opts.onData(data);
     kick();
   }
-  load();
-  if (refreshMs) every(refreshMs, load);
-  function size(){ kick(); const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr; }
-  const ro = new ResizeObserver(size); ro.observe(host); size(); onCleanup(() => ro.disconnect());
+  if (!opts.fitTop) load();
+  if (refreshMs) every(refreshMs, () => { if (top !== null || !opts.fitTop) load(); });
+  function size(){ kick(); const r = host.getBoundingClientRect(); W = r.width; H = r.height; dpr = Math.min(2, devicePixelRatio || 1); cv.width = W * dpr; cv.height = H * dpr;
+    compact = opts.compact && !host.closest('section.is-max');
+    if (opts.fitTop && H > 0) { const want = opts.fitTop(H, compact);
+      if (want !== top) { const firstFit = top === null; top = want; clearTimeout(refit); if (firstFit) load(); else refit = setTimeout(load, 300); } } }
+  const ro = new ResizeObserver(size); ro.observe(host); size(); onCleanup(() => { ro.disconnect(); clearTimeout(refit); });
   const nodeLabel = (side, k) => {
     if (side === 'L') { if (k === '__other') return [isInternal() ? T('Other clients') : T('Other inside'), T('Remaining addresses')]; const h = info.L.get(k) || {ip:k}; return [h.name || k, h.name ? k : (h.private ? T('Inside') : T('Public (self)'))]; }
     if (k === '__other') return [isInternal() ? T('Other servers') : T('Other outside'), T('Remaining addresses')]; const r = info.R.get(k) || {};
@@ -785,7 +791,8 @@ function mountHero(){
   wireSeg('scaleSeg', m => { state.scale = m; setPressed('scaleSeg', m); RIVERS.forEach(k => k()); });
   const hb = document.getElementById('heroBody'), myScope = heroScope;
   heroScope.run(() => {
-    if (g) createRiver(hb, {compact:true, refreshMs:live ? 10000 : 0, fetchData:() => api('river', {top:8, live:live ? 1 : 0, win:120, metric:state.metric}),
+    if (g) createRiver(hb, {compact:true, refreshMs:live ? 10000 : 0, fetchData:top => api('river', {top, live:live ? 1 : 0, win:120, metric:state.metric}),
+      fitTop:(h, cpt) => Math.max(3, Math.min(20, Math.floor((h - (cpt ? 22 : 30) + (cpt ? 6 : 8)) / (cpt ? 46 : 58)))),     // a card 40 / 50 px + the gap
       onData:() => fill('heroLbl', live ? `${T('live · 2 min · updated {time}', {time: hms(Math.floor(Date.now() / 1000))})}${scaleNote()}` : rangeLabel() + scaleNote())});
   });
   if (!g) {

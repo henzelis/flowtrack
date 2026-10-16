@@ -7,6 +7,9 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 - **Full-screen lists show more.** Top hosts, Top conversations and Recent flows show 20 rows on the full screen,
   Top services 12 services and the rest; back in the page they show their usual few again.
+- **The Graph full screen fills the screen.** Network traffic → Graph asks for as many inside / outside pairs as the
+  height of the panel holds (15 on a 1080 p screen, 20 on a taller one) with full-size cards; back in the page it shows
+  its usual 8 again, and a resized window is followed.
 
 ## 1.8.8 — 2026-10-16
 
