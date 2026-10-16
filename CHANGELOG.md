@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.9.2 — 2026-10-16
 
 - **No more false gaps on Path analysis.** A working network often shows two ends of a link that do not agree —
   sampled exports, sessions reported at different times, traffic coming back another way, tunnels (the inner traffic
