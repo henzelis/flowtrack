@@ -1188,13 +1188,41 @@ function vPaths(){
 // ===================== path analysis: layer-3 neighbours of a device and the path of traffic across devices =====================
 const LINK_STATE = {
   observed:[T('Observed'), T('traffic recorded by both ends')],
-  gap:[T('Gap'), T('one end sent much more than the other received')],
+  gap:[T('Gap'), T('one end sends traffic towards the other and gets nothing back; the other end records nothing at all')],
+  silent:[T('One end silent'), T('the link works (traffic comes back), but one end records nothing on its interface: NetFlow is probably off there')],
   unobserved:[T('No observation'), T('the other end sends no NetFlow')],
   one_sided:[T('One side'), T('the interface of the other end towards this one is not known')],
   adjacent:[T('No traffic'), T('neighbours by addressing, no traffic in the period')]};
-const HOP_STATE = {observed:T('recorded'), gap:T('recorded nothing — gap'), unobserved:T('sends no NetFlow'),
+const HOP_STATE = {observed:T('recorded'), gap:T('recorded nothing on that interface — gap'), not_seen:T('not seen here — another route?'), silent:T('its interface records nothing — NetFlow off?'), unobserved:T('sends no NetFlow'),
   internet:T('the internet'), branch:T('on another exit'), unplaced:T('recorded it, place on the path unknown')};
-const RED = '#FF5C7A';
+const RED = '#FF5C7A', AMBER = '#FFC34D';
+// (1.9.2) why the two ends of a link do not agree, in words: a working network differs a lot (sampling, timing,
+// asymmetric routes, tunnels, a big download one way); a gap is only real traffic towards a silent interface
+function linkHints(l, nmOf, live){
+  if (l.b === 'internet' || l.state === 'adjacent' || l.state === 'unobserved' || l.state === 'one_sided') return [];
+  l = {...l, ...(l.all || {})};          // all the traffic, as the state was found (the selector narrows only the drawing)
+  const out = [], A = nmOf(l.a), B = nmOf(l.b);
+  if (l.state === 'silent') {
+    const silentB = !(l.b_out + l.b_in), [S, Sif, R, back] = silentB ? [B, l.b_name, A, l.a_in] : [A, l.a_name, B, l.b_in];
+    out.push(T('{s} records nothing on {iface}, but {r} received {bytes} from it: the link works.', {s:S, iface:`<span class="mono">${esc(Sif || '?')}</span>`, r:R, bytes:fmtB(back)}));
+    out.push(T('NetFlow is probably off on that interface (FortiGate: set netflow-sampler both; tunnel interfaces need it too). Until then FlowTrack sees this link from one end only.'));
+    return out;
+  }
+  if (l.state === 'gap') {
+    const silentB = !(l.b_out + l.b_in), [S, Sif, R, sent] = silentB ? [B, l.b_name, A, l.a_out] : [A, l.a_name, B, l.b_out];
+    out.push(T('{s} recorded nothing on {iface} — no packets either way — while {r} sent {bytes} towards it and got nothing back.', {s:S, iface:`<span class="mono">${esc(Sif || '?')}</span>`, r:R, bytes:fmtB(sent)}));
+    out.push(T('Check that NetFlow is on for that interface (FortiGate: set netflow-sampler both), that its number matches in Settings → Devices, and that the link is up.'));
+    if (live) out.push(T('Over 2 minutes a quiet end may not have reported its sessions yet: see the Period view.'));
+    return out;
+  }
+  for (const [f, t, sent, got] of [[A, B, l.a_out, l.b_in], [B, A, l.b_out, l.a_in]])
+    if (sent >= 100e3 && got < sent * .9) out.push(T('{t} recorded {p}% of what {f} sent towards it.', {t, f, p:Math.round(100 * got / sent)}));
+  if (out.length) out.push(T('Usual in a working network: sampled exports, sessions reported at different times, traffic coming back another way, tunnels (the inner traffic is recorded on the tunnel interface), traffic to the device itself, policy drops.'));
+  return out;
+}
+const hopHint = (h, prevName) => h.state === 'silent' ? T('{d} records nothing on its interface towards {p}, although the link works: NetFlow is probably off on that interface.', {d:esc(h.name), p:prevName})
+  : h.state === 'not_seen' ? T('{d} carried other traffic on its interface towards {p}, but not this: it probably went another way (asymmetric routing, another exit) or through a tunnel.', {d:esc(h.name), p:prevName})
+  : h.state === 'gap' ? T('{d} recorded nothing at all on its interface towards {p}: check that NetFlow is on for it.', {d:esc(h.name), p:prevName}) : '';
 const devIcon = n => n.ip === 'internet' ? ICO.globe : DEV_ICON;
 function createTopoMap(host, opts){
   host.innerHTML = '<div class="netin"><canvas></canvas><div class="rtip" hidden></div></div>';
@@ -1274,7 +1302,7 @@ function createTopoMap(host, opts){
   const nmOf = d => esc(d === 'internet' ? T('Internet') : ((data && data.nodes.find(n => n.ip === d)) || {}).name || d);
   const linkTip = l => `<b>${nmOf(l.a)} ${esc(l.a_name)} ↔ ${nmOf(l.b)} ${esc(l.b_name)}</b>${l.net ? ` <span class="nat">${esc(l.net)}</span>` : ''}<div style="color:${l.state === 'observed' ? C.ext : l.state === 'adjacent' || l.state === 'one_sided' ? C.ink2 : RED}">${LINK_STATE[l.state][0]} — ${LINK_STATE[l.state][1]}</div>`
       + (l.b === 'internet' ? `<div>${T('to the internet')}: <b class="mono">${fmtB(l.a_out)}</b> · ${T('from it')}: <b class="mono">${fmtB(l.a_in)}</b></div>`
-        : [[l.a, l.b, l.a_out, l.b_in], [l.b, l.a, l.b_out, l.a_in]].map(([f, t, s, g]) => `<div>${nmOf(f)} → ${nmOf(t)}: <b class="mono">${fmtB(s)}</b> ${T('sent')} · <b class="mono">${fmtB(g)}</b> ${T('received')}</div>`).join(''));
+        : [[l.a, l.b, l.a_out, l.b_in], [l.b, l.a, l.b_out, l.a_in]].map(([f, t, s, g]) => `<div>${nmOf(f)} → ${nmOf(t)}: <b class="mono">${fmtB(s)}</b> ${T('sent')} · <b class="mono">${fmtB(g)}</b> ${T('received')}</div>`).join('')) + linkHints(l, nmOf, !!(data && data.live)).map(x => `<div class="lhint">${x}</div>`).join('');
   const nodeTip = n => `<b>${nmOf(n.ip)}</b>${n.ip !== 'internet' ? ` <span class="nat">${esc(n.ip)}</span><div>${n.exporting ? T('sends NetFlow') : T('sent no NetFlow in this period')}</div>` : ''}${n.more ? `<div>${Tn(n.more, '{n} more neighbour beyond', '{n} more neighbours beyond')}</div>` : ''}${n.ip !== data.pov && n.ip !== 'internet' ? `<div class="nat">${T('Click: look from this device')}</div>` : ''}`;
   const inetTip = () => `<b>${T('Internet')}</b>` + data.links.filter(l => l.b === 'internet').map(l => `<div>${nmOf(l.a)} <span class="mono">${esc(l.a_name)}</span>: ↗ <b class="mono">${fmtB(l.a_out)}</b> · ↘ <b class="mono">${fmtB(l.a_in)}</b></div>`).join('');
   function drawClassic(){
@@ -1304,7 +1332,7 @@ function createTopoMap(host, opts){
     const pill = (text, x, y, colr) => { ctx.font = '700 11px Manrope, sans-serif'; const tw = ctx.measureText(text).width + 14;
       ctx.fillStyle = 'rgba(8,16,40,.92)'; ctx.fill(rr(x - tw / 2, y - 9, tw, 18, 9)); ctx.strokeStyle = hexA(colr, .6); ctx.lineWidth = 1; ctx.stroke(rr(x - tw / 2, y - 9, tw, 18, 9));
       ctx.fillStyle = colr; ctx.textAlign = 'center'; ctx.fillText(text, x, y + .5); };
-    const stateLook = l => l.state === 'adjacent' ? ['rgba(170,190,230,.55)', T('no traffic')] : l.state === 'gap' || l.state === 'unobserved' ? [RED, '⨯ ' + LINK_STATE[l.state][0]] : null;
+    const stateLook = l => l.state === 'adjacent' ? ['rgba(170,190,230,.55)', T('no traffic')] : l.state === 'silent' ? [AMBER, '◌ ' + LINK_STATE.silent[0]] : l.state === 'gap' || l.state === 'unobserved' ? [RED, '⨯ ' + LINK_STATE[l.state][0]] : null;
     const tipOf = linkTip;
     // where each link meets a card: the links on one side of a card get a slot each down its height, ordered by the
     // far end; the ribbon leaves at the bottom of its slot, its label sits above it
@@ -1573,7 +1601,8 @@ function createTopoMap(host, opts){
     box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; sizeBg(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
     shapes = []; placed = []; ctx.textBaseline = 'middle'; ctx.lineCap = 'round'; }
   const stateDash = (p, l) => { if (l.state === 'adjacent') { ctx.setLineDash([4, 5]); ctx.strokeStyle = 'rgba(170,190,230,.55)'; ctx.lineWidth = 1.4; ctx.stroke(p); ctx.setLineDash([]); return true; }
-    if (l.state === 'gap' || l.state === 'unobserved') { ctx.setLineDash([5, 5]); ctx.strokeStyle = RED; ctx.lineWidth = 1.6; ctx.stroke(p); ctx.setLineDash([]); return true; } return false; };
+    if (l.state === 'gap' || l.state === 'unobserved') { ctx.setLineDash([5, 5]); ctx.strokeStyle = RED; ctx.lineWidth = 1.6; ctx.stroke(p); ctx.setLineDash([]); return true; }
+    if (l.state === 'silent') { ctx.setLineDash([2, 6]); ctx.lineCap = 'round'; ctx.strokeStyle = AMBER; ctx.lineWidth = 1.6; ctx.stroke(p); ctx.setLineDash([]); return false; } return false; };
   function inetPill(x, y, w, h){
     const p = rr(x - w / 2, y - h / 2, w, h, h / 2); ctx.globalAlpha = nodeAlpha('internet'); ctx.fillStyle = 'rgba(11,23,54,.97)'; ctx.fill(p);
     ctx.strokeStyle = hover && hover.cloud ? 'rgba(46,229,157,.95)' : 'rgba(46,229,157,.65)'; ctx.lineWidth = 1.6; ctx.stroke(p);
@@ -1808,25 +1837,25 @@ function vNetwork(){
     const tb = fill('nLinks', ls.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('End A')}</th><th></th><th>${T('End B')}</th><th>${T('State')}</th><th class="num">${T('A → B sent / received')}</th><th class="num">${T('B → A sent / received')}</th><th>${T('Found by')}</th></tr></thead><tbody>
       ${ls.map(l => { const inet = l.b === 'internet', bad = l.state === 'gap' || l.state === 'unobserved';
         return `<tr><td>${row(l.a, l.a_name, l.a_addr, l.a_seen)}</td><td class="nat">↔</td><td>${inet ? `<b>${T('Internet')}</b>` : row(l.b, l.b_name, l.b_addr, l.b_seen)}</td>
-          <td><span class="tag" title="${esc(LINK_STATE[l.state][1])}"${bad ? ` style="color:${RED};border-color:${hexA(RED, .5)}"` : ''}>${LINK_STATE[l.state][0]}</span></td>
+          <td><span class="tag" title="${esc(LINK_STATE[l.state][1])}"${bad ? ` style="color:${RED};border-color:${hexA(RED, .5)}"` : l.state === 'silent' ? ` style="color:${AMBER};border-color:${hexA(AMBER, .5)}"` : ''}>${LINK_STATE[l.state][0]}</span>${(h => h.length ? `<details class="lhints"><summary>${l.state === 'gap' || l.state === 'silent' ? T('what to check') : T('why the ends differ')}</summary>${h.map(x => `<p>${x}</p>`).join('')}</details>` : '')(linkHints(l, d => esc(nm(d)), !!topo.live))}</td>
           <td class="num">${sr(l.a_out, l.b_in, inet)}</td><td class="num">${inet ? `<b class="mono">${fmtB(l.a_in)}</b>` : sr(l.b_out, l.a_in)}</td>
           <td class="nat">${l.evidence === 'subnet' ? T('subnet') + ' ' + esc(l.net) : l.evidence === 'wan' ? T('WAN interface') : T('addresses in the records')}</td></tr>`; }).join('')}</tbody></table></div>`
       : `<div class="empty">${T('This device has no layer-3 neighbours among the devices: set interface addresses in Settings → Devices → Interfaces, or wait for traffic between the devices.')}</div>`);
     if (tb) tb.classList.remove('loading');
   };
   const drawPath = () => {
-    if (!path) { fill('nPath', `<p class="note" style="margin:8px 0 0">${T('Enter an address or a network on each side. Each device on the way shows the interfaces the traffic used; a device that should have seen it but recorded nothing marks a gap.')}</p>`); return; }
-    const hs = path.hops, real = hs.filter(h => !['internet', 'unplaced', 'branch'].includes(h.state)), obs = real.filter(h => h.state === 'observed').length, gaps = real.length - obs;
+    if (!path) { fill('nPath', `<p class="note" style="margin:8px 0 0">${T('Enter an address or a network on each side. Each device on the way shows the interfaces the traffic used; a device whose interface on the way recorded nothing at all marks a gap.')}</p>`); return; }
+    const hs = path.hops, real = hs.filter(h => !['internet', 'unplaced', 'branch'].includes(h.state)), obs = real.filter(h => h.state === 'observed').length, gaps = real.filter(h => h.state === 'gap' || h.state === 'unobserved').length;
     if (!hs.length) { fill('nPath', `<div class="empty">${T('No device recorded traffic from this source to this destination in the period.')}</div>`); return; }
     const total = Math.max(0, ...hs.map(h => h.bytes));
     const el = fill('nPath', `<div class="pstats"><div><span>${T('Hops')}</span><b>${real.length}</b></div><div><span>${T('Observed')}</span><b>${obs} / ${real.length}</b></div><div><span>${T('Gaps')}</span><b${gaps ? ` style="color:${RED}"` : ''}>${gaps}${gaps ? ' ⚠' : ''}</b></div><div><span>${T('Traffic')}</span><b>${fmtB(total)}</b></div></div>
-      <ol class="hops">${hs.map((h, k) => { const bad = h.state === 'gap' || h.state === 'unobserved';
+      <ol class="hops">${hs.map((h, k) => { const bad = h.state === 'gap' || h.state === 'unobserved', warn = h.state === 'not_seen' || h.state === 'silent', hint = hopHint(h, esc(nm((hs[k - 1] || hs[k + 1] || {}).device || '')));
         return `<li class="hop ${h.state}" data-dev="${esc(h.device)}"><span class="no">${h.state === 'unplaced' ? '?' : h.state === 'branch' ? '↳' : k + 1}</span><div><b>${esc(h.state === 'internet' ? T('Internet') : h.name)}</b>
           ${h.state === 'observed' || h.state === 'unplaced' || h.state === 'branch' ? `<div class="mono">${esc(h.in_name)} → ${esc(h.out_name)}</div><div class="nat">${fmtB(h.bytes)} · ${fmtN(h.convs)} ${T('conversations')}${h.share < 1 ? ` · ${Math.round(100 * h.share)}% ${T('of the busiest hop')}` : ''}</div>
             <div class="vbar"><i style="width:${(100 * h.share).toFixed(1)}%;background:linear-gradient(90deg,${hexA(C.down, .6)},${C.down})"></i></div>` : ''}
           ${h.nat && h.nat.length ? `<div class="nat">NAT → <span class="mono">${esc(h.nat.join(', '))}</span></div>` : ''}
           ${(h.other_exits || []).map(e => `<div class="nat">${T('also leaves via')} <span class="mono">${esc(e.out_name)}</span>${e.next ? ` → ${esc(nm(e.next))}` : ''}: ${fmtB(e.bytes)}</div>`).join('')}
-          <div class="st"${bad ? ` style="color:${RED}"` : ''}>${HOP_STATE[h.state]}${h.state === 'branch' ? ` ${T('of hop')} ${h.via_hop + 1}` : ''}</div></div></li>`; }).join('')}</ol>
+          <div class="st"${bad ? ` style="color:${RED}"` : warn ? ` style="color:${AMBER}"` : ''}>${HOP_STATE[h.state]}${h.state === 'branch' ? ` ${T('of hop')} ${h.via_hop + 1}` : ''}</div>${hint ? `<div class="nat lhint">${hint}</div>` : ''}</div></li>`; }).join('')}</ol>
       <p class="note" style="margin:6px 0 0">${path.complete ? T('Every device on the way recorded the traffic.') : T('The path is not seen whole: see the marked hops.')}</p>`);
     if (el) el.querySelectorAll('li[data-dev]').forEach(li => li.onclick = () => { const d = li.dataset.dev; if (d === 'internet' || d === state.netPov) return; state.netPov = d; render(); });
   };

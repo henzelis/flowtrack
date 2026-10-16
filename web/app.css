@@ -622,3 +622,11 @@ section.panel.is-max .maxbtn{color:var(--ink);border-color:var(--edge-hi)}
 section.panel.is-max > .netviews,section.panel.is-max > .legend,section.panel.is-max > .note{flex:0 0 auto}
 section.panel.is-max > .river.netmap{flex:1 1 auto;height:auto;min-height:0}
 #netSec.is-max > .note{display:none}
+/* (1.9.2) why the ends of a link differ / what to check: hints in the map tooltip, the Links table and the path */
+.hop.not_seen .no{background:#FFC34D;color:#1a1200}
+.lhint{margin-top:4px;font-size:12px;line-height:1.45;color:var(--ink2);max-width:46ch;white-space:normal}
+.rtip .lhint{max-width:340px}
+details.lhints{margin-top:4px;font-size:12px;color:var(--ink2);white-space:normal;width:34ch;max-width:34ch}
+details.lhints summary{cursor:pointer;color:var(--ink3);list-style:none}
+details.lhints summary::before{content:"ⓘ ";color:var(--blue-hi, #4C93FF)}
+details.lhints p{margin:4px 0 0;line-height:1.45}

@@ -49,9 +49,27 @@ class Subnets(unittest.TestCase):
         self.assertEqual((inet['a_if'], inet['a_out'], inet['a_in']), (3, 300, 900))
         self.assertIn(T.INTERNET, t['nodes'])
 
+    def test_ends_that_differ_are_no_gap(self):
+        # (1.9.2) B received 400 of the 1000 A sent towards it: sampling, timing, another route… a working link
+        ifs = [iface(A, 9, 1000, 500), iface(B, 1, 500, 400)]
+        self.assertEqual(links(T.build(self.cfg, [], ifs, {A, B}))[frozenset((A, B))]['state'], 'observed')
+
+    def test_big_download_is_no_gap(self):
+        ifs = [iface(A, 9, 5_000_000_000, 40_000), iface(B, 1, 40_000, 5_000_000_000)]       # one way only, both ends agree
+        self.assertEqual(links(T.build(self.cfg, [], ifs, {A, B}))[frozenset((A, B))]['state'], 'observed')
+
     def test_gap(self):
-        ifs = [iface(A, 9, 1000, 500), iface(B, 1, 500, 400)]       # B received 400 of the 1000 A sent towards it
-        self.assertEqual(links(T.build(self.cfg, [], ifs, {A, B}))[frozenset((A, B))]['state'], 'gap')
+        # A sends real traffic towards B, whose interface towards A records nothing at all, either way
+        self.assertEqual(links(T.build(self.cfg, [], [iface(A, 9, 5_000_000, 0), iface(B, 7, 900, 900)], {A, B}))[frozenset((A, B))]['state'], 'gap')
+        # and the other way round
+        self.assertEqual(links(T.build(self.cfg, [], [iface(B, 1, 5_000_000, 0)], {A, B}))[frozenset((A, B))]['state'], 'gap')
+
+    def test_silent_interface_of_a_working_link(self):
+        # (1.9.2) B records nothing on its interface, but A receives from B: the link works, NetFlow is off on B's side
+        self.assertEqual(links(T.build(self.cfg, [], [iface(A, 9, 5_000_000, 6_000_000)], {A, B}))[frozenset((A, B))]['state'], 'silent')
+
+    def test_little_traffic_to_a_silent_end_is_no_gap(self):
+        self.assertEqual(links(T.build(self.cfg, [], [iface(A, 9, 20_000, 0)], {A, B}))[frozenset((A, B))]['state'], 'observed')
 
     def test_receiving_more_is_no_gap(self):
         ifs = [iface(A, 9, 1000, 500), iface(B, 1, 500, 1600)]      # B's interface also carries other traffic
@@ -62,6 +80,13 @@ class Subnets(unittest.TestCase):
 
     def test_adjacent_without_traffic(self):
         self.assertEqual(links(T.build(self.cfg, [], [], {A, B}))[frozenset((A, B))]['state'], 'adjacent')
+
+    def test_narrow_volumes_keep_all(self):
+        # (1.9.2) the selector narrows the drawn volumes; the state and its hints keep all the traffic
+        t = T.build(self.cfg, [], [iface(A, 9, 5_000_000, 6_000_000), iface(B, 1, 6_000_000, 5_000_000)], {A, B})
+        T.set_volumes(t, [iface(A, 9, 100, 0)])
+        ab = links(t)[frozenset((A, B))]
+        self.assertEqual((ab['state'], ab['a_out'], ab['b_in'], ab['all']['b_in']), ('observed', 100, 0, 5_000_000))
 
     def test_wan_towards_device_is_no_internet(self):
         cfg = {**self.cfg, A: {**self.cfg[A], 'wan_ifs': [9]}}
@@ -145,9 +170,23 @@ class Path(unittest.TestCase):
         self.assertEqual((r['hops'][2]['out_name'], r['hops'][2]['nat']), ('wan1', ['203.0.113.10']))
 
     def test_gap(self):
-        # B exports but recorded none of it: the chain stops at B, A is listed as unplaced
-        r = self.trace([hop(C, 2, 1), hop(A, 9, 3)])
+        # B exports but recorded none of it; C sends towards B and gets nothing back, B's interface is silent: a gap
+        t = T.build(self.cfg, [], [iface(C, 1, 5_000_000, 0)], {A, B, C})
+        r = T.path(t, self.cfg, [hop(C, 2, 1), hop(A, 9, 3)])
         self.assertEqual(self.states(r), [(C, 'observed'), (B, 'gap'), (A, 'unplaced')])
+        self.assertFalse(r['complete'])
+
+    def test_silent_hop_on_a_working_link(self):
+        # C sends towards B and receives from it, B's interface towards C records nothing: not a gap, B's NetFlow is off there
+        t = T.build(self.cfg, [], [iface(C, 1, 5_000_000, 4_000_000)], {A, B, C})
+        r = T.path(t, self.cfg, [hop(C, 2, 1), hop(A, 9, 3)])
+        self.assertEqual(self.states(r)[1], (B, 'silent'))
+
+    def test_not_seen_when_the_interface_carries_other_traffic(self):
+        # (1.9.2) B's interface towards C carries traffic, just not this: another route or a tunnel, not a gap
+        t = T.build(self.cfg, [], [iface(B, 2, 3000, 3000)], {A, B, C})
+        r = T.path(t, self.cfg, [hop(C, 2, 1), hop(A, 9, 3)])
+        self.assertEqual(self.states(r), [(C, 'observed'), (B, 'not_seen'), (A, 'unplaced')])
         self.assertFalse(r['complete'])
 
     def test_first_device_exports_nothing(self):

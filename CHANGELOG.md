@@ -5,6 +5,21 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+- **No more false gaps on Path analysis.** A working network often shows two ends of a link that do not agree —
+  sampled exports, sessions reported at different times, traffic coming back another way, tunnels (the inner traffic
+  is on the tunnel interface), traffic to the device itself, policy drops, a big download one way — and FlowTrack
+  marked all of that as a red gap. Now a **gap** is only one end sending real traffic (1 MB or more) towards the other,
+  getting nothing back, while the other end's interface records nothing at all. A silent interface whose neighbour
+  does receive from it is **One end silent** (amber): the link works, NetFlow is probably off on that interface.
+  Everything else is **Observed**.
+- **Hints say why.** The map tooltip and the Links table explain a link whose ends differ (how much one end recorded
+  of what the other sent, and the usual reasons), and what to check for a gap or a silent end (NetFlow on that
+  interface — the FortiGate command —, its number in Settings → Devices, the link itself; a short live window). The
+  state and its hints always use all the traffic, whatever the Internet / Internal selector shows.
+- **The path search agrees.** A device that recorded none of the traced traffic but carried other traffic on its
+  interface on the way is **not seen here — another route?** (amber: asymmetric routing, another exit, a tunnel);
+  one whose interface records nothing on a working link is **NetFlow off?** (amber); only a real gap is red.
+
 - **The live map no longer pauses on a refresh.** Live, Path analysis asks for fresh numbers every 10 s; the moving
   traffic used to vanish and start over then, which looked like an outage. Now the particles keep flying along their
   links and the density and speed ease to the new values over a few seconds; River's strands keep their place.

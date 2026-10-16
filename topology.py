@@ -12,14 +12,17 @@ every interface.
   (sources of packets entering through X, destinations of packets leaving through X).
 - B is A's neighbour through X unless a third device C, also behind X, sees A and B on different interfaces of its
   own (then C is in between). A subnet configured on an interface of both devices always makes them neighbours.
-- Each link carries what one end sent out of its interface and the other received on its interface; when the
-  receiving end reports much less, the link shows a gap (more is none: that interface carries other traffic too).
+- Each link carries what one end sent out of its interface and the other received on its interface. (1.9.2) Ends
+  that do not agree are normal in a working network (sampling, sessions reported at different times, asymmetric
+  routes, tunnels, traffic to the device itself, policy drops, a big download one way): the UI explains them. A gap is
+  only one end sending real traffic towards the other and getting nothing back, while the other end's interface records
+  nothing at all; a silent interface whose neighbour does receive from it is `silent` (NetFlow off there, link fine).
   A device that exports nothing (only configured) is drawn without observation."""
 import ipaddress
 
 INTERNET = 'internet'
 MIN_RECORDS = 3          # fewer records of a device's addresses on an interface do not put the device behind it
-GAP = 0.9                # the receiving end reports less than this share of what the other end sent: a gap
+GAP_BYTES = 1_000_000    # (1.9.2) a gap: one end sent at least this much towards the other, whose interface recorded nothing
 
 
 def _net(a):
@@ -178,10 +181,14 @@ def build(cfg, near, ifaces, exporting, pairs=()):
         elif not (a_out + a_in + b_out + b_in):
             state = 'adjacent'
         else:
-            # only less arriving than was sent is a loss; more arriving means the interface carries other traffic too
-            seen_ab = min(1, b_in / a_out) if a_out else 1
-            seen_ba = min(1, a_in / b_out) if b_out else 1
-            state = 'observed' if min(seen_ab, seen_ba) >= GAP else 'gap'
+            # one end's interface records nothing at all: a gap when its neighbour sends real traffic towards it and gets
+            # nothing back; when the neighbour does receive from it the link works and only that interface exports nothing
+            silent_b, silent_a = not (b_out + b_in), not (a_out + a_in)
+            if silent_b or silent_a:
+                sent, back = (a_out, a_in) if silent_b else (b_out, b_in)
+                state = 'gap' if sent >= GAP_BYTES and not back else 'silent' if back else 'observed'
+            else:
+                state = 'observed'
         s = subnet.get((a, b))
         links.append({'a': a, 'b': b, 'a_if': x, 'b_if': y, 'state': state, 'evidence': 'subnet' if s else 'flows',
                       'a_addr': s[0] if s else '', 'b_addr': s[1] if s else '', 'net': s[2] if s else '',
@@ -240,11 +247,25 @@ def path(topo, cfg, rows):
     unobserved; devices that recorded the traffic but are not on the chain are listed last: as a branch when another
     exit of a hop leads to them (via_hop: its index), else unplaced.
     -> {'hops': [hop], 'complete': bool}"""
-    facing = {}
+    facing, busy, lstate = {}, {}, {}
     for lk in topo['links']:
+        lstate[(lk['a'], lk['b'])] = lstate[(lk['b'], lk['a'])] = lk['state']
         facing[(lk['a'], lk['a_if'])] = lk['b']
         if lk['b_if'] is not None:
             facing[(lk['b'], lk['b_if'])] = lk['a']
+        # (1.9.2) what each end's interface towards the other recorded at all: silent = a real gap
+        busy[(lk['a'], lk['b'])] = lk['a_out'] + lk['a_in']
+        busy[(lk['b'], lk['a'])] = lk['b_out'] + lk['b_in']
+
+    def missing(d, other):
+        """A device that recorded none of this traffic: not_seen when its interface towards `other` carried other traffic
+        (this traffic probably took another way, or a tunnel); silent when that interface records nothing but the link
+        works; a gap only when the link towards it is one."""
+        if not topo['nodes'].get(d, {}).get('exporting'):
+            return 'unobserved'
+        if other and busy.get((d, other), 0) > 0:
+            return 'not_seen'
+        return 'gap' if lstate.get((d, other)) == 'gap' or not other else 'silent'
     seen = {}
     for r in rows:
         d = seen.setdefault(r['exporter'], {'pairs': {}, 'bytes': 0, 'records': 0, 'convs': 0, 'nat': set()})
@@ -290,8 +311,7 @@ def path(topo, cfg, rows):
     prev = facing.get((start, main(start)[0])) if starts else None
     hops, done, d, complete = [], set(), start, False
     if prev and prev != INTERNET:
-        n = topo['nodes'].get(prev, {})
-        hops.append(hop(prev, 'gap' if n.get('exporting') else 'unobserved'))
+        hops.append(hop(prev, missing(prev, start)))
         done.add(prev)
     elif prev == INTERNET:
         hops.append(hop(INTERNET, 'internet'))
@@ -302,8 +322,7 @@ def path(topo, cfg, rows):
             complete = True
             break
         if d not in seen:
-            n = topo['nodes'].get(d, {})
-            hops.append(hop(d, 'gap' if n.get('exporting') else 'unobserved'))
+            hops.append(hop(d, missing(d, hops[-1]['device'] if hops else None)))
             break
         hops.append(observed(d))
         nxt = facing.get((d, main(d)[1]))
@@ -349,6 +368,8 @@ def set_volumes(topo, ifaces):
     them go to the internet, the other between inside networks), so a narrower scope would show false gaps."""
     vol = {(r['exporter'], int(r['iface'])): r for r in ifaces}
     for lk in topo['links']:
+        # (1.9.2) the state and its explanation stay with all the traffic: keep those volumes beside the narrower ones
+        lk.setdefault('all', {k: lk[k] for k in ('a_out', 'a_in', 'b_out', 'b_in')})
         for e in ('a', 'b'):
             if lk[e + '_if'] is None or lk['b'] == INTERNET and e == 'b':
                 continue
