@@ -831,14 +831,77 @@ def chains(ms):
     return out
 
 
-def prune(cfg, log=print):
-    """Keep the newest `keep_full` chains here and on every place; older ones go (and their copies)."""
+def _remove(bid):
+    """Delete one backup folder here: the manifest first, so a half-deleted folder is no longer taken for a backup."""
+    folder = os.path.join(DIR, bid)
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(os.path.join(folder, 'manifest.json'))
+    shutil.rmtree(folder)
+
+
+def delete(ids, copies=False, log=print, errors=None):
+    """(1.8.8) Backups deleted by hand (Settings → Backups, `flowtrack backup delete`): a full one takes its changes
+    with it — they cannot be restored without it. copies: also on every place that is on. -> the ids deleted here."""
+    errors = [] if errors is None else errors
+    ms = manifests()
+    by = {m['id']: m for m in ms}
+    for bid in ids:
+        if bid not in by:
+            errors.append(tr('No backup {id}.', id=bid))
+    want = {bid for bid in ids if bid in by}
+    want |= {m['id'] for m in ms if m.get('base') in want}
+    gone = set()
+    for bid in sorted(want, reverse=True):          # the changes before their full one
+        try:
+            _remove(bid)
+        except OSError as e:
+            errors.append(tr('Could not delete the backup {id}: {err}', id=bid, err=e))
+            log(errors[-1])
+            continue
+        gone.add(bid)
+        log(tr('Deleted the backup {id}.', id=bid))
+    if copies and gone:
+        cfg = load()
+        for kind in DESTS:
+            if not cfg[kind]['on']:
+                continue
+            try:
+                d = open_dest(kind, cfg[kind])
+            except BackupError as e:
+                errors.append(tr('Old copies on {where} were not deleted: {err}', where=kind.upper(), err=e))
+                continue
+            try:
+                names = set(d.list())
+                for bid in sorted(gone):
+                    for n in (bid + '.ftbk', bid + '.json'):
+                        if n in names:
+                            d.delete(n)
+                    log(tr('Deleted the old copy {id} on {where}.', id=bid, where=kind.upper()))
+            except BackupError as e:
+                errors.append(tr('Old copies on {where} were not deleted: {err}', where=kind.upper(), err=e))
+            finally:
+                d.close()
+    return gone
+
+
+def prune(cfg, log=print, errors=None):
+    """Keep the newest `keep_full` chains here and on every place; older ones go (and their copies). What could not
+    be deleted is logged and added to `errors` (a list), never passed over in silence (1.8.8)."""
     ms = manifests()
     keep = cfg['keep_full']
     old = [m for c in chains(ms)[keep:] for m in c]
     gone = set()
+    errors = [] if errors is None else errors
+
+    def failed(text):
+        errors.append(text)
+        log(text)
     for m in old:
-        shutil.rmtree(os.path.join(DIR, m['id']), ignore_errors=True)
+        try:
+            _remove(m['id'])
+        except OSError as e:
+            failed(tr('Could not delete the old backup {id}: {err}', id=m['id'], err=e))
+            continue
         gone.add(m['id'])
         log(tr('Deleted the old backup {id}.', id=m['id']))
     # the copies: also those of backups the folder here no longer has
@@ -849,7 +912,7 @@ def prune(cfg, log=print):
         try:
             d = open_dest(kind, cfg[kind])
         except BackupError as e:
-            log(f'  {e}')
+            failed(tr('Old copies on {where} were not deleted: {err}', where=kind.upper(), err=e))
             continue
         try:
             names = d.list()
@@ -859,13 +922,16 @@ def prune(cfg, log=print):
             for bid in sorted(ids - keep_ids):
                 if bid > min(keep_ids, default='9'):   # newer than the kept ones (another server's?): leave it
                     continue
-                for n in (bid + '.ftbk', bid + '.json'):
-                    if n in names:
-                        with contextlib.suppress(BackupError):
+                try:
+                    for n in (bid + '.ftbk', bid + '.json'):
+                        if n in names:
                             d.delete(n)
+                except BackupError as e:
+                    failed(tr('Could not delete the old copy {id} on {where}: {err}', id=bid, where=kind.upper(), err=e))
+                    continue
                 log(tr('Deleted the old copy {id} on {where}.', id=bid, where=kind.upper()))
         except BackupError as e:
-            log(f'  {e}')
+            failed(tr('Old copies on {where} were not deleted: {err}', where=kind.upper(), err=e))
         finally:
             d.close()
     return gone
@@ -1184,9 +1250,20 @@ def run(full=False, slot=None, log=print):
         status(last={'t': int(time.time()), 'ok': False, 'error': str(e)[:500]}, **({'last_slot': slot} if slot else {}))
         write_index()
         raise
-    errs = copy_out(cfg, log=log)
-    prune(cfg, log=log)
-    status(last={'t': int(time.time()), 'ok': not errs, 'id': m['id'], 'error': '; '.join(f'{k.upper()}: {v}' for k, v in errs.items())[:500]},
+    # the backup is made: whatever goes wrong after it is recorded with it (and the slot counts as done), never lost
+    try:
+        errs = copy_out(cfg, log=log)
+    except Exception as e:                     # noqa: BLE001 — a library error we do not know
+        errs = {'copy': str(e)}
+        log(f'ERROR copies: {e}')
+    perrs = []
+    try:
+        prune(cfg, log=log, errors=perrs)
+    except Exception as e:                     # noqa: BLE001
+        perrs.append(tr('Old backups were not deleted: {err}', err=e))
+        log(perrs[-1])
+    status(last={'t': int(time.time()), 'ok': not errs, 'id': m['id'], 'error': '; '.join(f'{k.upper()}: {v}' for k, v in errs.items())[:500],
+                 'prune_error': '; '.join(perrs)[:500]},
            next=next_run(cfg), **({'last_slot': slot} if slot else {}))
     write_index()
     return m
@@ -1216,9 +1293,18 @@ def service():
                     verify(req['id'], deep=bool(req.get('deep')))
             elif req.get('do') == 'copy':
                 copy_out(cfg)
+            elif req.get('do') == 'delete':
+                ids = [str(x) for x in req.get('ids') or [] if ID_RE.match(str(x))]
+                errs = []
+                gone = delete(ids, copies=bool(req.get('copies')), errors=errs)
+                status(deleted={'t': int(time.time()), 'ids': sorted(gone), 'error': '; '.join(errs)[:500]})
+                for e in errs:
+                    print(f'ERROR: {e}', flush=True)
             else:
-                with contextlib.suppress(BackupError, CHError, OSError):
+                try:
                     run(full=bool(req.get('full')))
+                except (BackupError, CHError, OSError) as e:      # in the status already; the journal says it too
+                    print(f'ERROR: {e}', flush=True)
             write_index()
             return
         st = read_status()
@@ -1228,8 +1314,10 @@ def service():
             return
         kind = due(cfg, st)
         if kind:
-            with contextlib.suppress(BackupError, CHError, OSError):
+            try:
                 run(full=kind == 'full', slot=int(_slot(cfg)))
+            except (BackupError, CHError, OSError) as e:
+                print(f'ERROR: {e}', flush=True)
         elif st.get('next') != next_run(cfg):
             status(next=next_run(cfg))
         write_index()                          # also after backups were deleted or copied in by hand
@@ -1255,11 +1343,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog='flowtrack', description=tr('FlowTrack backups'))
     sub = ap.add_subparsers(dest='cmd')
     b = sub.add_parser('backup')
-    b.add_argument('what', nargs='?', default='now', choices=('now', 'list', 'verify', 'prune', 'copy', 'service'))
+    b.add_argument('what', nargs='?', default='now', choices=('now', 'list', 'verify', 'prune', 'copy', 'delete', 'service'))
     b.add_argument('id', nargs='?')
     b.add_argument('--full', action='store_true')
     b.add_argument('--deep', action='store_true')
     b.add_argument('--from', dest='source')
+    b.add_argument('--copies', action='store_true')
+    b.add_argument('--yes', action='store_true')
     r = sub.add_parser('restore')
     r.add_argument('id', nargs='?')
     r.add_argument('--from', dest='source')
@@ -1287,10 +1377,29 @@ def main(argv=None):
                     write_index()
                 print('\n'.join(problems) if problems else tr('{id}: intact.', id=bid))
                 return 1 if problems else 0
+            elif a.what == 'delete':
+                if not a.id or not ID_RE.match(a.id):
+                    print(tr('Which backup? flowtrack backup delete ID [--copies]'), file=sys.stderr)
+                    return 1
+                if not a.yes:
+                    ans = input(tr('Delete {id} (a full backup also takes its changes){c}? Type yes: ', id=a.id,
+                                   c=tr(' and its copies') if a.copies else ''))
+                    if ans.strip().lower() not in ('yes', 'y', tr('yes').lower()):
+                        return 1
+                with lock():
+                    errs = []
+                    delete([a.id], copies=a.copies, errors=errs)
+                    write_index()
+                if errs:
+                    print('\n'.join(errs), file=sys.stderr)
+                return 1 if errs else 0
             elif a.what == 'prune':
                 with lock():
-                    prune(load())
+                    perrs = []
+                    prune(load(), errors=perrs)
                     write_index()
+                if perrs:
+                    return 1
             elif a.what == 'copy':
                 with lock():
                     errs = copy_out(load())

@@ -3,6 +3,17 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Delete backups in Settings → Backups.** Delete… on a backup shows what goes (a full backup takes its changes with
+  it: they cannot be restored without it), how much it frees, and when no full backup would be left; the signed-in
+  administrator's own password confirms it (wrong ones count with the failed logins: 5 in 5 minutes and it waits).
+  Copies on S3 / SFTP / FTP go only when ticked. On the server: `sudo flowtrack backup delete ID [--copies]`.
+- **Keeping old backups says when it fails.** A backup folder or a copy that could not be deleted was passed over in
+  silence (and reported as deleted); now it is in the log, on Settings → Backups ("old backups not deleted" with the
+  reason) and in the exit code of `flowtrack backup prune`. An error after a backup was made (copies, keeping) no
+  longer stops the run before it is recorded.
+
 ## 1.8.7 — 2026-10-16
 
 - **Named networks.** Settings → Flow configuration → Network names: a network with its mask and a name

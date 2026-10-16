@@ -89,6 +89,98 @@ class Chains(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(d)), ['20261008-030000', '20261015-030000'])
 
 
+class PruneErrors(unittest.TestCase):
+    """1.8.8: what keeping could not delete is said (log, status, exit code), never passed over in silence."""
+    def folder(self, ids):
+        d = tempfile.mkdtemp()
+        for bid in ids:
+            os.makedirs(os.path.join(d, bid))
+            with open(os.path.join(d, bid, 'manifest.json'), 'w') as f:
+                json.dump(man(bid), f)
+        return d
+
+    def test_a_folder_that_cannot_go_is_reported_and_the_rest_go(self):
+        d = self.folder(['20261001-030000', '20261008-030000', '20261015-030000'])
+        real = backup.shutil.rmtree
+        def rmtree(p, *a, **k):
+            if p.endswith('20261001-030000'):
+                raise PermissionError(13, 'Permission denied', p)
+            return real(p, *a, **k)
+        cfg, errs, logged = backup.defaults(), [], []
+        cfg['keep_full'] = 1
+        with mock.patch.object(backup, 'DIR', d), mock.patch.object(backup.shutil, 'rmtree', rmtree):
+            gone = backup.prune(cfg, log=logged.append, errors=errs)
+        self.assertEqual(gone, {'20261008-030000'})
+        self.assertEqual(len(errs), 1)
+        self.assertIn('20261001-030000', errs[0])
+        self.assertFalse(any('Deleted' in x and '20261001' in x for x in logged))
+
+    def test_a_place_that_refuses_is_reported(self):
+        d = self.folder(['20261008-030000', '20261015-030000'])
+        place = mock.Mock()
+        place.list.return_value = ['20261008-030000.ftbk', '20261008-030000.json', '20261015-030000.ftbk', '20261015-030000.json']
+        place.delete.side_effect = backup.BackupError('SFTP: refused')
+        cfg, errs = backup.defaults(), []
+        cfg['keep_full'], cfg['sftp']['on'] = 1, True
+        with mock.patch.object(backup, 'DIR', d), mock.patch.object(backup, 'open_dest', return_value=place):
+            backup.prune(cfg, log=lambda *a: None, errors=errs)
+        self.assertTrue(errs and 'SFTP' in errs[0], errs)
+
+    def test_run_records_it_and_the_slot_is_done(self):
+        st = {}
+        with mock.patch.object(backup, 'make', return_value=man('20261015-030000')), \
+                mock.patch.object(backup, 'copy_out', return_value={}), \
+                mock.patch.object(backup, 'prune', side_effect=RuntimeError('boom')), \
+                mock.patch.object(backup, 'status', side_effect=lambda **kw: st.update(kw)), \
+                mock.patch.object(backup, 'write_index'):
+            backup.run(slot=123, log=lambda *a: None)
+        self.assertEqual(st['last_slot'], 123)                 # no new backup every 5 minutes
+        self.assertTrue(st['last']['ok'])
+        self.assertIn('boom', st['last']['prune_error'])
+
+
+class DeleteByHand(unittest.TestCase):
+    """1.8.8: Settings → Backups → Delete…: a full backup takes its changes; the admin's own password confirms it."""
+    def folder(self, ms):
+        d = tempfile.mkdtemp()
+        for m in ms:
+            os.makedirs(os.path.join(d, m['id']))
+            with open(os.path.join(d, m['id'], 'manifest.json'), 'w') as f:
+                json.dump(m, f)
+        return d
+
+    def test_full_takes_its_changes_and_unknown_is_said(self):
+        d = self.folder([man('20261001-030000'), man('20261002-030000', 'diff', '20261001-030000'), man('20261008-030000'),
+                         man('20261009-030000', 'diff', '20261008-030000')])
+        errs = []
+        with mock.patch.object(backup, 'DIR', d):
+            gone = backup.delete(['20261001-030000', '20261020-030000'], log=lambda *a: None, errors=errs)
+        self.assertEqual(gone, {'20261001-030000', '20261002-030000'})
+        self.assertEqual(sorted(os.listdir(d)), ['20261008-030000', '20261009-030000'])
+        self.assertEqual(len(errs), 1)
+        self.assertIn('20261020-030000', errs[0])
+
+    def test_a_change_alone(self):
+        d = self.folder([man('20261008-030000'), man('20261009-030000', 'diff', '20261008-030000')])
+        with mock.patch.object(backup, 'DIR', d):
+            self.assertEqual(backup.delete(['20261009-030000'], log=lambda *a: None), {'20261009-030000'})
+        self.assertEqual(os.listdir(d), ['20261008-030000'])
+
+    def test_copies_only_when_asked(self):
+        d = self.folder([man('20261008-030000')])
+        place = mock.Mock()
+        place.list.return_value = ['20261008-030000.ftbk', '20261008-030000.json']
+        cfg = backup.defaults()
+        cfg['sftp']['on'] = True
+        with mock.patch.object(backup, 'DIR', d), mock.patch.object(backup, 'open_dest', return_value=place), mock.patch.object(backup, 'load', return_value=cfg):
+            backup.delete(['20261008-030000'], log=lambda *a: None)
+            place.delete.assert_not_called()
+        d = self.folder([man('20261008-030000')])
+        with mock.patch.object(backup, 'DIR', d), mock.patch.object(backup, 'open_dest', return_value=place), mock.patch.object(backup, 'load', return_value=cfg):
+            backup.delete(['20261008-030000'], copies=True, log=lambda *a: None)
+        self.assertEqual(sorted(c.args[0] for c in place.delete.call_args_list), ['20261008-030000.ftbk', '20261008-030000.json'])
+
+
 class Schedule(unittest.TestCase):
     def cfg(self, **s):
         c = backup.defaults()

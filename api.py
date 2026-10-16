@@ -2063,6 +2063,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/backups/config': lambda: post_backups_config(body),
                 '/api/backups/run': lambda: post_backups_run(body),
                 '/api/backups/verify': lambda: post_backups_verify(body),
+                '/api/backups/delete': lambda: post_backups_delete(body, user, self.client_ip()),
                 '/api/backups/test': lambda: post_backups_test(body),
             }
             if u.path not in admin_routes:
@@ -2176,7 +2177,7 @@ def get_backups():
     except (OSError, ValueError):
         idx = {}
     st = backup.read_status()
-    return {'config': backup.public(cfg), 'running': st.get('running'), 'last': st.get('last'), 'next': backup.next_run(cfg),
+    return {'config': backup.public(cfg), 'running': st.get('running'), 'last': st.get('last'), 'deleted': st.get('deleted'), 'next': backup.next_run(cfg),
             'pending': os.path.exists(backup.REQUEST), 'dir': idx.get('dir') or backup.DIR, 'free': idx.get('free', 0),
             'used': idx.get('used', 0), 'backups': idx.get('backups', []), 'index_t': idx.get('t', 0),
             'tz_offset': time.localtime().tm_gmtoff}
@@ -2206,6 +2207,17 @@ def _backup_request(req):
 
 def post_backups_run(body):
     return _backup_request({'do': 'backup', 'full': bool(body.get('full'))})
+
+
+def post_backups_delete(body, user, ip):
+    """(1.8.8) Delete backups by hand; confirmed with the signed-in admin's own password (no slip of the mouse deletes
+    one). A full backup takes its changes with it; copies on the places only when asked."""
+    import backup
+    ids = body.get('ids')
+    if not isinstance(ids, list) or not ids or len(ids) > 100 or not all(backup.ID_RE.match(str(x)) for x in ids):
+        raise BadRequest('bad ids')
+    AUTH.check_password(user, str(body.get('password') or ''), ip)
+    return _backup_request({'do': 'delete', 'ids': [str(x) for x in ids], 'copies': bool(body.get('copies'))})
 
 
 def post_backups_verify(body):

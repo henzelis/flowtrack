@@ -101,21 +101,33 @@ class Auth:
                 'default_password': bool(u.get('default'))}
 
     # ------------------------------------------------------------ login / sessions
+    def _verify(self, name, password, ip, wrong):
+        """The password of `name`, under the lock; 5 wrong ones from one address in 5 minutes -> 429 for a while."""
+        now = time.time()
+        q = self.fails[ip]
+        while q and now - q[0] > 300:
+            q.popleft()
+        if len(q) >= 5:
+            raise AuthError(tr('Too many failed attempts. Try again in a few minutes.'), 429)
+        u = self.users.get(name) if isinstance(name, str) else None
+        # always run scrypt so response time does not reveal whether the user exists
+        calc = _hash(password if isinstance(password, str) else '', bytes.fromhex(u['salt']) if u else b'0' * 16)
+        if not u or not hmac.compare_digest(calc, u['hash']):
+            q.append(now)
+            raise AuthError(wrong)
+        q.clear()
+        return u
+
+    def check_password(self, name, password, ip):
+        """(1.8.8) Confirm a dangerous action with the signed-in user's own password (no new session); wrong ones
+        count with the failed logins."""
+        with self.lock:
+            self._verify(name, password, ip, tr('Wrong password'))
+
     def login(self, name, password, ip):
         now = time.time()
         with self.lock:
-            q = self.fails[ip]
-            while q and now - q[0] > 300:
-                q.popleft()
-            if len(q) >= 5:
-                raise AuthError(tr('Too many failed attempts. Try again in a few minutes.'), 429)
-            u = self.users.get(name) if isinstance(name, str) else None
-            # always run scrypt so response time does not reveal whether the user exists
-            calc = _hash(password if isinstance(password, str) else '', bytes.fromhex(u['salt']) if u else b'0' * 16)
-            if not u or not hmac.compare_digest(calc, u['hash']):
-                q.append(now)
-                raise AuthError(tr('Wrong username or password'))
-            q.clear()
+            u = self._verify(name, password, ip, tr('Wrong username or password'))
             token = secrets.token_urlsafe(32)
             self.sessions[_tok_id(token)] = {'user': name, 'exp': now + SESSION_TTL, 'created': int(now)}
             u['last_login'] = int(now)

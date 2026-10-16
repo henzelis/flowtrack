@@ -2395,7 +2395,7 @@ function vBackups(){
     <section class="glass panel s6">${ph('key', T('Encryption'), T('of the copies off the server (S3, SFTP, FTP)'))}<div id="bkEnc" class="form"></div></section>
     <section class="glass panel s12">${ph('globe', T('Where to keep'), T('a folder on this server always · copies to S3, SFTP or FTP: a backup survives the loss of the server'))}<div id="bkDest" class="loading"></div></section>
     <section class="glass panel s12 evsave"><div><button class="btn primary" id="bkSave">${T('Save')}</button></div><p class="err" id="bkErr" hidden></p><p class="note" id="bkOk" hidden>${T('Saved.')}</p></section></div>`;
-  let d = null, fp = '', checking = null, asked = 0;
+  let d = null, fp = '', checking = null, asked = 0, deleting = 0;
   const box = (id, html) => { const el = document.getElementById(id); if (!el) return null; el.classList.remove('loading'); el.innerHTML = html; return el; };
   const ago = t => { const s = Math.floor(Date.now() / 1000) - t; return s < 3600 ? T('{n} min ago', {n:Math.max(1, Math.round(s / 60))}) : s < 86400 ? T('{n} h ago', {n:Math.round(s / 3600)}) : T('{n} d ago', {n:Math.round(s / 86400)}); };
   const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
@@ -2406,6 +2406,7 @@ function vBackups(){
     const c = d.config, last = d.last, newest = d.backups[0];
     const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span>${sub ? `<span class="nat" style="grid-column:2">${sub}</span>` : ''}</section>`;
     const lastSub = !last ? T('none yet') : !last.ok ? `<span class="pill ${newest && newest.id === last.id ? 'warn' : 'crit'}">${newest && newest.id === last.id ? T('a copy failed') : T('failed')}</span> <span title="${esc(last.error)}">${esc(last.error.slice(0, 90))}</span>`
+      : last.prune_error ? `<span class="pill warn">${T('old backups not deleted')}</span> <span title="${esc(last.prune_error)}">${esc(last.prune_error.slice(0, 90))}</span>`
       : newest ? `<span class="pill ok">OK</span> ${newest.kind === 'full' ? T('Full') : T('Changes')} · ${fmtB(newest.size)}` : '';
     box('bkKpi', kc(BK_ICON, T('Last backup'), last ? ago(last.t) : '—', lastSub)
       + kc('pulse', T('Next backup'), d.next ? `${dmy(d.next)} ${hhmm(d.next)}` : T('off'), d.next ? (c.schedule.full === 'week' ? T('full every week, the changes every day') : T('full every day'))
@@ -2420,16 +2421,17 @@ function vBackups(){
     const vf = m => { const x = m.verified; if (checking === m.id) return T('Checking…');
       return x ? (x.ok ? `✓ ${T('intact')}` : `✕ ${T('damaged')}`) : T('Check'); };
     const rows = d.backups.slice(0, state.bkAll ? 999 : 8);
-    const el = box('bkList', d.backups.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${T('Type')}</th><th class="num">${T('Size')}</th><th>${T('Version')}</th><th>${T('Where')}</th><th></th><th></th></tr></thead><tbody>
+    const el = box('bkList', (d.backups.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${T('Type')}</th><th class="num">${T('Size')}</th><th>${T('Version')}</th><th>${T('Where')}</th><th></th><th></th></tr></thead><tbody>
       ${rows.map(m => `<tr data-id="${esc(m.id)}"><td class="mono">${when(m.t)}<div class="nat">${ago(m.t)}</div></td><td>${m.kind === 'full' ? `<b>${T('Full')}</b>` : T('Changes')}${m.encrypted ? ` <span title="${T('the copies are encrypted')}">🔒</span>` : ''}</td>
         <td class="num mono">${fmtB(m.size)}</td><td class="mono">${esc(m.version)}</td><td>${[`<span class="pill ok">${T('here')}</span>`, ...on.map(([k, l]) => place(m, k, l))].join(' ')}</td>
-        <td class="nat">${Math.round(m.took)} s</td><td style="white-space:nowrap"><button class="btn" data-a="restore">${T('Restore…')}</button> <button class="btn" data-a="verify" ${busy() ? 'disabled' : ''} title="${esc(m.verified && !m.verified.ok ? m.verified.problems.join('\n') : m.verified ? T('checked {when}', {when:when(m.verified.t)}) : T('Check that every file of the backup is in place'))}">${vf(m)}</button></td></tr>`).join('')}</tbody></table></div>
+        <td class="nat">${Math.round(m.took)} s</td><td style="white-space:nowrap"><button class="btn" data-a="restore">${T('Restore…')}</button> <button class="btn" data-a="verify" ${busy() ? 'disabled' : ''} title="${esc(m.verified && !m.verified.ok ? m.verified.problems.join('\n') : m.verified ? T('checked {when}', {when:when(m.verified.t)}) : T('Check that every file of the backup is in place'))}">${vf(m)}</button> <button class="btn danger" data-a="del" ${busy() ? 'disabled' : ''}>${T('Delete…')}</button></td></tr>`).join('')}</tbody></table></div>
       ${d.backups.length > 8 ? `<p style="margin:8px 0 0"><button class="btn" id="bkMore">${state.bkAll ? T('Show the last 8') : T('Show all ({n})', {n:d.backups.length})}</button></p>` : ''}
       <p class="note">${T('A backup of the changes needs the full one before it; the keeping rule deletes a full backup together with the changes after it. A failed copy is tried again with the next backup.')}</p>`
-      : `<div class="empty">${d.next ? T('No backups yet — the first one runs {when}, or press Back up now.', {when:when(d.next)}) : T('No backups yet — press Back up now.')}</div>`);
+      : `<div class="empty">${d.next ? T('No backups yet — the first one runs {when}, or press Back up now.', {when:when(d.next)}) : T('No backups yet — press Back up now.')}</div>`) + delNote());
     if (!el) return;
     const more = document.getElementById('bkMore'); if (more) more.onclick = () => { state.bkAll = !state.bkAll; draw(); };
     el.querySelectorAll('button[data-a="restore"]').forEach(b => b.onclick = () => openRestore(d.backups.find(x => x.id === b.closest('tr').dataset.id)));
+    el.querySelectorAll('button[data-a="del"]').forEach(b => b.onclick = () => openDelete(d.backups.find(x => x.id === b.closest('tr').dataset.id)));
     el.querySelectorAll('button[data-a="verify"]').forEach(b => b.onclick = async () => { const id = b.closest('tr').dataset.id;
       try { await apiPost('backups/verify', {id}); checking = id; asked = Math.floor(Date.now() / 1000); draw(); poll(); } catch (e) { formErr('bkErr', e.message); } });
     const nb = document.getElementById('bkNow'), r = d.running;
@@ -2438,6 +2440,30 @@ function vBackups(){
       : r.stage === 'data' ? T('Backing up the flow data…') : r.stage === 'settings' ? T('Saving the settings…')
       : T('Copying to {where}… {pct} %', {where:r.stage.toUpperCase(), pct:r.total ? Math.min(99, Math.floor(100 * r.done / r.total)) : 0});
   };
+  // (1.8.8) deleting by hand: a full backup takes its changes with it; confirmed with the admin's own password
+  const delNote = () => { const x = d.deleted; if (!x || x.t < deleting - 5 || !deleting) return '';
+    return x.error ? `<p class="err" style="margin:8px 0 0">${esc(x.error)}</p>`
+      : `<p class="note" style="margin:8px 0 0;color:var(--ok)">${Tn(x.ids.length, 'Deleted {n} backup.', 'Deleted {n} backups.', {n:x.ids.length})}</p>`; };
+  const openDelete = m => {
+    const goes = [m, ...(m.kind === 'full' ? d.backups.filter(x => x.base === m.id) : [])].sort((a, b) => a.t - b.t);
+    const fullsLeft = d.backups.filter(x => x.kind === 'full' && !goes.includes(x)).length, places = BK_DESTS.filter(([k]) => d.config[k].on);
+    const md = openModal(T('Delete a backup'), when(m.t), `<form class="form" id="bdForm" novalidate style="padding:4px 2px">
+      <p class="note" style="margin:0">${goes.length > 1 ? T('A backup of the changes cannot be restored without its full one, so these go together:') : T('This backup goes:')}</p>
+      <div class="tw"><table class="compact"><tbody>${goes.map(x => `<tr><td class="mono">${when(x.t)}</td><td>${x.kind === 'full' ? `<b>${T('Full')}</b>` : T('Changes')}</td><td class="num mono">${fmtB(x.size)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note" style="margin:0">${T('Frees {size} on this server. It cannot be undone.', {size:`<b>${fmtB(goes.reduce((a, x) => a + (x.size || 0), 0))}</b>`})}</p>
+      ${fullsLeft ? '' : `<p class="note" style="margin:0;color:var(--warn)">${T('No full backup is left after it: the next backup will be a full one.')}</p>`}
+      ${places.length ? `<label class="chk"><input type="checkbox" id="bdCopies">${T('Also delete their copies on {places}', {places:places.map(([, l]) => l).join(', ')})}</label>` : ''}
+      <label>${T('Your password ({user}) to confirm', {user:esc(ME.name)})}<input id="bdPass" type="password" autocomplete="current-password"></label>
+      <p class="err" id="bdErr" hidden></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn danger" type="submit" id="bdOk" disabled>${Tn(goes.length, 'Delete {n} backup', 'Delete {n} backups', {n:goes.length})}</button><button class="btn" type="button" id="bdNo">${T('Cancel')}</button></div></form>`);
+    const pw = document.getElementById('bdPass'), ok = document.getElementById('bdOk');
+    pw.addEventListener('input', () => { ok.disabled = !pw.value; }); pw.focus();
+    document.getElementById('bdNo').onclick = md.close;
+    document.getElementById('bdForm').onsubmit = async e => { e.preventDefault(); if (ok.disabled) return; ok.disabled = true; formErr('bdErr', '');
+      const cp = document.getElementById('bdCopies');
+      try { await apiPost('backups/delete', {ids:[m.id], password:pw.value, copies:!!(cp && cp.checked)}); md.close();
+        deleting = asked = Math.floor(Date.now() / 1000); d.pending = true; draw(); poll(); }
+      catch (err) { formErr('bdErr', err.message); pw.select(); ok.disabled = false; } }; };
   const openRestore = m => openModal(T('Restore a backup'), when(m.t), `<div class="form" style="padding:4px 2px">
       <p class="note" style="margin:0">${T('Restoring stops collecting and the web interface for a few minutes, replaces the flow data and the settings with the backup, and starts them again. Records that arrive meanwhile are lost. The current data is set aside until the backup is in place and comes back if the restore fails.')}</p>
       <p class="note" style="margin:0">${T('Run on the server:')}</p>
@@ -2548,7 +2574,8 @@ function vBackups(){
         if (checking) { const v = (n.backups.find(m => m.id === checking) || {}).verified;
           if ((v && v.t >= asked) || Date.now() / 1000 - asked > 900) checking = null; }
         d = {...n, config:d.config}; draw();
-        if (n.running || n.pending || checking) { setTimeout(tick, 2000); return; }
+        const delWait = deleting && !(n.deleted && n.deleted.t >= deleting - 5) && Date.now() / 1000 - deleting < 300;
+        if (n.running || n.pending || checking || delWait) { setTimeout(tick, 2000); return; }
       } catch (e) { setTimeout(tick, 5000); return; }
       polling = false; };
     setTimeout(tick, 1500); };
