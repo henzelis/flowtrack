@@ -39,8 +39,8 @@ const isAdmin = () => ME && ME.role === 'admin';
 const isInternal = () => state.traffic === 'internal';
 // a record whose packets went to int_ip: from the internet, or a server's answer to an inside client
 const isBack = f => f.dir === 'down' || f.dir === 'internal_back';
-const FILTER_KEYS = ['ip', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface'];
-const FILTER_LABEL = {iface:T('interface'), in_if:T('in via'), out_if:T('out via'), ip:T('host'), dst:T('ext. IP'), service:T('service'), l7:T('protocol'), country:T('country'), city:T('city'), port:T('port'), device:T('device'), asn:'ASN', dir:T('direction'), proto:'L4'};
+const FILTER_KEYS = ['ip', 'net', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface'];
+const FILTER_LABEL = {net:T('network'), iface:T('interface'), in_if:T('in via'), out_if:T('out via'), ip:T('host'), dst:T('ext. IP'), service:T('service'), l7:T('protocol'), country:T('country'), city:T('city'), port:T('port'), device:T('device'), asn:'ASN', dir:T('direction'), proto:'L4'};
 let renderSeq = 0;
 
 // widgets of one page often ask the same thing (Overview: the trend and the KPI sparklines, the map overlay and the
@@ -216,7 +216,8 @@ function stackChart(el, series, label, onPick){
 }
 function donut(el, rows, colorOf, center){
   const c = mkChart(el);
-  c.setOption({animation:false, tooltip:{...tipBase(), formatter:p => `${esc(p.name)}<br><b>${fmtB(p.value)}</b> · ${p.percent}%`},
+  const grow = !!el.closest('.wsettle') && !REDUCED.matches;      // (1.8.7) after a wait the ring fills round once
+  c.setOption({animation:grow, animationType:'expansion', animationDuration:900, animationEasing:'cubicOut', tooltip:{...tipBase(), formatter:p => `${esc(p.name)}<br><b>${fmtB(p.value)}</b> · ${p.percent}%`},
     title:{text:center[0], subtext:center[1], left:'center', top:'38%', textStyle:{color:C.ink, fontFamily:'JetBrains Mono', fontSize:16, fontWeight:700}, subtextStyle:{color:C.ink2, fontFamily:'Manrope', fontSize:11.5}},
     series:[{type:'pie', radius:['66%', '86%'], padAngle:2, itemStyle:{borderRadius:5}, label:{show:false}, emphasis:{scale:true, scaleSize:4},
       data:rows.map(r => ({name:r.k, value:tot(r), itemStyle:{color:colorOf(r.k), shadowBlur:12, shadowColor:colorOf(r.k)}}))}]});
@@ -517,7 +518,17 @@ const hostCell = (ip, name) => `<span class="idot int"></span><b class="mono">${
 const dv = v => v === 'Local network' ? T('Local network') : v === 'Unknown' ? T('Unknown')
   : / other$/.test(String(v || '')) ? T('{name} other', {name: String(v).slice(0, -6)}) : v;
 const svcBadge = name => { const c = keyColor(name); return `<span class="app-b"><i style="background:${hexA(c, .85)};box-shadow:0 0 8px ${hexA(c, .6)}">${esc((dv(name) || '?')[0])}</i>${esc(dv(name))}</span>`; };
-const fill = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; return el; };
+const fill = (id, html) => { const el = document.getElementById(id); if (el) { const was = el.classList.contains('wshow'); el.innerHTML = html; if (was) wSettle(el); } return el; };
+// (1.8.7) the answer after a wait fills in as in the waiting mock-up: the rows settle one after another, the bars grow
+// to their value, a ring fills round (donut()); once — a later refresh of the same box just replaces it
+const W_SETTLE_ROWS = 'tbody tr, .blist > .brow, .pbars > span, .dl > button, .dl > span:not(.p):not(.t), .wleg > div, .rows > *';
+function wSettle(el){
+  el.classList.remove('wshow', 'wfade'); delete el.dataset.w;
+  if (REDUCED.matches) return;
+  el.querySelectorAll(W_SETTLE_ROWS).forEach((r, i) => r.style.setProperty('--wi', Math.min(i, 14)));
+  el.querySelectorAll('.pbars > .vbar, .pbars > b').forEach(b => { const w = b.previousElementSibling && b.previousElementSibling.style.getPropertyValue('--wi'); if (w) b.style.setProperty('--wi', w); });
+  el.classList.add('wsettle'); clearTimeout(el._ws); el._ws = setTimeout(() => el.classList.remove('wsettle'), 1800);
+}
 // ===================== waiting (1.8.5): what a page shows while the server reads the data =====================
 // Tables "decode" (characters cycle until the answer), pie charts spin a ring with the share read, the big maps draw a
 // sketch of what is coming (Through device: the device and its interfaces, lines growing; Path analysis: the devices
@@ -578,9 +589,9 @@ function waitFill(el){
   if (el.dataset.w || el.children.length) return;
   el.dataset.w = '1';
   if (RING_IDS.has(el.id)) { el.innerHTML = `<div class="wring" aria-hidden="true"><div class="wr"><b>0%</b></div><div class="wleg">${[0, 1, 2, 3, 4].map(i => `<div><i style="background:${PAL[i]}"></i><span data-s="PROTOCOL"></span><span data-s="00%"></span></div>`).join('')}</div></div>`; return; }
-  const hgt = el.getBoundingClientRect().height || 180;
-  if (hgt < 100) { el.innerHTML = `<div class="wdec wone" aria-hidden="true"><span class="wval" data-s="${['128.4 GB', '2 417', '96.1 Mbit/s', '35 812'][Math.floor(Math.random() * 4)]}"></span></div>`; return; }   // a KPI tile: one number
-  const n = Math.max(2, Math.min(8, Math.floor(hgt / 30)));
+  // a KPI tile: one number; any other box is a table to come (an empty box is low, so its height says nothing)
+  if (el.classList.contains('kcard')) { el.innerHTML = `<div class="wdec wone" aria-hidden="true"><span class="wval" data-s="${['128.4 GB', '2 417', '96.1 Mbit/s', '35 812'][Math.floor(Math.random() * 4)]}"></span></div>`; return; }   // a KPI tile: one number
+  const hgt = el.getBoundingClientRect().height, n = hgt > 200 ? Math.min(8, Math.floor(hgt / 30)) : 6;
   el.innerHTML = `<div class="wdec" aria-hidden="true"><i class="wscan"></i>${W_ROWS.concat(W_ROWS).slice(0, n).map((r, i) => { const [a, b, c] = r.split('|');
     return `<div class="wrow"><span data-s="${a}"></span><span class="tag" data-s="${b}"></span><span class="vb"><i style="transform:scaleX(${(0.9 - i * 0.12).toFixed(2)})"></i></span><span class="num" data-s="${c}"></span></div>`; }).join('')}</div>`;
 }
@@ -713,7 +724,7 @@ function wireFilters(root){
 // run an async section; ignore results if the user navigated away meanwhile
 async function section(id, fn){
   const seq = renderSeq;
-  try { const html = await fn(); if (seq === renderSeq && html != null) { const el = fill(id, html); if (el) { const was = el.classList.contains('wshow'); el.classList.remove('loading', 'wshow'); delete el.dataset.w; if (was) el.classList.add('wfade'); wireFilters(el); } } }
+  try { const html = await fn(); if (seq === renderSeq && html != null) { const el = fill(id, html); if (el) { el.classList.remove('loading', 'wshow'); delete el.dataset.w; wireFilters(el); } } }
   catch (e) { if (seq === renderSeq) { const el = fill(id, errBox(e)); if (el) el.classList.remove('loading'); } }
 }
 const convRows = (rows, total) => rows.length ? '<div class="blist">' + rows.map(x => { const max = tot(rows[0]) || 1;
@@ -1496,79 +1507,103 @@ function downloadCsv(name, header, rows){
   const blob = new Blob(['﻿' + [header, ...rows].map(r => r.map(q).join(',')).join('\n')], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+// (1.8.7) the user's named networks: the label of a group ('' = addresses in none of them) and its networks in short
+const netLabel = k => k || T('no network');
+const netsText = (nets, k) => !k ? T('addresses in none of the named networks') : nets.length > 2 ? `${nets.slice(0, 2).join(', ')} +${nets.length - 2}` : nets.join(', ');
+function netsCsv(rows, secs){
+  return [['rank', 'network', 'networks', 'hosts', 'bytes', 'upload', 'download', 'percent', 'flows', 'avg_bps'],
+    rows.map((r, i) => [i + 1, netLabel(r.k), (r.nets || []).join(' '), r.hosts || 0, tot(r), r.up, r.dn, (100 * tot(r) / (window.__tTotal || 1)).toFixed(2), r.fl, Math.round(tot(r) * 8 / secs)])];
+}
 function vTalkers(){
   const v = document.getElementById('view');
+  // Hosts | Networks (1.8.7): the same panels, grouped by inside host or by the user's named network
+  const byNet = state.talkersBy === 'net', fk = byNet ? 'net' : 'ip', dim = byNet ? 'net' : 'int_ip', noNets = byNet && !(META.networks || []).length;
   v.innerHTML = `<div class="grid">
     <div id="tKpi" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
     <div class="col s8 fillcol">
-      <section class="glass panel">${ph('users', T('Top hosts'), T('by total volume · click a row to add the host to the filters'), '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
-      <section class="glass panel grow">${ph('chart', T('Top hosts trend'), T('top 5 and the rest'))}<div class="chart" id="cTop5"></div></section>
+      <section class="glass panel">${ph('users', byNet ? T('Top networks') : T('Top hosts'), byNet ? T('your named networks by total volume · click a row to add the network to the filters') : T('by total volume · click a row to add the host to the filters'),
+        seg('tBySeg', [['ip', T('Hosts')], ['net', T('Networks'), T('Grouped by the networks named in Settings → Flow configuration')]], fk) + '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
+      <section class="glass panel grow">${ph('chart', byNet ? T('Top networks trend') : T('Top hosts trend'), T('top 5 and the rest'))}<div class="chart" id="cTop5"></div></section>
     </div>
     <div class="col s4">
-      <section class="glass panel">${ph('pie', T('Top hosts traffic'), T('share of the total volume'))}<div id="tDonut" class="loading"></div></section>
+      <section class="glass panel">${ph('pie', byNet ? T('Top networks traffic') : T('Top hosts traffic'), T('share of the total volume'))}<div id="tDonut" class="loading"></div></section>
       <section class="glass panel">${ph('grid', T('By service'), T('share of traffic · click to filter'))}<div id="tSvc" class="loading"></div></section>
       <section class="glass panel">${ph('globe', T('Where the traffic goes'), T('destination countries'))}<div id="tGeo" class="loading"></div></section>
       <section class="glass panel">${ph('search', T('Quick actions'), '<span id="qaFor">—</span>')}<div class="qa" id="qa"></div></section>
     </div>
-    <section class="glass panel s12">${ph('list', T('Top hosts in detail'), T('main service and protocol of each · click to filter'), `<button class="lnk" id="toFlows2">${T('Flows →')}</button>`)}<div id="tDetail" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('list', byNet ? T('Top networks in detail') : T('Top hosts in detail'), T('main service and protocol of each · click to filter'), `<button class="lnk" id="toFlows2">${T('Flows →')}</button>`)}<div id="tDetail" class="loading"></div></section></div>`;
   document.getElementById('toFlows2').onclick = () => { state.view = 'flows'; render(); };
+  wireSeg('tBySeg', x => { if (x === fk) return; state.talkersBy = x === 'net' ? 'net' : null; render(); });
   const limit = state.talkersAll ? 50 : 10, secs = rangeSecs();
   fill('tMore', state.talkersAll ? T('Show top 10') : T('Show top 50'));
   document.getElementById('tMore').onclick = () => { state.talkersAll = !state.talkersAll; render(); };
   const colorOf = new Map();
   let selected = null, topRows = [];
+  const csvName = `flowtrack-top-${byNet ? 'networks' : 'hosts'}-${isCustom() ? state.from + '-' + state.to : state.range}.csv`;
+  const withF = (view, extra) => () => { putFilter({k:fk, v:selected.k, neg:false}); if (extra) extra(); state.view = view; render(); };
   const drawQa = () => {
-    const h = selected; fill('qaFor', h ? T('for {name}', {name: esc(h.name || h.k)}) : T('no data'));
-    const box = fill('qa', h ? [
-      ['flow', T('Flow details'), T('the Flows page with a filter'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }],
-      ['users', T('Host card'), T('services, protocols, destinations'), () => openHost(h.k)],
-      ['globe', T('Geolocation'), T('connection map of this host'), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); }],
-      ['list', T('Export CSV'), T('the top hosts table'), () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ...hostsCsv(topRows, secs))],
-    ].map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join('') : '');
-    if (box && h) { const acts = [() => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'flows'; render(); }, () => openHost(h.k), () => { putFilter({k:'ip', v:h.k, neg:false}); state.view = 'geo'; render(); },
-      () => downloadCsv(`flowtrack-top-hosts-${isCustom() ? state.from + '-' + state.to : state.range}.csv`, ...hostsCsv(topRows, secs))];
-      box.querySelectorAll('[data-qa]').forEach(b => b.onclick = acts[+b.dataset.qa]); }
+    const h = selected; fill('qaFor', h ? T('for {name}', {name: esc(byNet ? h.k : h.name || h.k)}) : T('no data'));
+    const acts = !h ? [] : [
+      ['flow', T('Flow details'), T('the Flows page with a filter'), withF('flows')],
+      byNet ? ['users', T('Hosts of the network'), T('its top hosts'), withF('talkers', () => { state.talkersBy = null; })] : ['users', T('Host card'), T('services, protocols, destinations'), () => openHost(h.k)],
+      ['globe', T('Geolocation'), byNet ? T('connection map of this network') : T('connection map of this host'), withF('geo')],
+      ['list', T('Export CSV'), byNet ? T('the top networks table') : T('the top hosts table'), () => downloadCsv(csvName, ...(byNet ? netsCsv : hostsCsv)(topRows, secs))]];
+    const box = fill('qa', acts.map(([ic, t, sub], i) => `<button class="qa-btn" data-qa="${i}"><span class="ico">${icon(ICO[ic], 18)}</span><span><b>${t}</b><small>${sub}</small></span></button>`).join(''));
+    if (box) box.querySelectorAll('[data-qa]').forEach(b => b.onclick = acts[+b.dataset.qa][3]);
   };
   section('tKpi', async () => {
-    const [s, ser, t] = await Promise.all([api('summary'), api('series'), api('top', {dim:'int_ip', limit:1})]);
+    const [s, ser, t] = await Promise.all([api('summary'), api('series'), noNets ? {rows:[], total:0} : api('top', {dim, limit:byNet ? 2 : 1})]);
     const trend = (a, b) => !s.has_prev || !b ? `<span class="tr nodata" style="color:var(--ink3)">${T('data since {time}', {time: hhmm(s.oldest)})}</span>` : `<span class="tr ${a < b ? 'dn' : ''}">${a >= b ? '↑' : '↓'} ${Math.abs(100 * (a - b) / b).toFixed(1)}%</span>`;
-    const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]), top = t.rows[0];
+    const vals = ser.rows.map(r => r[1] + r[2] + r[3]), fl = ser.rows.map(r => r[4]), top = byNet ? t.rows.find(r => r.k) : t.rows[0];
     const card = (ic, k, v, tr, sp, col, sub) => `<div class="glass kcard s3"><span class="ico">${icon(ICO[ic], 22)}</span><span class="k">${k}</span><span></span><span class="v">${v}</span>${tr}${sub ? `<span class="s" style="grid-column:2/-1;font-size:12.5px;color:var(--ink2)">${sub}</span>` : ''}${sp ? sparkSvg(sp, col) : ''}</div>`;
     return card('pulse', T('Total traffic'), fmtB(s.bytes), trend(s.bytes, s.p_bytes), vals, C.down)
-      + card('ip', T('Top host (by volume)'), esc(top ? top.name || top.k : '—'), '', null, '', top ? `${esc(top.name ? top.k + ' · ' : '')}${fmtB(tot(top))} (${pct(tot(top), t.total)})` : '')
+      + (byNet ? card('ip', T('Top network (by volume)'), esc(top ? top.k : '—'), '', null, '', top ? `${esc(netsText(top.nets || [], top.k))} · ${fmtB(tot(top))} (${pct(tot(top), t.total)})` : '')
+        : card('ip', T('Top host (by volume)'), esc(top ? top.name || top.k : '—'), '', null, '', top ? `${esc(top.name ? top.k + ' · ' : '')}${fmtB(tot(top))} (${pct(tot(top), t.total)})` : ''))
       + card('users', T('Unique hosts'), fmtN(s.hosts), trend(s.hosts, s.p_hosts), fl.map(Math.sqrt), C.int)
       + card('nodes', T('Total flows'), fmtN(s.flows), trend(s.flows, s.p_flows), fl, C.ext);
   });
-  Promise.all([api('top', {dim:'int_ip', limit}), api('series', {by:'int_ip', top:Math.min(limit, 20)})]).then(([t, ser]) => {
+  if (noNets) {          // nothing named yet: say where networks get their names
+    const box = fill('tBox', `<div class="empty">${T('No named networks yet. Give your networks names in Settings → Flow configuration (e.g. 172.16.0.0/24 → Office), and their traffic shows here.')}
+      <div style="margin-top:10px"><button class="btn primary" id="toNets">${T('Name networks')}</button></div></div>`);
+    if (box) { box.classList.remove('loading'); document.getElementById('toNets').onclick = () => { state.view = 'settings'; state.setTab = 'flowcfg'; render(); }; }
+    ['tDonut', 'tDetail', 'cTop5'].forEach(id => { const el = fill(id, `<div class="empty">${T('No data')}</div>`); if (el) el.classList.remove('loading'); });
+    drawQa();
+  } else Promise.all([api('top', {dim, limit}), api('series', {by:dim, top:Math.min(limit, 20)})]).then(([t, ser]) => {
     topRows = t.rows; window.__tTotal = t.total;
-    t.rows.forEach((r, i) => colorOf.set(r.k, HOSTPAL[i % HOSTPAL.length]));
-    const fip = (state.filters.find(f => f.k === 'ip' && !f.neg) || {}).v;
-    selected = t.rows.find(r => r.k === fip) || t.rows[0] || null; drawQa();
+    t.rows.forEach((r, i) => colorOf.set(r.k, byNet && !r.k ? C.other : HOSTPAL[i % HOSTPAL.length]));
+    const fip = (state.filters.find(f => f.k === fk && !f.neg) || {}).v;
+    selected = t.rows.find(r => r.k === fip) || t.rows.find(r => r.k) || null; drawQa();
     const sp = new Map(); for (const [ts, k, b] of ser.rows) { if (!sp.has(k)) sp.set(k, new Map()); sp.get(k).set(ts, b); }
-    const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1;
-    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>${T('Host / IP')}</th><th style="width:26%">${T('Volume')}</th>${isInternal() ? `<th class="num" title="${T('→ inside hosts it connected to · ← inside hosts that connected to it')}">${T('Connections')}</th>` : ''}<th class="num">%</th><th class="num">Flows</th><th class="num">${T('Avg rate')}</th><th>${T('Trend')}</th><th></th></tr></thead><tbody>
+    const {ts} = grid(ser), max = t.rows.length ? tot(t.rows[0]) : 1, conn = isInternal() && !byNet, cols = 8 + (conn || byNet ? 1 : 0);
+    const label = r => byNet ? netLabel(r.k) : r.name || r.k;
+    const who = (r, c) => byNet
+      ? `<div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b>${esc(netLabel(r.k))}</b><span class="nat mono" title="${esc((r.nets || []).join(', '))}">${esc(netsText(r.nets || [], r.k))}</span></span></div>`
+      : `<div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? T('no name') : T('public address')))}</span></span></div>`;
+    const pick = r => !byNet || r.k ? ` data-pick="${esc(r.k)}" title="${T('Add to filters')}"` : '';
+    const box = fill('tBox', `<div class="tw"><table class="talkers"><thead><tr><th>#</th><th>${byNet ? T('Network') : T('Host / IP')}</th><th style="width:26%">${T('Volume')}</th>${conn ? `<th class="num" title="${T('→ inside hosts it connected to · ← inside hosts that connected to it')}">${T('Connections')}</th>` : byNet ? `<th class="num">${T('Hosts')}</th>` : ''}<th class="num">%</th><th class="num">Flows</th><th class="num">${T('Avg rate')}</th><th>${T('Trend')}</th><th></th></tr></thead><tbody>
       ${t.rows.map((r, i) => { const c = colorOf.get(r.k);
-        return `<tr class="click${r.k === fip ? ' is-picked' : ''}" data-pick="${esc(r.k)}" title="${T('Add to filters')}"><td class="mono">${i + 1}</td><td><div class="hcell"><span class="hbar" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="htxt"><b class="mono">${esc(r.k)}</b><span class="nat">${esc(r.name || (r.k.startsWith('10.') || r.k.startsWith('192.168.') || r.k.startsWith('172.') ? T('no name') : T('public address')))}</span></span></div></td>
+        return `<tr class="${pick(r) ? 'click' : ''}${r.k === fip ? ' is-picked' : ''}"${pick(r)}><td class="mono">${i + 1}</td><td>${who(r, c)}</td>
           <td><b class="mono">${fmtB(tot(r))}</b><div class="vbar"><i style="width:${(100 * tot(r) / max).toFixed(1)}%;background:linear-gradient(90deg,${hexA(c, .55)},${c});box-shadow:0 0 8px ${hexA(c, .6)}"></i></div>${isInternal() ? `<span class="nat mono"><span class="u" title="${T('sent')}">↑ ${fmtB(r.up)}</span> <span class="d" title="${T('received')}">↓ ${fmtB(r.dn)}</span></span>` : ''}</td>
-          ${isInternal() ? `<td class="num mono"><span class="u" title="${T('inside hosts it connected to')}">→ ${fmtN(r.calls || 0)}</span> · <span class="d" title="${T('inside hosts that connected to it')}">← ${fmtN(r.callers || 0)}</span></td>` : ''}<td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
-          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td><button class="btn" data-open="${esc(r.k)}" title="${T('Host card')}">›</button></td></tr>`; }).join('') || `<tr><td colspan="${isInternal() ? 9 : 8}"><div class="empty">${T('No data')}</div></td></tr>`}</tbody></table></div>`);
+          ${conn ? `<td class="num mono"><span class="u" title="${T('inside hosts it connected to')}">→ ${fmtN(r.calls || 0)}</span> · <span class="d" title="${T('inside hosts that connected to it')}">← ${fmtN(r.callers || 0)}</span></td>` : byNet ? `<td class="num mono">${fmtN(r.hosts || 0)}</td>` : ''}<td class="num mono">${pct(tot(r), t.total)}</td><td class="num mono">${fmtN(r.fl)}</td><td class="num mono">${fmtR(tot(r) * 8 / secs)}</td>
+          <td style="width:120px">${sp.has(r.k) ? sparkSvg(ts.map(x => sp.get(r.k).get(x) || 0), c, 120, 26) : ''}</td><td>${!byNet ? `<button class="btn" data-open="${esc(r.k)}" title="${T('Host card')}">›</button>` : r.k ? `<button class="btn" data-open="${esc(r.k)}" title="${T('Hosts of the network')}">›</button>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="${cols}"><div class="empty">${T('No data')}</div></td></tr>`}</tbody></table></div>`);
     if (box) { box.classList.remove('loading');
-      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => addFilter('ip', tr.dataset.pick));
-      box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation(); openHost(b.dataset.open); }); }
+      box.querySelectorAll('tr[data-pick]').forEach(tr => tr.onclick = () => addFilter(fk, tr.dataset.pick));
+      box.querySelectorAll('[data-open]').forEach(b => b.onclick = e => { e.stopPropagation();
+        if (byNet) { putFilter({k:'net', v:b.dataset.open, neg:false}); state.talkersBy = null; state.sel = null; render(); } else openHost(b.dataset.open); }); }
     // donut: top 5 + rest, same colours as the table
     const top5 = t.rows.slice(0, 5), rest = t.total - top5.reduce((a, r) => a + tot(r), 0);
-    const drows = [...top5.map(r => ({k:r.k, label:r.name || r.k, up:r.up, dn:r.dn})), ...(rest > 0 ? [{k:'__other', label:T('Others'), up:rest, dn:0}] : [])];
-    const db = fill('tDonut', `<div class="donut-wrap"><div class="chart donut" id="cTDonut"></div><div class="dl">${drows.map(r => `<i class="idot" style="background:${r.k === '__other' ? C.other : colorOf.get(r.k)}"></i>${r.k === '__other' ? `<span>${T('Others')}</span>` : `<button class="link mono" data-f="ip" data-v="${esc(r.k)}">${esc(r.label)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t"></span>`).join('')}</div></div>`);
+    const drows = [...top5.map(r => ({k:r.k, label:label(r), up:r.up, dn:r.dn})), ...(rest > 0 ? [{k:'__other', label:T('Others'), up:rest, dn:0}] : [])];
+    const db = fill('tDonut', `<div class="donut-wrap"><div class="chart donut" id="cTDonut"></div><div class="dl">${drows.map(r => `<i class="idot" style="background:${r.k === '__other' ? C.other : colorOf.get(r.k)}"></i>${r.k === '__other' ? `<span>${T('Others')}</span>` : byNet && !r.k ? `<span>${esc(r.label)}</span>` : `<button class="link${byNet ? '' : ' mono'}" data-f="${fk}" data-v="${esc(r.k)}">${esc(r.label)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t"></span>`).join('')}</div></div>`);
     if (db) { db.classList.remove('loading'); wireFilters(db); donut(document.getElementById('cTDonut'), drows.map(r => ({...r, k:r.label})), k => { const r = drows.find(x => x.label === k); return r.k === '__other' ? C.other : colorOf.get(r.k); }, [fmtB(t.total), T('all traffic')]); }
     // stacked trend: top 5 + others, same colours
-    api('series', {by:'int_ip', top:5}).then(s5 => { const el = document.getElementById('cTop5'); if (!el) return;
+    api('series', {by:dim, top:5}).then(s5 => { const el = document.getElementById('cTop5'); if (!el) return;
       const {ts: t5, step} = grid(s5), keys = new Map(); for (const [x, k, b] of s5.rows) { if (!keys.has(k)) keys.set(k, new Map()); keys.get(k).set(x, b); }
       const order = [...keys.keys()].sort((a, b) => (a === '__other') - (b === '__other'));
       const c = mkChart(el);
       c.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true}, legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
         tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(t5), yAxis:axisY(v => fmtR(v)),
         series:order.map(k => { const col = k === '__other' ? C.other : (colorOf.get(k) || C.other), r = t.rows.find(x => x.k === k);
-          return {name:k === '__other' ? T('others') : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
+          return {name:k === '__other' ? T('others') : byNet ? netLabel(k) : (r && r.name) || k, type:'line', stack:'a', smooth:.3, showSymbol:false, lineStyle:{width:1.6, color:col}, itemStyle:{color:col},
             areaStyle:{color:new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset:0, color:hexA(col, .45)}, {offset:1, color:hexA(col, .05)}])}, data:t5.map(x => [x * 1000, (keys.get(k).get(x) || 0) * 8 / step])}; })});
       zoomable(c);
     }).catch(e => fill('cTop5', errBox(e)));
@@ -1584,9 +1619,9 @@ function vTalkers(){
         series:[{type:'scatter', coordinateSystem:'geo', symbolSize:d => 4 + 10 * Math.sqrt(d[2] / cmax), itemStyle:{color:'#27D3F5', shadowBlur:10, shadowColor:'#27D3F5'},
           data:city.rows.filter(r => r.la || r.lo).map(r => [r.lo, r.la, tot(r)])}]}); });
     return `<div class="geomini"><div class="chart" id="cMini" style="height:120px"></div><div class="dl">${cc.rows.map((r, i) => `<i class="idot" style="background:${cols[i]}"></i><button class="link" data-f="country" data-v="${esc(r.k)}">${esc(r.k ? ccName(r.k) : T('Local'))}</button><span class="p">${pct(tot(r), cc.total)}</span><span class="t"></span>`).join('')}${rest > 0 ? `<i class="idot" style="background:${C.other}"></i><span>${T('Others')}</span><span class="p">${pct(rest, cc.total)}</span><span class="t"></span>` : ''}</div></div>`; });
-  section('tDetail', async () => { const d = await api('top', {dim:'host_svc', limit:6});
-    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Host')}</th><th>${T('Main service')}</th><th>${T('Protocol')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = HOSTPAL[i % HOSTPAL.length];
-      return `<tr class="click" data-f="ip" data-v="${esc(r.k)}"><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="mono">${esc(r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(dv(r.l7))}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
+  if (!noNets) section('tDetail', async () => { const d = await api('top', {dim:byNet ? 'net_svc' : 'host_svc', limit:6});
+    return `<div class="tw"><table class="compact"><thead><tr><th>${byNet ? T('Network') : T('Host')}</th><th>${T('Main service')}</th><th>${T('Protocol')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${d.rows.map((r, i) => { const c = byNet && !r.k ? C.other : HOSTPAL[i % HOSTPAL.length];
+      return `<tr${byNet && !r.k ? '' : ` class="click" data-f="${fk}" data-v="${esc(r.k)}"`}><td><span class="idot" style="background:${c};box-shadow:0 0 8px ${c}"></span><span class="${byNet ? '' : 'mono'}">${esc(byNet ? netLabel(r.k) : r.name || r.k)}</span></td><td>${svcBadge(r.service)}</td><td><span class="tag">${L4[r.proto] || r.proto} · ${esc(dv(r.l7))}</span></td><td class="num mono">${fmtB(tot(r))}</td></tr>`; }).join('')}</tbody></table></div>`; });
 }
 function vPorts(){
   const v = document.getElementById('view'), all = !!state.portsAll;
@@ -2211,6 +2246,7 @@ function vFlowCfg(){
   document.getElementById('setBody').innerHTML = `<div class="grid top">
     <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowTrack names (e.g. TCP other) in every report'))}<div id="pnBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('dev', T('Host names'), T('your own names of the hosts in your network: shown next to their addresses everywhere, over the names from DNS'))}<div id="hnBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('nodes', T('Network names'), T('your own names of networks: filter by them (net:Office) and see the traffic of each on Top hosts → Networks'))}<div id="nnBox" class="loading"></div></section>
     ${admin ? `<section class="glass panel s7">${ph('dev', T('Services on our side'), T('learned from the last day: what outside addresses call · the role decides which events they get'))}<div id="evsBox" class="loading"></div></section>
     <section class="glass panel s5">${ph('shield', T('Port roles'), T('for services not listed on the left'))}<div id="prBox" class="loading"></div></section>
     <section class="glass panel s12 evsave"><div><button class="btn primary" id="svSave">${T('Save')}</button> <button class="btn" id="svDef">${T('Restore defaults')}</button></div><p class="err" id="svErr"></p><p class="note" id="svOk" hidden>${T('Saved. The next 10-minute check uses the new settings.')}</p></section>` : ''}</div>`;
@@ -2290,6 +2326,25 @@ function vFlowCfg(){
       delAsk:it => T('Delete the name «{name}» of {ip}?', {name:it.name, ip:it.ip}),
       empty:T('No own host names yet.') + (admin ? ' ' + T('Example: 10.0.0.15 → NAS in the office.') : '')});
   }).catch(e => fill('hnBox', errBox(e)));
+  // (1.8.7) network names: a network (CIDR) and its name; several networks may share one name
+  let nn = null;
+  api('networks').then(d => { if (!document.getElementById('nnBox')) return;
+    let cur = d.items; const norm = v => { const c = addrCheck(v); return c.ok && c.net ? c.v : null; };
+    nn = rowTable(document.getElementById('nnBox'), {id:'nn', admin, items:d.items, cols:'minmax(0,220px) minmax(0,1fr) auto',
+      fields:[{k:'net', label:T('Network'), ph:'172.16.0.0/24', mono:true, max:49}, {k:'name', label:T('Name'), ph:T('Office'), max:40}],
+      hint:T('Type a network of yours with its mask and the name to show for it. Give several networks one name to count them together.'),
+      check:(r, at) => { const bad = [], n = r.net ? norm(r.net) : null, dup = n ? cur.findIndex((x, i) => i !== at && norm(x.net) === n) : -1;
+        if (r.net && !n) return {bad:['net'], err:addrCheck(r.net).ok ? T('Write the network with its mask: {v}/24', {v:r.net}) : addrCheck(r.net).msg};
+        if (!r.net) bad.push('net'); if (!r.name) bad.push('name');
+        if (at >= 0 && dup >= 0) return {bad:['net'], err:T('This network already has a name — change that row')};
+        const same = r.name ? cur.filter((x, i) => i !== at && i !== dup && x.name.toLowerCase() === r.name.toLowerCase()).map(x => x.net) : [];
+        return {bad, replace:dup >= 0 ? dup : null, warn:dup >= 0, hint:dup >= 0 ? T('{net} is already named «{name}» — adding replaces it.', {net:esc(n), name:esc(cur[dup].name)})
+          : same.length ? T('«{name}» also takes in {nets}: their traffic counts together.', {name:esc(r.name), nets:esc(same.join(', '))}) : n && n !== r.net ? T('Saved as {net}', {net:`<b>${esc(n)}</b>`}) : ''}; },
+      show:(it, k) => k === 'net' ? `<span class="mono">${esc(it.net)}</span>` : `<b>${esc(it.name)}</b>`,
+      save:async list => { const r = await apiPost('networks', {items:list}); cur = r.items; META.networks = r.items; return r.items; },
+      delAsk:it => T('Delete the name «{name}» of {net}?', {name:it.name, net:it.net}),
+      empty:T('No named networks yet.') + (admin ? ' ' + T('Example: 172.16.0.0/24 → Office.') : '')});
+  }).catch(e => fill('nnBox', errBox(e)));
   if (!admin) return;
   // the roles of our services and the port lists (detections read them; saved apart from the rest of the Events tab)
   const get = async u => { const r = await fetch(u); if (!r.ok) throw new Error((await r.json()).error || r.status); return r.json(); };
@@ -2319,7 +2374,7 @@ function vFlowCfg(){
     const sens = document.getElementById('evSens'); if (!sens) throw new Error('not drawn');
     return {roles, sensitive:sens.value, public:document.getElementById('evPub').value}; };
   const mark = dirtyGuard(svCollect), svDirty = state.dirty;
-  state.dirty = () => svDirty() || pnDirty() || !!(hn && hn.dirty());
+  state.dirty = () => svDirty() || pnDirty() || !!(hn && hn.dirty()) || !!(nn && nn.dirty());
   const err = document.getElementById('svErr'), ok = document.getElementById('svOk');
   get('api/events/config').then(show).catch(e => { err.textContent = e.message; });
   document.getElementById('svSave').onclick = async () => { err.textContent = ''; ok.hidden = true;
@@ -2876,16 +2931,17 @@ async function openHost(ip){
   let hc = null; document.addEventListener('keydown', onKey); document.getElementById('scrim').onclick = close;
   let d; try { d = await api('host', {ip}); } catch (e) { root.querySelector('.drawer').innerHTML = errBox(e); return; }
   const s = d.summary;
-  root.querySelector('.drawer').innerHTML = `<header><div><h3>${esc(d.host.name || ip)}</h3><div class="ipl" style="color:var(--ink2)">${esc(ip)} · ${d.host.private ? T('inside address') : T('public address')}</div></div><button class="btn x" id="dx">${T('Close')}</button></header>
+  root.querySelector('.drawer').innerHTML = `<header><div><h3>${esc(d.host.name || ip)}</h3><div class="ipl" style="color:var(--ink2)">${esc(ip)} · ${d.host.private ? T('inside address') : T('public address')}${d.host.net ? ` · ${T('network')} <b>${esc(d.host.net)}</b>` : ''}</div></div><button class="btn x" id="dx">${T('Close')}</button></header>
     <div class="dk"><div><span>↓ download</span><b class="d">${fmtB(s.down)}</b></div><div><span>↑ upload</span><b class="u">${fmtB(s.up)}</b></div><div><span>flows</span><b>${fmtN(s.flows)}</b></div></div>
     <div><h4>${T('Traffic')} · ${rangeLabel()}</h4><div class="chart short" id="cHost"></div></div>
     <div><h4>${T('Services')}</h4><div class="tagrow">${d.services.rows.map(g => `<span class="tag">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
     <div><h4>${T('Protocols')}</h4><div class="tagrow">${d.ports.rows.map(g => `<span class="tag mono">${esc(dv(g.k))} · ${fmtB(tot(g))}</span>`).join('') || '—'}</div></div>
     <div><h4>${T('Where it goes')}</h4><div class="blist">${d.dests.rows.map(g => `<div class="brow" style="cursor:default"><span class="n"><span class="idot ext"></span>${esc(g.k)} <span class="nat">${esc([g.service, g.city || ccName(g.country)].filter(Boolean).join(' · '))}</span></span><span class="t">${fmtB(tot(g))}</span><span class="p"></span></div>`).join('')}</div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="dfilter">${T('Filter everything by this host')}</button>${netOf(ip) ? `<button class="btn" id="dnet" title="${esc(netOf(ip))}">${T('The whole network {net}', {net:'/' + netOf(ip).split('/')[1]})}</button>` : ''}</div>`;
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="dfilter">${T('Filter everything by this host')}</button>${netOf(ip) ? `<button class="btn" id="dnet" title="${esc(netOf(ip))}">${T('The whole network {net}', {net:'/' + netOf(ip).split('/')[1]})}</button>` : ''}${d.host.net ? `<button class="btn" id="dnetn">${T('Network «{name}»', {name:esc(d.host.net)})}</button>` : ''}</div>`;
   const before = charts.length; trendChart(document.getElementById('cHost'), d.series, true); hc = charts[before];
   document.getElementById('dx').onclick = close;
   document.getElementById('dfilter').onclick = () => { close(); addFilter('ip', ip); };
+  const dnn = document.getElementById('dnetn'); if (dnn) dnn.onclick = () => { close(); addFilter('net', d.host.net); };
   const dn = document.getElementById('dnet'); if (dn) dn.onclick = () => { close(); addFilter(d.host.private ? 'ip' : 'dst', netOf(ip)); };
   document.getElementById('dx').focus();
 }
@@ -2917,8 +2973,8 @@ function renderShell(){
   rs.value = state.range;
   document.getElementById('trafSel').value = state.traffic;
 }
-function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.view === 'settings') p.set('tab', state.setTab || 'general'); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); history.replaceState(null, '', '#' + p); }
-function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') === 'devices' || p.get('v') === 'users') { state.view = 'settings'; state.setTab = p.get('v'); } else if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('tab')) state.setTab = p.get('tab'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
+function saveUrl(){ const p = new URLSearchParams({v:state.view, r:state.range}); if (state.view === 'settings') p.set('tab', state.setTab || 'general'); if (isCustom()) { p.set('from', state.from); p.set('to', state.to); } if (state.traffic !== 'internet') p.set('t', state.traffic); if (state.filters.length) p.set('f', JSON.stringify(state.filters)); if (state.view === 'talkers' && state.talkersBy === 'net') p.set('by', 'net'); history.replaceState(null, '', '#' + p); }
+function loadUrl(){ try { const p = new URLSearchParams(location.hash.slice(1)); if (p.get('v') === 'devices' || p.get('v') === 'users') { state.view = 'settings'; state.setTab = p.get('v'); } else if (p.get('v') && VIEWS[p.get('v')]) state.view = p.get('v'); if (p.get('tab')) state.setTab = p.get('tab'); if (p.get('r') === 'custom') { const a = +p.get('from'), b = +p.get('to'); if (a > 0 && b - a >= 60) Object.assign(state, {range:'custom', from:a, to:b}); } else if (p.get('r')) state.range = p.get('r'); if (['internet', 'internal', 'all'].includes(p.get('t'))) state.traffic = p.get('t'); if (p.get('by') === 'net') state.talkersBy = 'net'; if (p.get('f')) { state.filters = []; JSON.parse(p.get('f')).forEach(putFilter); } } catch (e) {} }
 // (1.8.4) unsaved changes: a settings form sets state.dirty; leaving it (another page, tab, filter …) asks first
 const SHOWN_KEYS = ['view', 'setTab', 'filters', 'range', 'from', 'to', 'traffic', 'prevRange'];
 let SHOWN = null;
@@ -2980,13 +3036,17 @@ document.getElementById('trafSel').onchange = e => { state.traffic = e.target.va
 // the word can be (↑ ↓ to pick, Enter or Tab to take) and says what is wrong with a value before it is applied.
 const q = document.getElementById('q');
 const QHELP = () => [
-  [T('Who'), [['ip', T('inside host or network'), '10.0.0.5 · 172.16.0.0/24'], ['dst', T('outside address or network'), '8.8.8.8 · 203.0.113.0/24'],
+  [T('Who'), [['ip', T('inside host or network'), '10.0.0.5 · 172.16.0.0/24'], ['net', T('named network'), (META.networks || []).slice(0, 2).map(n => netTyped(n.name)).join(' · ') || T('Office')], ['dst', T('outside address or network'), '8.8.8.8 · 203.0.113.0/24'],
     ['asn', T('network owner: AS number or name'), 'AS15169 · Google'], ['country', T('country: two letters'), 'US · UA'], ['city', T('city'), 'Kyiv']]],
   [T('What'), [['service', T('service by address'), 'Telegram · YouTube'], ['l7', T('protocol by port'), 'HTTPS · DNS'], ['port', T('port of the server'), '443 · 3389'],
     ['proto', T('L4 protocol number'), T('6 = TCP · 17 = UDP · 1 = ICMP')]]],
   [T('Where'), [['device', T('device: name or address'), (META.devices && META.devices[0] || {}).name || 'fw-main'], ['iface', T('interface number, in or out'), '5'],
     ['in_if', T('input interface number'), '5'], ['out_if', T('output interface number'), '1'], ['dir', T('direction: up · down · internal'), 'up']]]];
 const QKEY_INFO = () => Object.fromEntries(QHELP().flatMap(([, rows]) => rows.map(r => [r[0], r])));
+// (1.8.7) a named network as typed: spaces of its name as _ (a word of the box has none), any case
+const netTyped = name => name.replace(/ /g, '_');
+const netFind = v => { const w = v.toLowerCase(); return (META.networks || []).find(n => n.name.toLowerCase() === w || n.name.toLowerCase() === w.replace(/_/g, ' ')); };
+const netNames = () => [...new Set((META.networks || []).map(n => n.name))];
 const isPrivate = v => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|f[cd][0-9a-f]{2}:)/i.test(v);
 // an address or a network as typed -> {ok, v (normalised), net, msg}
 function addrCheck(v){
@@ -3016,11 +3076,13 @@ function qParse(t){
   if (key && FILTER_KEYS.includes(key) && t.slice(i + 1)) { let v = t.slice(i + 1);
     if (key === 'device') { const d = (META.devices || []).find(x => x.ip === v || (x.name || '').toLowerCase() === v.toLowerCase()); if (d) v = d.ip; }   // by name too
     if (key === 'ip' || key === 'dst') { const c = addrCheck(v); if (!c.ok) return {err:c.msg}; v = c.v; }
+    if (key === 'net') { const n = netFind(v); if (!n) return {err:(META.networks || []).length ? T('No network named {v}: name networks in Settings → Flow configuration', {v}) : T('No named networks yet: name them in Settings → Flow configuration')}; v = n.name; }
     if (['port', 'proto', 'in_if', 'out_if', 'iface'].includes(key) && !/^\d+$/.test(v)) return {err:T('{key} takes a number: {v}', {key, v})};
     return {f:{k:key, v, neg}}; }
   if (/^[\d.]+(\/\d+)?$/.test(t) && t.split('.').length === 4 || /^[0-9a-f]*:[0-9a-f:.]*(\/\d+)?$/i.test(t) && !FILTER_KEYS.includes(key)) { const c = addrCheck(t); if (!c.ok) return {err:c.msg};
     return {f:{k:isPrivate(c.v) ? 'ip' : 'dst', v:c.v, neg}}; }
   if (/^AS\d+$/i.test(t)) return {f:{k:'asn', v:t, neg}};
+  if (!key && netFind(t)) return {f:{k:'net', v:netFind(t).name, neg}};
   if (/^[A-Za-z]{2}$/.test(t)) return {f:{k:'country', v:t.toUpperCase(), neg}};
   return t ? {f:{k:'service', v:t, neg}} : {};
 }
@@ -3047,6 +3109,9 @@ function qSuggest(word){
       .forEach(d => out.push({text:`${pre}device:${d.name}`, label:d.name, note:d.ip, apply:true}));
     else if (key === 'dir') [['up', T('to the internet')], ['down', T('from the internet')], ['internal', T('between inside hosts')]].filter(([v]) => v.startsWith(val))
       .forEach(([v, l]) => out.push({text:`${pre}dir:${v}`, label:`dir:${v}`, note:l, apply:true}));
+    else if (key === 'net') netNames().filter(n => !val || n.toLowerCase().includes(val.replace(/_/g, ' ').toLowerCase())).slice(0, 8)
+      .forEach(n => out.push({text:`${pre}net:${netTyped(n)}`, label:`${pre}net:${netTyped(n)}`, note:(META.networks || []).filter(x => x.name === n).map(x => x.net).join(', '), apply:true}));
+    if (key === 'net' && !out.length && (val || !netNames().length)) out.push({err:qParse(`net:${val || '?'}`).err});
     else if (key === 'proto') [['6', 'TCP'], ['17', 'UDP'], ['1', 'ICMP'], ['47', 'GRE'], ['50', 'ESP']].filter(([v]) => v.startsWith(val))
       .forEach(([v, l]) => out.push({text:`${pre}proto:${v}`, label:`proto:${v}`, note:l, apply:true}));
     else if (val) { const r = qParse(word); if (r.err) out.push({err:r.err});
@@ -3061,9 +3126,11 @@ function qSuggest(word){
   else if (r.f) {
     const addr = r.f.k === 'ip' || r.f.k === 'dst', alt = addr ? (r.f.k === 'ip' ? 'dst' : 'ip') : null;
     const note = f => f.v.includes('/') ? (f.k === 'ip' ? T('inside network') : T('outside network')) : info[f.k][1];
-    out.push({text:`${pre}${r.f.k}:${r.f.v}`, label:`${pre}${r.f.k}:${r.f.v}`, note:note(r.f), apply:true});
+    const tv = r.f.k === 'net' ? netTyped(r.f.v) : r.f.v;
+    out.push({text:`${pre}${r.f.k}:${tv}`, label:`${pre}${r.f.k}:${tv}`, note:note(r.f), apply:true});
     if (alt) out.push({text:`${pre}${alt}:${r.f.v}`, label:`${pre}${alt}:${r.f.v}`, note:note({k:alt, v:r.f.v}), apply:true});
-    if (r.f.k === 'service') { (META.devices || []).filter(d => (d.name || '').toLowerCase().includes(w.toLowerCase())).slice(0, 3).forEach(d => out.push({text:`${pre}device:${d.name}`, label:`${pre}device:${d.name}`, note:T('device'), apply:true}));
+    if (r.f.k === 'service') { netNames().filter(n => n.toLowerCase().includes(w.replace(/_/g, ' ').toLowerCase())).slice(0, 3).forEach(n => out.push({text:`${pre}net:${netTyped(n)}`, label:`${pre}net:${netTyped(n)}`, note:T('named network'), apply:true}));
+      (META.devices || []).filter(d => (d.name || '').toLowerCase().includes(w.toLowerCase())).slice(0, 3).forEach(d => out.push({text:`${pre}device:${d.name}`, label:`${pre}device:${d.name}`, note:T('device'), apply:true}));
       ['l7', 'city', 'asn'].forEach(k => out.push({text:`${pre}${k}:${w}`, label:`${pre}${k}:${w}`, note:info[k][1], apply:true})); }
   }
   return out;

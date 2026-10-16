@@ -167,9 +167,21 @@ def scope(q):
     host = sorted({str(f.get('v', '')) for f in flt if isinstance(f, dict) and f.get('k') == 'ip' and not f.get('neg') and f.get('v')})
     hnets = [h for h in host if '/' in h]
     host = [h for h in host if '/' not in h]
+    traffic = q.get('t', ['internet'])[0]
+    # (1.8.7) net:NAME — the addresses whose narrowest named network is NAME; inside <-> inside its hosts are read
+    # from their point of view like ip: (between inside and outside the inside side is int_ip already: the rollups do)
+    nets = common.load_networks()
+    for f in flt:
+        if isinstance(f, dict) and f.get('k') == 'net':
+            v = str(f.get('v', '')).strip().lower()
+            hit = [x for x in nets if x['name'].lower() == v]
+            if not hit:
+                raise BadRequest(tr('no network named {name}', name=str(f.get('v', ''))[:50]))
+            f['v'] = hit[0]['name']
+            if not f.get('neg') and traffic != 'internet':
+                hnets += [x['net'] for x in hit if x['net'] not in hnets]
     internal = "dir IN ('internal', 'internal_back')"
     # traffic scope: internet (inside <-> outside, default), internal (inside <-> inside) or all
-    traffic = q.get('t', ['internet'])[0]
     if traffic == 'internet':
         where.append("dir IN ('up', 'down')")
         fcols.add('dir')
@@ -185,6 +197,10 @@ def scope(q):
             one = lambda col: f'isIPAddressInRange({col}, {{f{i}:String}})'      # noqa: E731
             cond = one('ext_ip') if k == 'dst' else f"({one('int_ip')} OR {one('ext_ip')})" if (neg or k == 'host') else one('int_ip')
             fcols |= {'ext_ip'} if k == 'dst' else {'int_ip', 'ext_ip'} if (neg or k == 'host') else {'int_ip'}
+        elif k == 'net':
+            ne = net_expr('int_ip', params)
+            cond = f"({ne} = {{f{i}:String}} OR {net_expr('ext_ip', params)} = {{f{i}:String}})" if neg else f'{ne} = {{f{i}:String}}'
+            fcols |= {'int_ip', 'ext_ip'} if neg else {'int_ip'}
         elif k == 'ip' and neg:      # leave a host out: at either end
             cond = f'(int_ip = {{f{i}:String}} OR ext_ip = {{f{i}:String}})'
             fcols |= {'int_ip', 'ext_ip'}
@@ -241,6 +257,17 @@ def scope(q):
 DIR_HOST = rollups.DIR
 
 
+def net_expr(col, p):
+    """(1.8.7) SQL: the name of the narrowest named network holding the address in `col`, or ''; the networks go to
+    the params `p` (nc0, nn0, …)."""
+    nets = common.load_networks()
+    if not nets:
+        return "''"
+    for j, x in enumerate(nets):
+        p[f'nc{j}'], p[f'nn{j}'] = x['net'], x['name']
+    return 'multiIf(' + ', '.join(f'isIPAddressInRange({col}, {{nc{j}:String}}), {{nn{j}:String}}' for j in range(len(nets))) + ", '')"
+
+
 def net_value(v):
     """A network as typed (172.16.0.5/24 -> 172.16.0.0/24); BadRequest for one that is not."""
     try:
@@ -282,7 +309,7 @@ def q1(q, key, default, cast=str):
 
 
 def host_obj(ip):
-    return {'ip': ip, 'name': NAMES.get(ip), 'private': is_private(ip)}
+    return {'ip': ip, 'name': NAMES.get(ip), 'private': is_private(ip), 'net': common.network_of(ip)}
 
 
 def exporters_cfg(raw=False):
@@ -327,7 +354,7 @@ def api_meta(q):
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows WHERE ts >= now() - toIntervalDay({d:UInt16})", {'d': view_days()}, fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
             'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION,
-            'langs': languages()}
+            'langs': languages(), 'networks': [{'net': x['net'], 'name': x['name']} for x in common.load_networks()]}
 
 
 def edition_info(admin=False):
@@ -469,12 +496,12 @@ def api_series(q):
     by = q1(q, 'by', '')
     p['step'] = step
     bucket = 'toUnixTimestamp(toStartOfInterval(ts, toIntervalSecond({step:UInt32})))'
-    if by in DIMS:
+    if by in DIMS or by == 'net':
         top = q1(q, 'top', '7', int)
         p['top'] = max(1, min(top, 20))
-        col = DIMS[by]
-        s = src(p, [col], bucketed=True)
-        if by == 'int_ip' and q1(q, 't', 'internet') == 'internal':     # a host is the client or the server
+        col = net_expr('int_ip', p) if by == 'net' else DIMS[by]        # (1.8.7) by named network: of the inside address
+        s = src(p, ['int_ip' if by == 'net' else col], bucketed=True)
+        if by in ('int_ip', 'net') and q1(q, 't', 'internet') == 'internal':     # a host is the client or the server
             s = (f"(SELECT ts, int_ip, bytes FROM {p['_flows']} WHERE {where} UNION ALL "
                  f"SELECT ts, ext_ip AS int_ip, bytes FROM {p['_flows']} WHERE {where})")
         rows = ch(f"""WITH (SELECT groupArray(k) FROM (SELECT toString({col}) AS k FROM {s} GROUP BY k ORDER BY sum(bytes) DESC, k LIMIT {{top:UInt8}})) AS tops
@@ -564,6 +591,19 @@ def api_top(q):
         for r in rows:
             r['name'] = NAMES.get(r['k'])
             r['proto'] = int(r['proto'])
+    elif dim in ('net', 'net_svc') and q1(q, 't', 'internet') == 'internal':
+        # (1.8.7) inside <-> inside: a network sends from its client hosts and from its servers
+        nl, nr = net_expr('int_ip', p), net_expr('ext_ip', p)
+        rows = ch(f"""SELECT k, sum(u) AS up, sum(d) AS dn, sum(f) AS fl, 0 AS pk, uniqExact(h) AS hosts FROM (
+                SELECT {nl} AS k, cityHash64(int_ip) AS h, if(dir = 'internal', bytes, 0) AS u, if(dir = 'internal', 0, bytes) AS d, 1 AS f FROM {p['_flows']} WHERE {where}
+                UNION ALL SELECT {nr}, cityHash64(ext_ip), if(dir = 'internal', 0, bytes), if(dir = 'internal', bytes, 0), 1 FROM {p['_flows']} WHERE {where})
+            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+        net_rows(rows, p, where, src(p, ['int_ip', 'service', 'l7', 'proto']) if dim == 'net_svc' else None)
+    elif dim in ('net', 'net_svc'):      # (1.8.7) traffic of each named network (by the inside address), '' = no network
+        rows, totals = ch_totals(f"""SELECT {net_expr('int_ip', p)} AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up,
+                sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, sum(flows) AS fl, 0 AS pk, uniqExact(cityHash64(int_ip)) AS hosts
+            FROM {src(p, ['int_ip'])} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+        net_rows(rows, p, where, src(p, ['int_ip', 'service', 'l7', 'proto']) if dim == 'net_svc' else None)
     elif dim == 'int_ip' and q1(q, 't', 'internet') == 'internal':
         # inside <-> inside: a host is the client (int_ip) of some sessions and the server (ext_ip) of others; count
         # what it sent (up) and received (dn), how many hosts it connected to (calls) and how many connected to it
@@ -604,7 +644,7 @@ def api_top(q):
                 r['name'] = NAMES.get(r['k'])
     else:
         raise BadRequest('bad dim')
-    if dim == 'int_ip' and q1(q, 't', 'internet') == 'internal':     # there every record counts for two hosts
+    if dim in ('int_ip', 'net', 'net_svc') and q1(q, 't', 'internet') == 'internal':     # there every record counts for two hosts
         tot = ch(f"SELECT sum(bytes) AS b FROM {p['_flows']} WHERE {where}", p, fmt='JSON')[0]['b']
     else:                       # up + dn of all groups, computed in the same pass (WITH TOTALS; no 2nd scan)
         tot = int(totals.get('up') or 0) + int(totals.get('dn') or 0)
@@ -613,6 +653,22 @@ def api_top(q):
             if k in r:
                 r[k] = int(r[k])
     return {'total': int(tot), 'rows': rows}
+
+
+def net_rows(rows, p, where, svc_src=None):
+    """(1.8.7) The networks of each named-network row; with `svc_src` also its main service, L7 protocol and protocol."""
+    by = {}
+    for x in common.load_networks():
+        by.setdefault(x['name'], []).append(x['net'])
+    for r in rows:
+        r['nets'] = by.get(r['k'], [])
+    if svc_src and rows:
+        e = net_expr('int_ip', p)
+        main = {x['k']: x for x in ch(f"""SELECT k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto
+            FROM (SELECT {e} AS k, service, l7, proto, sum(bytes) AS b FROM {svc_src} GROUP BY k, service, l7, proto) GROUP BY k""", p, fmt='JSON')}
+        for r in rows:
+            r.update({c: main.get(r['k'], {}).get(c, d) for c, d in (('service', ''), ('l7', ''), ('proto', 0))})
+            r['proto'] = int(r['proto'])
 
 
 def live_end(q):
@@ -1254,7 +1310,7 @@ def _alerts_now(kinds):
 
 
 # filter keys the events answer to; the others (service, protocol, interfaces ...) do not apply to them
-EVENT_FILTERS = ('ip', 'dst', 'host', 'device', 'country', 'asn', 'port')
+EVENT_FILTERS = ('ip', 'net', 'dst', 'host', 'device', 'country', 'asn', 'port')
 
 
 def _in_net(addr, net):
@@ -1278,6 +1334,9 @@ def _event_match(a, f):
                 return False
             return any(_in_net(x, net) for x in addrs if x)
         return v in addrs
+    if k == 'net':              # (1.8.7) any of the event's addresses in the named network
+        addrs = {a.get('ip'), a.get('src'), a.get('dst')} | set(a.get('addrs') or ())
+        return any(common.network_of(x).lower() == v.lower() for x in addrs if x)
     if k == 'device':
         return v == (a.get('exporter') or a.get('device'))
     if k == 'country':
@@ -1413,6 +1472,44 @@ def post_host_names(body):
     os.replace(tmp, common.UI_HOSTS)
     NAMES.reload()
     return api_host_names({})
+
+
+def api_networks(q):
+    """(1.8.7) The named networks, as the user ordered them."""
+    try:
+        with open(common.UI_NETWORKS) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        raw = []
+    return {'items': [{'net': str(x.get('net', '')), 'name': str(x.get('name', ''))} for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []}
+
+
+def post_networks(body):
+    """The whole table: [{net, name}] -> STATE_DIR/networks.json."""
+    items = body.get('items')
+    if not isinstance(items, list):
+        raise BadRequest('items')
+    out, seen = [], set()
+    for it in items:
+        if not isinstance(it, dict):
+            raise BadRequest('items')
+        net = net_value(it.get('net', ''))
+        name = ' '.join(str(it.get('name', '')).split())
+        if not name:
+            raise BadRequest(tr('network name: give a name for {net}', net=net))
+        if len(name) > 40:
+            raise BadRequest(tr('network name: at most 40 characters: {name}', name=name[:40] + '…'))
+        if net in seen:
+            raise BadRequest(tr('{net} is listed twice', net=net))
+        seen.add(net)
+        out.append({'net': net, 'name': name})
+    if len(out) > 500:
+        raise BadRequest(tr('at most 500 named networks'))
+    tmp = common.UI_NETWORKS + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(out, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, common.UI_NETWORKS)
+    return api_networks({})
 
 
 def post_events_services(body):
@@ -1789,7 +1886,7 @@ class Cache:
 
 CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
-          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
+          '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/networks': api_networks, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
@@ -1958,6 +2055,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/events/services': lambda: post_events_services(body),
                 '/api/events/exceptions': lambda: post_events_exceptions(body),
                 '/api/hosts/names': lambda: post_host_names(body),
+                '/api/networks': lambda: post_networks(body),
                 '/api/ports': lambda: post_ports(body),
                 '/api/notify': lambda: post_notify(body),
                 '/api/notify/test': lambda: post_notify_test(body),

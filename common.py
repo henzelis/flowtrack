@@ -69,6 +69,46 @@ def load_host_names():
     return merged
 
 
+# (1.8.7) the user's names of networks (Settings → Flow configuration): STATE_DIR/networks.json
+# [{"net": "172.16.0.0/24", "name": "Office"}]; several networks may share a name; an address belongs to the narrowest
+UI_NETWORKS = os.path.join(STATE_DIR, 'networks.json')
+_networks = [None, []]
+
+
+def load_networks():
+    """[{net, name}] narrowest first (as they are matched); read again when the file changed."""
+    try:
+        mt = os.path.getmtime(UI_NETWORKS)
+    except OSError:
+        mt = 0
+    if mt != _networks[0]:
+        out = []
+        try:
+            with open(UI_NETWORKS) as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = []
+        for it in raw if isinstance(raw, list) else ():
+            try:
+                n = ipaddress.ip_network(str(it.get('net', '')), strict=False)
+            except (ValueError, AttributeError):
+                continue
+            if str(it.get('name', '')).strip():
+                out.append({'net': str(n), 'name': str(it['name']).strip(), '_n': n})
+        out.sort(key=lambda x: (x['_n'].version, -x['_n'].prefixlen, int(x['_n'].network_address)))
+        _networks[:] = [mt, out]
+    return _networks[1]
+
+
+def network_of(ip):
+    """The name of the narrowest named network holding `ip`, or ''."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return ''
+    return next((x['name'] for x in load_networks() if a.version == x['_n'].version and a in x['_n']), '')
+
+
 def exporters_mtime():
     mt = []
     for p in (os.path.join(CONFIG_DIR, 'exporters.json'), UI_EXPORTERS):

@@ -286,6 +286,11 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .loading.wshow > .wdec,.loading.wshow > .wring{opacity:1}
 .wfade{animation:wfade .35s ease-out}
 @keyframes wfade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* (1.8.7) the answer after a wait fills in (app.js wSettle): rows settle one after another, bars grow to their value */
+.wsettle :is(tbody tr,.blist > .brow,.pbars > span,.dl > button,.dl > span:not(.p):not(.t),.wleg > div,.rows > *){animation:wrowin .42s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(var(--wi, 0) * 55ms)}
+.wsettle :is(.vbar i,.vb i,.pbars .vbar i){transform-origin:left;animation:wbarin .75s cubic-bezier(.4,0,.2,1) backwards;animation-delay:calc(120ms + var(--wi, 0) * 55ms)}
+@keyframes wrowin{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes wbarin{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 .wdec{position:relative;display:grid;gap:9px;overflow:hidden;padding:4px 0}
 .wrow{display:grid;grid-template-columns:58px 104px minmax(0,1fr) 70px;gap:12px;align-items:center;font:12px/1.4 var(--f-mono);color:var(--ink3);white-space:nowrap}
 .wrow .tag{font-size:10.5px;overflow:hidden;text-overflow:clip}
@@ -319,7 +324,7 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .waitpill.indet .wpbar i{animation:windet 1.4s ease-in-out infinite;transform:none!important;width:30%}
 @keyframes windet{from{margin-left:-30%}to{margin-left:100%}}
 @media (max-width:480px){.wrow{grid-template-columns:48px 86px minmax(0,1fr) 58px;gap:8px}.wpbar{display:none}}
-@media (prefers-reduced-motion: reduce){.wscan,.wr::before,.waitpill.indet .wpbar i{animation:none}.wfade{animation:none}}
+@media (prefers-reduced-motion: reduce){.wscan,.wr::before,.waitpill.indet .wpbar i{animation:none}.wfade,.wsettle *{animation:none!important}}
 .err{color:var(--crit);font-size:12.5px;padding:10px}
 .foot-note{margin-top:22px;color:var(--ink3);font-size:11.5px;text-align:center}
 .foot-note a{color:var(--ink2)}

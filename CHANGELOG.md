@@ -5,6 +5,16 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+- **Named networks.** Settings → Flow configuration → Network names: a network with its mask and a name
+  (172.16.0.0/24 → Office); several networks may share one name and count together; an address belongs to the
+  narrowest network that holds it. `net:Office` filters every page and the events by it (`-net:` leaves it out at
+  either end; a name with spaces is typed with `_`, any case; a name typed alone is recognised too); the search box
+  lists the names. Top hosts has a Hosts | Networks switch: the table, the trend, the share ring and the detail table
+  by network, the addresses in none of them in a row of their own, › shows the hosts of a network. A host's panel
+  names its network and filters by it.
+- **Waiting fills in.** Tables waited for show rows with bars while the data is read (they showed one cycling value),
+  and the answer fills in as in the waiting mock-up: the rows settle one after another, the bars grow to their value,
+  share rings fill round. Through device, Path analysis, Ports, Top hosts and every other page.
 - **Icons drawn true.** The circles of several icons were drawn with their centre one radius to the side (the
   start point of the arc lay on the circle): Path analysis (its nodes cut by the edge), Top hosts and Add user (heads
   beside the bodies), Geolocation (the dot off the pin's centre), the nodes of the panels. Through device connects
