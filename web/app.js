@@ -1661,16 +1661,24 @@ function createTopoMap(host, opts){
     const L0 = layout(), hop = new Map([[data.pov, 0]]), q = [data.pov];
     while (q.length) { const c = q.shift(); for (const l of data.links) { if (l.b === 'internet') continue; const o = l.a === c ? l.b : l.b === c ? l.a : null; if (o && !hop.has(o)) { hop.set(o, hop.get(c) + 1); q.push(o); } } }
     const maxHop = Math.max(1, ...[...hop.values()]), ringN = new Map(); devices().forEach(n => { if (!hop.has(n.ip)) hop.set(n.ip, maxHop); });
-    const w0 = host.clientWidth, perRing = Math.max(...[...hop.values()].map(h => [...hop.values()].filter(x => x === h).length));
-    const Rmax = Math.max(170, Math.min(w0 / 2 - 110, 140 + 40 * perRing)), hh = Math.max(BASE, Rmax * 1.25 + 210);
-    sizeTo(w0, hh); const cx = W / 2, cy = Math.max(H * .56, 150 + Rmax * .55), R = h => Math.min(Rmax, Rmax * h / maxHop);
-    const P = new Map([['internet', {x:cx, y:52, r:26}]]);
+    // (1.9.3) the rings fill the room they get (the whole screen in wall mode); the neighbours spread evenly round the
+    // Point of View — all but the top, where the internet is — and a farther device sits near the one it is reached by
+    const w0 = host.clientWidth, hh = Math.max(BASE, 560 + 60 * (maxHop - 1)), RIGHT0 = -55, ARC = 290;
+    const R0 = Math.max(150, Math.min((w0 / 2 - 125) / 1.15, (hh - 200) / 2 / .82));
+    sizeTo(w0, hh); const Ry = R0 * .82, cx = W / 2, cy = Math.min(H - Ry - 60, 150 + Ry), R = h => maxHop < 2 ? R0 : R0 * (.6 + .4 * (h - 1) / (maxHop - 1));
+    const P = new Map([['internet', {x:cx, y:Math.max(42, cy - Ry - 95), r:26}]]), ang = new Map();
+    const at = (n, h, deg) => { ang.set(n.ip, deg); const a = deg * Math.PI / 180; P.set(n.ip, {x:cx + Math.cos(a) * R(h) * 1.15, y:cy + Math.sin(a) * R(h) * .82, r:22}); };
+    const side = n => ((L0.pos.get(n.ip) || {}).c || 0), yOf = n => ((L0.pos.get(n.ip) || {}).y || 0);
     for (let h = 1; h <= maxHop; h++) {
-      const ring = devices().filter(n => n.ip !== data.pov && hop.get(n.ip) === h).sort((a, b) => ((L0.pos.get(a.ip) || {}).y || 0) - ((L0.pos.get(b.ip) || {}).y || 0));
-      const right = ring.filter(n => ((L0.pos.get(n.ip) || {}).c || 0) > 0), left = ring.filter(n => !right.includes(n));
-      while (Math.abs(right.length - left.length) > 1) (right.length > left.length ? left : right).push((right.length > left.length ? right : left).pop());
-      for (const [side, list] of [[1, right], [-1, left]]) list.forEach((n, i) => { const t = list.length === 1 ? .35 : i / (list.length - 1), a = (-40 + 110 * t) * Math.PI / 180;
-        P.set(n.ip, {x:cx + side * Math.cos(a) * R(h) * 1.15, y:cy + Math.sin(a) * R(h) * .82, r:22}); });
+      const ring = devices().filter(n => n.ip !== data.pov && hop.get(n.ip) === h);
+      if (h === 1) {        // right side top to bottom, then left side bottom to top: neighbours keep the classic sides
+        ring.sort((a, b) => (side(b) > 0) - (side(a) > 0) || (side(a) > 0 ? yOf(a) - yOf(b) : yOf(b) - yOf(a)));
+        ring.forEach((n, i) => at(n, h, RIGHT0 + ARC * (i + .5) / ring.length));
+      } else {              // near the device it is reached through, fanned out a little
+        const by = new Map(); ring.forEach(n => { const par = data.links.map(l => l.a === n.ip ? l.b : l.b === n.ip ? l.a : null).find(o => o && hop.get(o) === h - 1);
+          const k = ang.has(par) ? par : '_'; if (!by.has(k)) by.set(k, []); by.get(k).push(n); });
+        let free = 0; for (const [par, list] of by) list.forEach((n, i) => at(n, h, par !== '_' ? ang.get(par) + (i - (list.length - 1) / 2) * 16 : RIGHT0 + ARC * ((free++) + .5) / ring.length));
+      }
       ringN.set(h, ring.length); }
     P.set(data.pov, {x:cx, y:cy, r:30});
     // a faint sky: rings and still stars
