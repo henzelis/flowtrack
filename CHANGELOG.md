@@ -3,6 +3,12 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.9.1 — 2026-10-16
+
+- **Path analysis views stay alive on a quiet network.** The density and speed of the moving traffic are now set
+  against the busiest link on the map (by the square root of its share), so the busiest one is always lively and the
+  others in proportion; a small network or a 24-hour average no longer looks almost still.
+
 ## 1.9.0 — 2026-10-16
 
 - **Path analysis comes alive: five map views.** A switch over the map: **Classic** (as before), **Lines** (the same

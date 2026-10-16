@@ -1479,12 +1479,17 @@ function createTopoMap(host, opts){
     g.fillStyle = gr; g.fillRect(0, 0, n, n); return (SPR[col] = c); };
   const dimOf = l => { const onPath = opts.pathSet ? opts.pathSet() : null; if (onPath && !(onPath.has(l.a) && onPath.has(l.b))) return .1;
     if (hover && hover.l) return hover.l === l ? 1 : .3; if (hover && hover.n) return l.a === hover.n.ip || l.b === hover.n.ip ? 1 : .3; return 1; };
+  // (1.9.1) density and speed relative to the busiest link on the map (by the square root of the share): the busiest
+  // one is always lively, the others in proportion — a small network or a long period's average looks alive too
+  const dirMbit = (l, fwd) => mbit(fwd ? Math.max(l.a_out || 0, l.b_in || 0) : Math.max(l.b_out || 0, l.a_in || 0));
   function spawn(dt){
-    const k = mode() === 'river' ? .12 : mode() === 'metro' ? .3 : mode() === 'stars' ? .34 : .42;
+    const top = {river:4, metro:9, stars:10}[mode()] || 13, speedK = mode() === 'stars' ? .75 : mode() === 'metro' ? .85 : 1;
+    let mmax = 0; for (const l of geoms.keys()) if (l.state !== 'adjacent') mmax = Math.max(mmax, dirMbit(l, true), dirMbit(l, false));
+    if (mmax <= 0) return;
     for (const [l, g] of geoms) for (const fwd of [true, false]) {
-      const m = mbit(fwd ? Math.max(l.a_out || 0, l.b_in || 0) : Math.max(l.b_out || 0, l.a_in || 0)); if (m <= 0.0005 || l.state === 'adjacent') continue;
-      const key = (fwd ? '>' : '<') + l.a + '|' + l.b + '|' + l.a_name; let a = (acc.get(key) ?? Math.random()) + Math.min(18, k * Math.sqrt(m)) * dt;
-      while (a >= 1) { a -= 1; parts.push({l, g, fwd, s:0, v:(70 + 26 * Math.log10(1 + m)) * (mode() === 'stars' ? .75 : mode() === 'metro' ? .85 : 1) / g.len, col:colourPick(l, fwd), size:1.5 + Math.min(1.3, Math.log10(1 + m) * .45)}); }
+      const m = dirMbit(l, fwd); if (m <= 0 || l.state === 'adjacent') continue;
+      const share = Math.sqrt(m / mmax), key = (fwd ? '>' : '<') + l.a + '|' + l.b + '|' + l.a_name; let a = (acc.get(key) ?? Math.random()) + Math.max(.25, top * share) * dt;
+      while (a >= 1) { a -= 1; parts.push({l, g, fwd, s:0, v:(60 + 80 * share) * speedK / g.len, col:colourPick(l, fwd), size:1.5 + 1.3 * share}); }
       acc.set(key, a);
     }
     if (parts.length > 700) parts.splice(0, parts.length - 700);
