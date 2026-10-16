@@ -621,3 +621,4 @@ section.panel.is-max .maxbtn{color:var(--ink);border-color:var(--edge-hi)}
 .lampbtn[disabled]{opacity:1;cursor:default;background:rgba(255,195,77,.08);border-color:rgba(255,195,77,.35);color:var(--ink)}
 section.panel.is-max > .netviews,section.panel.is-max > .legend,section.panel.is-max > .note{flex:0 0 auto}
 section.panel.is-max > .river.netmap{flex:1 1 auto;height:auto;min-height:0}
+#netSec.is-max > .note{display:none}

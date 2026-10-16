@@ -3,6 +3,15 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **The live map no longer pauses on a refresh.** Live, Path analysis asks for fresh numbers every 10 s; the moving
+  traffic used to vanish and start over then, which looked like an outage. Now the particles keep flying along their
+  links and the density and speed ease to the new values over a few seconds; River's strands keep their place.
+- **Full screen without distortion.** Path analysis (every view, Classic too) stretched its picture to the taller
+  full-screen panel — text and shapes squeezed in one direction. The map is now drawn again at the size of the panel,
+  never scaled, and back at its own size when it returns to the page.
+
 ## 1.9.1 — 2026-10-16
 
 - **Path analysis views stay alive on a quiet network.** The density and speed of the moving traffic are now set

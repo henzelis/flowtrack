@@ -1203,12 +1203,16 @@ function createTopoMap(host, opts){
   const mode = () => (opts.mode ? opts.mode() : 'classic'), thin = () => mode() !== 'classic';
   let W = 0, H = 0, dpr = 1, data = null, hover = null, shapes = [], centred = null, GAP = 184;
   const CW = 136, CH = 74;                // card size; GAP: room between columns for the interface labels
-  const BASE = host.getBoundingClientRect().height || 560;     // the map grows taller than this when the cards need it
+  const BASE0 = host.getBoundingClientRect().height || 560;     // the map grows taller than this when the cards need it
+  // (1.9.2) full screen: the map is as tall as the panel gives it (drawn again for it, never stretched)
+  const maxed = () => !!host.closest('section.is-max');
+  let BASE = BASE0;
   // ribbon width by volume; one link end on a card side takes a slot: its label (name over address) above its ribbon
   const v = x => state.scale === 'lin' ? x : Math.sqrt(x), vol2 = l => Math.max(l.a_out, l.b_in) + Math.max(l.b_out, l.a_in);
   let vmax = 1; const lw = x => x > 0 && !thin() ? 2 + 14 * v(x) / vmax : 0, slot = l => 40 + lw(vol2(l)), WAN_PAD = 40;
   const CLW = 132, CLH = 36, UP = 84;     // (1.8.10) the internet as in the waiting sketch: a pill on top; UP: room under it for the WAN ribbons and their labels
-  function size(){ const r = host.getBoundingClientRect(); H = r.height; dpr = Math.min(2, devicePixelRatio || 1); draw(); }
+  function size(){ BASE = maxed() ? Math.max(BASE0, Math.floor(host.parentElement.getBoundingClientRect().bottom - host.getBoundingClientRect().top - 22)) : BASE0;
+    const r = host.getBoundingClientRect(); H = r.height; dpr = Math.min(2, devicePixelRatio || 1); draw(); }
   const ro = new ResizeObserver(size); ro.observe(host); onCleanup(() => ro.disconnect());
   const rr = (x, y, w, h, r) => { const p = new Path2D(); p.moveTo(x + r, y); p.arcTo(x + w, y, x + w, y + h, r); p.arcTo(x + w, y + h, x, y + h, r); p.arcTo(x, y + h, x, y, r); p.arcTo(x, y, x + w, y, r); p.closePath(); return p; };
   const clip = (str, font, max) => { ctx.font = font; str = String(str || ''); if (ctx.measureText(str).width <= max) return str; while (str.length > 2 && ctx.measureText(str + '…').width > max) str = str.slice(0, -1); return str + '…'; };
@@ -1279,9 +1283,9 @@ function createTopoMap(host, opts){
     vmax = Math.max(1e-9, ...data.links.map(l => v(vol2(l))));
     const {pos, cloud} = data.nodes.length ? layout() : {pos:new Map(), cloud:null};
     if (!data.nodes.length) { W = host.clientWidth; H = BASE; }
-    const hs = H > BASE ? H + 'px' : '';
+    const hs = H > BASE || maxed() ? H + 'px' : '';
     if (host.style.height !== hs) host.style.height = hs;     // the ResizeObserver draws again at the new height
-    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; sizeBg();
+    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; sizeBg();
     if (centred !== data.pov && pos.has(data.pov)) { centred = data.pov; host.scrollLeft = Math.max(0, pos.get(data.pov).x - host.clientWidth / 2); }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H); shapes = [];
     ctx.textBaseline = 'middle'; ctx.lineCap = 'round';
@@ -1426,6 +1430,10 @@ function createTopoMap(host, opts){
   // internet, to the internet, inside. 30 fps at most, nothing moves when the tab is hidden or motion is reduced.
   const geoms = new Map(), bands = new Map();
   let bgCv = null, parts = [], acc = new Map(), raf = 0, lastT = 0, dist = new Map(), placed = [];
+  // (1.9.2) a link is known by its ends and interface, not by the object of one answer: a refresh (every 10 s live)
+  // keeps the particles flying and eases the rates to the new values instead of starting over
+  const lkey = l => l.a + '|' + l.b + '|' + (l.a_name || '');
+  const geoByKey = new Map(), linkByKey = new Map(), eased = new Map(), phase = new Map();
   const sizeBg = () => { if (ctx !== main && bgCv) { bgCv.width = cv.width; bgCv.height = cv.height; } };
   const cubicPts = (p0, p1, p2, p3, n = 40) => Array.from({length:n + 1}, (_, i) => { const t = i / n, u = 1 - t;
     return [u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0], u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1]]; });
@@ -1482,18 +1490,26 @@ function createTopoMap(host, opts){
   // (1.9.1) density and speed relative to the busiest link on the map (by the square root of the share): the busiest
   // one is always lively, the others in proportion — a small network or a long period's average looks alive too
   const dirMbit = (l, fwd) => mbit(fwd ? Math.max(l.a_out || 0, l.b_in || 0) : Math.max(l.b_out || 0, l.a_in || 0));
+  // the rate a link shows: eased towards the latest answer (about 4 s to settle), never a jump
+  const easeRate = (key, target, dt) => { const cur = eased.has(key) ? eased.get(key) : target, k = 1 - Math.exp(-dt / 1.5), v = cur + (target - cur) * k; eased.set(key, v); return v; };
   function spawn(dt){
     const top = {river:4, metro:9, stars:10}[mode()] || 13, speedK = mode() === 'stars' ? .75 : mode() === 'metro' ? .85 : 1;
-    let mmax = 0; for (const l of geoms.keys()) if (l.state !== 'adjacent') mmax = Math.max(mmax, dirMbit(l, true), dirMbit(l, false));
-    if (mmax <= 0) return;
+    const rates = []; let mmax = 0;
     for (const [l, g] of geoms) for (const fwd of [true, false]) {
-      const m = dirMbit(l, fwd); if (m <= 0 || l.state === 'adjacent') continue;
-      const share = Math.sqrt(m / mmax), key = (fwd ? '>' : '<') + l.a + '|' + l.b + '|' + l.a_name; let a = (acc.get(key) ?? Math.random()) + Math.max(.25, top * share) * dt;
-      while (a >= 1) { a -= 1; parts.push({l, g, fwd, s:0, v:(60 + 80 * share) * speedK / g.len, col:colourPick(l, fwd), size:1.5 + 1.3 * share}); }
+      const key = (fwd ? '>' : '<') + lkey(l), m = easeRate(key, l.state === 'adjacent' ? 0 : dirMbit(l, fwd), dt);
+      rates.push([l, g, fwd, key, m]); mmax = Math.max(mmax, m); }
+    mmax = easeRate('__max', mmax, dt);
+    if (mmax <= 0) return;
+    for (const [l, g, fwd, key, m] of rates) {
+      if (m <= mmax * 1e-4) continue;
+      const share = Math.min(1, Math.sqrt(m / mmax)); let a = (acc.get(key) ?? Math.random()) + Math.max(.25, top * share) * dt;
+      while (a >= 1) { a -= 1; parts.push({k:lkey(l), l, g, fwd, s:0, v:(60 + 80 * share) * speedK / g.len, col:colourPick(l, fwd), size:1.5 + 1.3 * share}); }
       acc.set(key, a);
     }
     if (parts.length > 700) parts.splice(0, parts.length - 700);
   }
+  // a strand's dash phase grows by its eased speed: a new speed changes the pace, not the place
+  const phaseOf = (key, speed, dt) => { const sp = easeRate('~' + key, speed, dt), ph = (phase.get(key) || 0) + sp * dt; phase.set(key, ph % 1e6); return ph; };
   function paint(dt, t){
     main.setTransform(1, 0, 0, 1, 0, 0); main.clearRect(0, 0, cv.width, cv.height); if (bgCv) main.drawImage(bgCv, 0, 0); main.setTransform(dpr, 0, 0, dpr, 0, 0);
     if (mode() === 'river') for (const [l, b] of bands) {          // the liquid: strands per direction, thin streaks flowing in them
@@ -1502,13 +1518,15 @@ function createTopoMap(host, opts){
         main.save(); main.translate(0, off + sw / 2); main.globalAlpha = .26 * dim; main.lineWidth = sw * .92; main.strokeStyle = col; main.stroke(b.g.path);
         if (!REDUCED.matches) { main.globalAlpha = .85 * dim; main.lineWidth = Math.min(1.6, sw * .4); main.lineCap = 'round';
           for (const [kk, len, gap] of [[0, 14, 26], [1, 8, 34]]) { if (sw < 5 && kk) continue;
-            main.save(); main.translate(0, sw * (kk ? .22 : -.18)); main.setLineDash([len, gap]); main.lineDashOffset = -(t * (38 + Math.sqrt(val) * 2.4) + kk * 20) * dir; main.stroke(b.g.path); main.restore(); }
+            main.save(); main.translate(0, sw * (kk ? .22 : -.18)); main.setLineDash([len, gap]); main.lineDashOffset = -(phaseOf(lkey(l) + col + kk, 38 + Math.sqrt(val) * 2.4, dt) + kk * 20) * dir; main.stroke(b.g.path); main.restore(); }
           main.setLineDash([]); main.lineCap = 'butt'; }
         main.restore(); off += sw; } }
     main.globalAlpha = 1;
     if (REDUCED.matches) return;
     main.globalCompositeOperation = 'lighter';
-    for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.s += p.v * dt; p.g = geoms.get(p.l); if (p.s >= 1 || !p.g) { parts.splice(i, 1); continue; }
+    for (let i = parts.length - 1; i >= 0; i--) { const p = parts[i]; p.s += p.v * dt;
+      const g = geoByKey.get(p.k); if (g && g !== p.g) { p.v *= p.g.len / g.len; p.g = g; p.l = linkByKey.get(p.k); }      // a refresh: same link, new curve
+      if (p.s >= 1 || !g) { parts.splice(i, 1); continue; }
       const u = p.fwd !== !!p.g.rev ? p.s : 1 - p.s, [x, y, ang] = p.g.at(u), a = dimOf(p.l) * .95 * Math.min(1, p.s * 6, (1 - p.s) * 6);
       if (mode() === 'metro') { main.save(); main.translate(x, y); main.rotate(ang); main.globalAlpha = a; main.fillStyle = p.col; main.fill(rr(-6, -2.2, 12, 4.4, 2.2)); main.restore(); }
       else if (mode() === 'stars') for (let k = 2; k >= 0; k--) { const [tx, ty] = k ? p.g.at(u + (p.fwd !== !!p.g.rev ? -1 : 1) * k * .014) : [x, y]; main.globalAlpha = a * (k ? .42 - k * .14 : 1); const d = p.size * (k ? 1 - k * .3 : 1) * 5; main.drawImage(sprite(p.col), tx - d / 2, ty - d / 2, d, d); }
@@ -1551,8 +1569,8 @@ function createTopoMap(host, opts){
   const devices = () => data.nodes.filter(n => n.ip !== 'internet');
   const nodeVol = ip => data.links.filter(l => l.a === ip || l.b === ip).reduce((s, l) => s + vol2(l), 0);
   // the canvas as tall as the view needs (never narrower than the panel)
-  function sizeTo(w, h){ W = w; H = Math.max(BASE, h); const hs = H > BASE ? H + 'px' : ''; if (host.style.height !== hs) host.style.height = hs;
-    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; sizeBg(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  function sizeTo(w, h){ W = w; H = Math.max(BASE, h); const hs = H > BASE || maxed() ? H + 'px' : ''; if (host.style.height !== hs) host.style.height = hs;
+    box.style.width = W + 'px'; cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px'; sizeBg(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
     shapes = []; placed = []; ctx.textBaseline = 'middle'; ctx.lineCap = 'round'; }
   const stateDash = (p, l) => { if (l.state === 'adjacent') { ctx.setLineDash([4, 5]); ctx.strokeStyle = 'rgba(170,190,230,.55)'; ctx.lineWidth = 1.4; ctx.stroke(p); ctx.setLineDash([]); return true; }
     if (l.state === 'gap' || l.state === 'unobserved') { ctx.setLineDash([5, 5]); ctx.strokeStyle = RED; ctx.lineWidth = 1.6; ctx.stroke(p); ctx.setLineDash([]); return true; } return false; };
@@ -1719,6 +1737,7 @@ function createTopoMap(host, opts){
     if (m !== 'classic') { if (!bgCv) bgCv = document.createElement('canvas'); ctx = bgCv.getContext('2d'); }
     try { if (data) dist = hopsFromInternet(); (m === 'metro' ? drawMetro : m === 'stars' ? drawStars : m === 'river' ? drawRiver : drawClassic)(); }
     finally { ctx = main; }
+    geoByKey.clear(); linkByKey.clear(); for (const [l, g] of geoms) { geoByKey.set(lkey(l), g); linkByKey.set(lkey(l), l); }
     if (m !== 'classic' && data) { if (m !== 'river') bands.clear(); main.setTransform(dpr, 0, 0, dpr, 0, 0); paint(0, performance.now() / 1000); kickLive(); }
     else stopLive();
   }
@@ -1732,7 +1751,7 @@ function createTopoMap(host, opts){
     if (h) { tip.hidden = false; tip.innerHTML = s.tip; tip.style.left = Math.max(0, Math.min(W - tip.offsetWidth - 4, h.x + 14)) + 'px'; tip.style.top = Math.min(H - tip.offsetHeight - 4, h.y + 14) + 'px'; cv.style.cursor = s.n ? 'pointer' : 'default'; } else { tip.hidden = true; cv.style.cursor = ''; } });
   cv.addEventListener('mouseleave', () => { hover = null; tip.hidden = true; draw(); });
   cv.addEventListener('click', e => { const h = pick(e); if (h && h.s.n && opts.onNode) opts.onNode(h.s.n); });
-  return {set:d => { data = d; draw(); }, redraw:draw};
+  return {set:d => { data = d; draw(); }, redraw:draw, resize:() => { host.style.height = ''; requestAnimationFrame(size); }};
 }
 function vNetwork(){
   const v = document.getElementById('view'), live = !!state.netLive && !isCustom(), depth = state.netDepth || 1;
@@ -1774,6 +1793,7 @@ function vNetwork(){
   const map = createTopoMap(document.getElementById('cNet'), {mode:curView, onNode:n => { if (n.ip === 'internet' || n.ip === state.netPov) return; state.netPov = n.ip; if (n.more) state.netDepth = Math.max(depth, 1); render(); },
     pathSet:() => path && path.hops.length ? new Set(path.hops.filter(h => h.state !== 'unplaced').map(h => h.device)) : null, hopNo:ip => hopIndex().get(ip)});
   drawViews();
+  document.getElementById('netSec')._reload = () => map.resize();       // (1.9.2) full screen and back: drawn again at the new size
   let wb = waitBig(document.getElementById('cNet'), 'graph', sketchGraph((META.devices || []).slice().sort((a, b) => a.name.localeCompare(b.name))));   // (1.8.5) a sketch until the first answer
   const nm = ip => ip === 'internet' ? T('Internet') : ((topo && topo.devices.find(d => d.ip === ip)) || {}).name || ip;
   const drawSide = () => {
