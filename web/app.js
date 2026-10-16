@@ -513,14 +513,14 @@ const maxBtn = () => `<button type="button" class="maxbtn" data-max title="${T('
 function maxMark(){ document.querySelectorAll('[data-max]').forEach(b => { const on = b.closest('section').classList.contains('is-max');
   b.innerHTML = icon(on ? MAX_OUT : MAX_IN, 14); b.title = on ? T('Leave full screen') : T('Full screen'); b.setAttribute('aria-label', b.title); b.setAttribute('aria-pressed', String(on)); }); }
 function maxToggle(sec){
-  if (sec.classList.contains('is-max')) { sec.classList.remove('is-max'); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); maxMark(); return; }
-  document.querySelectorAll('section.is-max').forEach(x => x.classList.remove('is-max'));
-  sec.classList.add('is-max'); maxMark();
+  if (sec.classList.contains('is-max')) { sec.classList.remove('is-max'); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); maxMark(); if (sec._reload) sec._reload(); return; }
+  document.querySelectorAll('section.is-max').forEach(x => { x.classList.remove('is-max'); if (x._reload) x._reload(); });
+  sec.classList.add('is-max'); maxMark(); if (sec._reload) sec._reload();      // (1.8.9) a list: more rows
   if (sec.requestFullscreen) sec.requestFullscreen().catch(() => {});      // refused: it stays over the window
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-max]'); if (b) maxToggle(b.closest('section')); });
 function maxLeave(){ const x = document.querySelector('section.is-max'); if (x) maxToggle(x); }
-document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) { document.querySelectorAll('section.is-max').forEach(x => x.classList.remove('is-max')); maxMark(); } });
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) { document.querySelectorAll('section.is-max').forEach(x => { x.classList.remove('is-max'); if (x._reload) x._reload(); }); maxMark(); } });
 document.addEventListener('keydown', e => { if (e.key !== 'Escape') return; const x = document.querySelector('section.is-max'); if (x) maxToggle(x); });
 const seg = (id, opts, val) => `<div class="seg" id="${id}" role="group">${opts.map(([v, l, tip]) => `<button data-v="${v}" aria-pressed="${v === val}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</div>`;
 const flowLive = () => state.flowLive && !isCustom();
@@ -823,18 +823,24 @@ function vOverview(){
   document.getElementById('toFlows').onclick = () => { state.view = 'flows'; render(); };
   section('kpis', kpiCards);
   mountHero();
-  section('svcBox', async () => {
-    const t = await api('top', {dim:'service', limit:5}); const rest = t.total - t.rows.reduce((s, r) => s + tot(r), 0);
+  // (1.8.9) full screen: the lists show more rows (a panel's _reload loads it again when it opens or closes)
+  const big = id => { const el = document.getElementById(id); return !!(el && el.closest('section.is-max')); };
+  const loaders = {
+  svcBox:() => section('svcBox', async () => {
+    const t = await api('top', {dim:'service', limit:big('svcBox') ? 12 : 5}); const rest = t.total - t.rows.reduce((s, r) => s + tot(r), 0);
     const rows = [...t.rows, ...(rest > 0 ? [{k:T('Others'), up:rest, dn:0}] : [])];
     setTimeout(() => { const el = document.getElementById('cDonut'); if (el) donut(el, rows, k => k === T('Others') ? C.other : keyColor(k), [fmtB(t.total), T('total traffic')]); });
     return `<div class="donut-wrap"><div class="chart donut" id="cDonut"></div><div class="dl">${rows.map(r => `<i class="idot" style="background:${r.k === T('Others') ? C.other : keyColor(r.k)}"></i>${r.k === T('Others') ? `<span>${T('Others')}</span>` : `<button class="link" data-f="service" data-v="${esc(r.k)}">${esc(r.k)}</button>`}<span class="p">${pct(tot(r), t.total)}</span><span class="t">${fmtB(tot(r))}</span>`).join('')}</div></div>`;
-  });
-  section('hostBox', async () => { const t = await api('top', {dim:'int_ip', limit:5});
-    return `<div class="tw"><table class="compact"><thead><tr><th>#</th><th>${T('Host')}</th><th class="num">${T('Traffic')}</th><th class="num">%</th><th></th></tr></thead><tbody>${t.rows.map((r, i) => `<tr class="click" data-host="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="two-line"><b class="mono">${esc(r.name || r.k)}</b>${r.name ? `<span class="nat">${esc(r.k)}</span>` : ''}</div></td><td class="num mono">${fmtB(tot(r))}</td><td class="num mono">${pct(tot(r), t.total)}</td><td class="chev">›</td></tr>`).join('')}</tbody></table></div>`; });
+  }),
+  hostBox:() => section('hostBox', async () => { const t = await api('top', {dim:'int_ip', limit:big('hostBox') ? 20 : 5});
+    return `<div class="tw"><table class="compact"><thead><tr><th>#</th><th>${T('Host')}</th><th class="num">${T('Traffic')}</th><th class="num">%</th><th></th></tr></thead><tbody>${t.rows.map((r, i) => `<tr class="click" data-host="${esc(r.k)}"><td class="mono">${i + 1}</td><td><div class="two-line"><b class="mono">${esc(r.name || r.k)}</b>${r.name ? `<span class="nat">${esc(r.k)}</span>` : ''}</div></td><td class="num mono">${fmtB(tot(r))}</td><td class="num mono">${pct(tot(r), t.total)}</td><td class="chev">›</td></tr>`).join('')}</tbody></table></div>`; }),
+  convBox:() => section('convBox', async () => { const t = await api('top', {dim:'conv', limit:big('convBox') ? 20 : 5}); return convRows(t.rows, t.total); }),
+  recentBox:() => section('recentBox', async () => { const t = await api('flows', {limit:big('recentBox') ? 20 : 7});
+    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${isInternal() ? T('Client → server · service') : T('Inside → outside · service')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${isBack(f) ? 'd' : 'u'}">${isBack(f) ? '←' : '→'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(dv(f.service))}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records')}</div></td></tr>`}</tbody></table></div>`; })
+  };
+  Object.values(loaders).forEach(f => f());
+  Object.entries(loaders).forEach(([id, f]) => { const sec = document.getElementById(id).closest('section'); if (sec) sec._reload = f; });
   api('series').then(s => { const el = document.getElementById('cTrend'); if (el) trendChart(el, s); }).catch(e => fill('cTrend', errBox(e)));
-  section('convBox', async () => { const t = await api('top', {dim:'conv', limit:5}); return convRows(t.rows, t.total); });
-  section('recentBox', async () => { const t = await api('flows', {limit:7});
-    return `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${isInternal() ? T('Client → server · service') : T('Inside → outside · service')}</th><th class="num">${T('Volume')}</th></tr></thead><tbody>${t.rows.map(f => `<tr><td class="mono">${hms(f.t)}</td><td><div class="two-line"><span class="ipl">${esc(f.name || f.int_ip)} <span class="${isBack(f) ? 'd' : 'u'}">${isBack(f) ? '←' : '→'}</span> ${esc(f.ext_ip)}</span><span class="nat">${esc(dv(f.service))}${f.l7 ? ' · ' + esc(f.l7) : ''}</span></div></td><td class="num mono">${fmtB(f.bytes)}</td></tr>`).join('') || `<tr><td colspan="4"><div class="empty">${T('No records')}</div></td></tr>`}</tbody></table></div>`; });
 }
 
 // filters that describe a river selection (a host, an outside address, or a conversation band); none for «Others»

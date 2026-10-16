@@ -3,6 +3,11 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Full-screen lists show more.** Top hosts, Top conversations and Recent flows show 20 rows on the full screen,
+  Top services 12 services and the rest; back in the page they show their usual few again.
+
 ## 1.8.8 — 2026-10-16
 
 - **Overview panels full screen.** A small button next to each panel's title (the map / graph / 3D, Top services,
