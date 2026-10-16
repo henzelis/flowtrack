@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.8.7 — 2026-10-16
 
 - **Named networks.** Settings → Flow configuration → Network names: a network with its mask and a name
   (172.16.0.0/24 → Office); several networks may share one name and count together; an address belongs to the
