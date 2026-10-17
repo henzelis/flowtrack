@@ -86,6 +86,7 @@ FILTERS = {
     'country': ('country', 'String'), 'city': ('city', 'String'), 'port': ('ext_port', 'UInt16'), 'device': ('exporter', 'String'),
     'dir': ('dir', 'String'), 'proto': ('proto', 'UInt8'), 'in_if': ('in_if', 'UInt32'), 'out_if': ('out_if', 'UInt32'),
 }
+DIR_VALUES = ('up', 'down', 'internal', 'transit', 'internal_back')
 DIMS = {'int_ip': 'int_ip', 'ext_ip': 'ext_ip', 'service': 'service', 'l7': 'l7', 'country': 'country', 'city': 'city',
         'asn': 'asn', 'ext_port': 'ext_port', 'exporter': 'exporter', 'dir': 'dir', 'proto': 'proto'}
 
@@ -210,7 +211,7 @@ def scope(q):
         elif k == 'asn':
             if v.upper().startswith('AS'):
                 v = v[2:]
-            if v.isdigit():
+            if v.isascii() and v.isdigit():
                 cond = f'asn = {{f{i}:UInt32}}'
                 fcols.add('asn')
             else:
@@ -220,13 +221,13 @@ def scope(q):
             cond = f'(int_ip = {{f{i}:String}} OR ext_ip = {{f{i}:String}})'
             fcols |= {'int_ip', 'ext_ip'}
         elif k == 'iface':
-            if not v.isdigit():
+            if not (v.isascii() and v.isdigit()):
                 raise BadRequest('bad value for iface')
             cond = f'(in_if = {{f{i}:UInt32}} OR out_if = {{f{i}:UInt32}})'
             fcols |= {'in_if', 'out_if'}
         elif k in FILTERS:
             col, typ = FILTERS[k]
-            if typ != 'String' and not v.isdigit():
+            if typ != 'String' and not (v.isascii() and v.isdigit()) or k == 'dir' and v not in DIR_VALUES:
                 raise BadRequest(f'bad value for {k}')
             cond = f'{col} = {{f{i}:{typ}}}'
             fcols.add(col)
@@ -996,7 +997,7 @@ def api_live(q):
     oldest 300 records after `since` — thousands of records a second left the map ever further behind). `upto`:
     the newest second read, the next `since`."""
     where, p, rng, step = scope(q)
-    p['since'] = q1(q, 'since', str(int(time.time()) - 90), int)
+    p['since'] = max(0, q1(q, 'since', str(int(time.time()) - 90), int))
     last = ch(f"SELECT toUnixTimestamp(max(ts)) AS t FROM flows WHERE {where} AND ts > toDateTime({{since:UInt32}}) AND lat != 0", p, fmt='JSON')
     upto = int(last[0]['t']) if last and int(last[0]['t'] or 0) else 0
     if not upto:
@@ -1897,8 +1898,16 @@ ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups'}
 COOKIE = 'ft_session'
 
 
+# the page runs only its own script files: even text that slipped into the HTML unescaped could not run code
+# ('unsafe-eval': the 3D globe library builds functions from strings of its own; inline scripts stay blocked)
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; "
+       "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+
+
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
+    server_version, sys_version = 'FlowTrack', ''      # no Python version in the Server header
     timeout = 60          # idle keep-alive connections do not hold a thread forever
 
     def log_message(self, *a):
@@ -1940,6 +1949,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header('Set-Cookie', self._cookie)
             self._cookie = None
         self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Content-Security-Policy', CSP)
         self.send_header('Referrer-Policy', 'same-origin')
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
@@ -2010,7 +2020,12 @@ class H(BaseHTTPRequestHandler):
         # CSRF: browsers only send JSON cross-site with a CORS preflight, which we never grant; cookie is SameSite=Strict too
         if not self.headers.get('Content-Type', '').startswith('application/json'):
             return self.json(415, {'error': 'JSON expected'})
-        n = int(self.headers.get('Content-Length') or 0)
+        try:
+            n = int(self.headers.get('Content-Length') or 0)
+        except ValueError:
+            n = -1
+        if n < 0:
+            return self.json(400, {'error': 'bad Content-Length'})
         if n > 65536:
             return self.json(413, {'error': 'too large'})
         try:
@@ -2037,7 +2052,7 @@ class H(BaseHTTPRequestHandler):
             if u.path == '/api/me/prefs':        # (1.9.0) any user: their own choices
                 return self.json(200, AUTH.set_prefs(user, body.get('prefs')))
             if u.path == '/api/me/password':
-                AUTH.change_own_password(user, body.get('current'), body.get('new'), tok)
+                AUTH.change_own_password(user, body.get('current'), body.get('new'), tok, self.client_ip())
                 return self.json(200, AUTH.public(user))
             admin_routes = {
                 '/api/users': lambda: AUTH.create_user(body.get('name'), body.get('role'), body.get('password')),

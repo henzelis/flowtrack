@@ -3,6 +3,21 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.9.4 — not released yet
+
+Security review fixes.
+
+- **The backup service no longer follows links.** It runs as root and writes its status into the folder of the
+  `flowtrack` user; it now creates those files only anew and never through a link left there, and so do the start of
+  the collector and the web service (`hw.board`). A restore of the settings removes links in the way, refuses a linked
+  folder, never restores setuid bits and takes only `/etc/flowtrack/…` and `/var/lib/flowtrack/…` themselves. A copy on
+  S3 / SFTP / FTP whose list names a base that is not a backup ID is refused.
+- **Content-Security-Policy**: the web interface runs only its own script files (the start-up script moved out of
+  the page into `boot.js`); the Server header no longer shows the Python version.
+- **Changing your own password**: wrong current passwords count as failed logins (5 in 5 minutes → a pause).
+- Wrong filter values (`dir:`, non-Latin digits) and a negative `since` are a 400 with the reason, not a database error;
+  a bad Content-Length is a 400.
+
 ## 1.9.3 — 2026-10-17
 
 - **Stars fills the screen.** Path analysis → Stars spreads the neighbours evenly round the Point of View (all but the

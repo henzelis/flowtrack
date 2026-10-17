@@ -176,11 +176,9 @@ class Auth:
         self._save_sessions()
 
     # ------------------------------------------------------------ self-service
-    def change_own_password(self, name, current, new, token):
+    def change_own_password(self, name, current, new, token, ip):
         with self.lock:
-            u = self.users[name]
-            if not hmac.compare_digest(_hash(current or '', bytes.fromhex(u['salt'])), u['hash']):
-                raise AuthError(tr('The current password is wrong'))
+            self._verify(name, current, ip, tr('The current password is wrong'))     # wrong ones count as failed logins
             self._check_new_password(new)
             if new == current:
                 raise AuthError(tr('The new password is the same as the current one'))

@@ -117,11 +117,15 @@ def save(cfg):
 
 
 def _write_json(path, obj, mode=0o644):
+    # the service runs as root and writes into STATE_DIR, which the flowtrack user owns: a link left there in place of
+    # the temporary file must never be followed (it would overwrite and chmod any file of the system)
     tmp = path + '.tmp'
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with contextlib.suppress(FileNotFoundError):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(fd, 'w') as f:
+        os.fchmod(f.fileno(), mode)
         json.dump(obj, f, indent=1, ensure_ascii=False)
-    os.chmod(tmp, mode)
     os.replace(tmp, path)
 
 
@@ -1080,6 +1084,8 @@ def fetch(source, bid, cfg, passphrase=None, log=print):
                 get(cur + '.json', os.path.join(tmp, 'm.json'))
                 with open(os.path.join(tmp, 'm.json')) as fh:
                     cur = json.load(fh).get('base')
+            if cur and not ID_RE.match(str(cur)):            # the copy is not trusted: its base names a folder here
+                raise BackupError(tr('The backup file holds an unsafe path: {p}', p=str(cur)[:60]))
         for b in reversed(todo):
             log(tr('Downloading {id}…', id=b))
             with tempfile.TemporaryDirectory(dir=DIR) as tmp:
@@ -1099,6 +1105,7 @@ def fetch(source, bid, cfg, passphrase=None, log=print):
                     for ti in t.getmembers():
                         if ti.name.startswith('/') or '..' in ti.name.split('/') or not (ti.isfile() or ti.isdir()):
                             raise BackupError(tr('The backup file holds an unsafe path: {p}', p=ti.name))
+                        ti.mode &= 0o777
                     t.extractall(dest)
                 for root, dirs, files in os.walk(dest):
                     for n in dirs + files:
@@ -1211,14 +1218,30 @@ def _restore_settings(path, with_license, root='/'):
         if any(name == s or name.startswith(s + '/') for s in SKIP_RESTORE):
             return True
         return not with_license and any(name.startswith(s) for s in LICENSE_FILES)
+    def inside(name, d):
+        d = d.strip('/')
+        return name == d or name.startswith(d + '/')
+
     with tarfile.open(path) as t:
         members = []
         for ti in t.getmembers():
             if ti.name.startswith('/') or '..' in ti.name.split('/') or not (ti.isfile() or ti.isdir()):
                 continue
-            if not (ti.name.startswith(CONFIG_DIR.lstrip('/')) or ti.name.startswith(STATE_DIR.lstrip('/'))) or skip(ti.name):
+            if not (inside(ti.name, CONFIG_DIR) or inside(ti.name, STATE_DIR)) or skip(ti.name):
                 continue
+            ti.mode &= 0o777                      # never setuid / setgid / sticky
             members.append(ti)
+        # STATE_DIR belongs to the flowtrack user: a link it left in place of a file or folder would make this (root)
+        # write elsewhere. Links are removed before; a folder on the way that is a link stops the restore.
+        for ti in members:
+            parts, cur = ti.name.split('/'), root
+            for i, part in enumerate(parts):
+                cur = os.path.join(cur, part)
+                if not os.path.islink(cur):
+                    continue
+                if i < len(parts) - 1:
+                    raise BackupError(tr('The settings cannot be restored: {p} is a link.', p=cur))
+                os.unlink(cur)
         t.extractall(root, members=members)
 
 
@@ -1229,7 +1252,7 @@ def lock(wait=False):
     """One backup or restore at a time. wait: the service waits for the running one (a request file it left would
     start it again at once, over and over); the command line says so instead."""
     os.makedirs(STATE_DIR, exist_ok=True)
-    fd = os.open(os.path.join(STATE_DIR, 'backup.lock'), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(STATE_DIR, 'backup.lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
     except BlockingIOError:
