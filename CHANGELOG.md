@@ -480,9 +480,8 @@ Busy networks (measured with a day of 2,400 records/s — about 200 million reco
 - *Path analysis* without interface addresses shows what the records reveal on each end, as *Through device* does:
   the network both ends share, the inside network or the NAT address.
 - **Check for renewal** in Settings → License (and `sudo flowtrack license renew`) for every installed license: an
-  offline or expired license gets the renewed one from the license server when the vendor extended its key (before,
-  only online licenses checked in, so an offline one stayed expired until a new file was loaded). Offline licenses
-  still never contact the server by themselves.
+  expired license gets the renewed one from the license server as soon as the vendor extended its key, without
+  waiting for the daily check.
 - MikroTik's NetFlow snippet exports NetFlow v9 (`version=9`) instead of IPFIX.
 - Settings → Devices: interface names or addresses saved within a few seconds of opening the page showed the old
   values until the next visit.
@@ -594,14 +593,13 @@ million synthetic records a day, 4 vCPUs:
   license server every day (a lease of 30 days, so a few days without internet do not matter); Settings → License
   shows until when, the last check and a "Check now" button. Deactivating frees the key for another server at
   once; a renewed key reaches the server at its next check; a revoked one falls back to the Community limits.
-- Licenses issued offline (`FTL-…`) work as before and need no network.
 - The license server is `https://lic.telesphera.net:8443` with a pinned certificate; `FT_LICENSE_SERVER` in
   `/etc/flowtrack/env` points FlowTrack to another address (e.g. inside the network of the server itself), and
   the installer keeps that setting.
 - Compiled core 1.3.0: trusts the license server's key for online licenses and their confirmations only.
 - **License files from the license server.** A `.lic` issued by the vendor for this server's activation request works
   at once (it carries the license server's first confirmation) and is then confirmed online every day like a key —
-  so it can be revoked, renewed and moved. An offline license (for closed networks) never needs the server.
+  so it can be revoked, renewed and moved.
 - `flowtrack-license` (the command) now uses the license server set in `/etc/flowtrack/env`, like the services.
 - Overview → Network traffic: one **Live / Period** switch for Map, Graph and 3D. Live shows the last 2 minutes
   (the graph used to show only that, so a host that was quiet just now showed nothing even for "last 24 hours");
@@ -630,11 +628,11 @@ million synthetic records a day, 4 vCPUs:
 
 ## 1.1.0 — 2026-10-06 (on main, never tagged; superseded by 1.2.0)
 
-- **Licenses bound to the installation, activated offline.** Every installation has an Instance ID (from the machine
+- **Licenses bound to the installation.** Every installation has an Instance ID (from the machine
   ID) and shows an activation request (`FTR-…`) in Settings → License and with the new `flowtrack-license` command.
   A license (`FTL-…`) is issued for that request and works on that server only: it is bound to the machine ID and
   to the board UUID or one of the network cards, so a copied disk or a shared license does not work elsewhere.
-  The codes are short enough to read out by phone; no network connection is needed. Deactivation gives a return
+  Deactivation gives a return
   code (`FTX-…`) to move the license to another server; the server refuses that license afterwards. A clock turned
   back is detected. FlowTrack 1.0 keys (`FT1.…`) are no longer accepted.
 - The core checks licenses itself (the `cryptography` package is installed always); the Pro module only adds

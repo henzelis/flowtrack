@@ -19,6 +19,7 @@
 
 **Next — scale and reach**
 - CI (GitHub Actions) running the test suite on every push; API tokens for scripts and monitoring
+- Recommended server sizes for each range of records/s, measured on real hardware
 
 **Features**
 - Notifications: webhook
