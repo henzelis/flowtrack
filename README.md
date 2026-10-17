@@ -39,7 +39,7 @@ your own server, installs with one command and is ready in minutes.
 <tr>
 <td valign="top"><b>Security built in</b><br>Port scans, password guessing, floods, contact with known malicious addresses — with alerts to Telegram and e-mail.</td>
 <td valign="top"><b>Made for the wall</b><br>Live maps, a 3D globe and animated traffic views that run full screen on a NOC display — smooth, light on the CPU.</td>
-<td valign="top"><b>Yours</b><br>Self-hosted, no cloud, no telemetry. Every feature is free; a license only raises the limits and activates offline.</td>
+<td valign="top"><b>Yours</b><br>Self-hosted, no cloud, no telemetry. Every feature is free; a license only raises the limits.</td>
 </tr>
 </table>
 
@@ -149,7 +149,7 @@ Unattended install, upgrades, all server commands: [docs/install.md](docs/instal
 | Every feature, now and in future versions | ✓ | ✓ |
 | Flow records per second | up to **5,000** | no limit (or per license) |
 | Flow details kept | **30 days** (hourly totals: 3 years) | per license, e.g. 90 days |
-| Activation | — | offline: no connection to us needed |
+| Activation | — | a license key, activated in a minute in Settings → License |
 
 5,000 records/s covers homes, small and medium offices; a busy 1 Gbit/s internet edge typically exports a few thousand.
 **For a Pro license, a demo or help with deployment: [henzelis@gmail.com](mailto:henzelis@gmail.com?subject=FlowTrack%20Pro).**
@@ -167,7 +167,7 @@ Details: [docs/editions.md](docs/editions.md).
 | [Security](docs/security.md) | passwords, sessions, HTTPS, what runs where |
 | [API](docs/api.md) | JSON endpoints and filters |
 | [Performance](docs/performance.md) | measured receiving and page speeds |
-| [Editions and licensing](docs/editions.md) | limits, offline activation, moving a license |
+| [Editions and licensing](docs/editions.md) | limits, activating a license key, moving it to another server |
 | [Translations](docs/translations.md) | adding a language: one file |
 | [Repository layout and roadmap](docs/development.md) | for contributors |
 

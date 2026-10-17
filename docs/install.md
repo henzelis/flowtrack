@@ -50,7 +50,7 @@ Other commands on the server:
 | Command | What it does |
 |---|---|
 | `flowtrack status` | version, services, edition |
-| `sudo flowtrack license request` / `activate FILE` / `renew` / `deactivate` | license of this server (`renew`: fetch a renewal from the license server; see [Editions](editions.md)) |
+| `sudo flowtrack license status` / `activate KEY` / `renew` / `deactivate` | license of this server (`renew`: ask the license server for a renewal now; see [Editions](editions.md)) |
 | `sudo flowtrack reconfigure` | the installer's questions again: ports, device, admin password, firewall |
 | `sudo flowtrack uninstall` | remove FlowTrack; asks whether to keep the data |
 
