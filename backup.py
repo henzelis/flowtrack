@@ -389,7 +389,8 @@ class SFTP(Dest):
             sock = socket.create_connection((c['host'], int(c['port'])), timeout=10)
         except OSError as e:
             raise BackupError(tr('No answer from {host}:{port}: {err}', host=c['host'], port=c['port'], err=e)) from None
-        self.t = paramiko.Transport(sock)
+        # never SHA-1 RSA signatures (ssh-rsa; CVE-2026-44405): RSA keys still work with rsa-sha2-256/512
+        self.t = paramiko.Transport(sock, disabled_algorithms={'keys': ['ssh-rsa'], 'pubkeys': ['ssh-rsa']})
         try:
             self.t.start_client(timeout=15)
             self.fingerprint = sftp_fingerprint(self.t.get_remote_server_key())

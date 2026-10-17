@@ -27,6 +27,11 @@ Security review fixes.
 - **Content-Security-Policy**: the web interface runs only its own script files (the start-up script moved out of
   the page into `boot.js`); the Server header no longer shows the Python version.
 - **Changing your own password**: wrong current passwords count as failed logins (5 in 5 minutes → a pause).
+- **Unattended install** without `FT_ADMIN_PASSWORD` makes a random password for `admin` and shows it at the end,
+  instead of the well-known default.
+- **SFTP copies** never use SHA-1 RSA signatures (`ssh-rsa`, CVE-2026-44405 in paramiko); RSA keys keep working.
+- The top bar stays on one row from 1280 px wide (the search box gives way first; Ukrainian wrapped at 1400 px); on
+  tablets the search gets a row of its own.
 - Wrong filter values (`dir:`, non-Latin digits) and a negative `since` are a 400 with the reason, not a database error;
   a bad Content-Length is a 400.
 

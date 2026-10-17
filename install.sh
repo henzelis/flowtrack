@@ -416,6 +416,8 @@ else
   say ""; say "${B}4/5 $(t 'Administrator password' 'Пароль адміністратора')${N}"
   say "  ${D}$(t 'Login is "admin". You can change the password later in the web interface.' 'Логін — «admin». Пароль можна змінити пізніше у вебінтерфейсі.')${N}"
   ask_secret ADMIN_PW "$(t 'New password (min. 8 characters)' 'Новий пароль (щонайменше 8 символів)')" FT_ADMIN_PASSWORD
+  # unattended without FT_ADMIN_PASSWORD: a random one (shown at the end), never the well-known default
+  if [ "$YES" = 1 ] && [ -z "$ADMIN_PW" ]; then ADMIN_PW=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-16); ADMIN_PW_MADE=1; fi
 
   say ""; say "${B}5/5 $(t 'Firewall' 'Фаєрвол')${N}"
   OPEN_FW=n
@@ -740,6 +742,7 @@ if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwo
        || { command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1 && ! firewall-cmd --list-ports 2>/dev/null | grep -qw "$SF_PORT/udp"; }; }; then
     say "  ${D}$(t "sFlow arrives on UDP $SF_PORT: if your devices will send sFlow, open it in the firewall (ufw allow $SF_PORT/udp, or firewall-cmd --permanent --add-port=$SF_PORT/udp)." "sFlow приходить на UDP $SF_PORT: якщо ваші пристрої надсилатимуть sFlow, відкрийте його у фаєрволі (ufw allow $SF_PORT/udp або firewall-cmd --permanent --add-port=$SF_PORT/udp).")${N}"
   fi
+elif [ -n "${ADMIN_PW_MADE:-}" ]; then say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$ADMIN_PW${N}  ${D}$(t '(generated: write it down, or change it in the web interface)' '(згенеровано: запишіть або змініть у вебінтерфейсі)')${N}"
 else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
 EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")

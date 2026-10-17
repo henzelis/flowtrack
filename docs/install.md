@@ -28,6 +28,8 @@ curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh 
   sudo FT_ADMIN_PASSWORD='change-me-now' FT_VENDOR=Fortinet FT_EXPORTER_IP=192.0.2.1 bash -s -- --yes
 ```
 
+Without `FT_ADMIN_PASSWORD` the installer makes a random password for `admin` and shows it at the end.
+
 Supported: Debian/Ubuntu (apt) and Fedora/RHEL/Rocky/Alma (dnf) with systemd, x86_64 or arm64. Details
 are logged to `/var/log/flowtrack-install.log`.
 
