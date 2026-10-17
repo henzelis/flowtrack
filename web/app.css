@@ -616,6 +616,8 @@ section.panel.is-max .maxbtn{color:var(--ink);border-color:var(--edge-hi)}
 /* (1.9.0) Path analysis: the map view switch; the lamp marks each user's default view */
 .netviews{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:-4px 0 10px}
 .netviews .seg button{display:inline-flex;align-items:center;gap:5px}
+.netviews .seg{max-width:100%;flex-wrap:wrap}          /* a phone: the views wrap rather than push the page sideways */
+@media (max-width:480px){.netviews .seg button{padding:5px 9px}}
 .lamp{display:inline-grid;place-items:center;line-height:0;color:var(--ink3)}
 .lamp.on{color:#FFC34D;filter:drop-shadow(0 0 5px rgba(255,195,77,.75))}
 .lampbtn{display:inline-flex;align-items:center;gap:6px;padding:6px 11px;font-size:12px}

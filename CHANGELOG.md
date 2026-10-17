@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## 1.9.4 — not released yet
+## 1.9.4 — 2026-10-17
 
 Security review fixes.
 
@@ -32,6 +32,7 @@ Security review fixes.
 - **SFTP copies** never use SHA-1 RSA signatures (`ssh-rsa`, CVE-2026-44405 in paramiko); RSA keys keep working.
 - The top bar stays on one row from 1280 px wide (the search box gives way first; Ukrainian wrapped at 1400 px); on
   tablets the search gets a row of its own.
+- Path analysis on a phone: the view switcher wraps instead of pushing the page sideways (Ukrainian was 30 px too wide).
 - Wrong filter values (`dir:`, non-Latin digits) and a negative `since` are a 400 with the reason, not a database error;
   a bad Content-Length is a 400.
 
