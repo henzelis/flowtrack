@@ -3,6 +3,15 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Stars fills the screen.** Path analysis → Stars spreads the neighbours evenly round the Point of View (all but the
+  top, where the internet is), sets a device two hops away near the one it is reached through, and lets the rings use
+  the room they get — the whole screen in wall mode — instead of lining small networks up along the bottom.
+- **A new README** in English and Ukrainian: what FlowTrack does and looks like, with live animations and fresh
+  screenshots from the demo network; the technical chapters moved to `docs/` (install, exporters, features, backups,
+  configuration, security, API, editions, performance, translations, development).
+
 ## 1.9.2 — 2026-10-16
 
 - **No more false gaps on Path analysis.** A working network often shows two ends of a link that do not agree —

@@ -4,8 +4,8 @@
 
 <p align="center">
   <a href="https://github.com/henzelis/flowtrack/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/henzelis/flowtrack?filter=v*&sort=semver&style=flat-square&color=2F7BFF&label=version"></a>
-  <img alt="NetFlow v5/v9 · IPFIX · sFlow v5" src="https://img.shields.io/badge/NetFlow%20v5%2Fv9%20·%20IPFIX%20·%20sFlow%20v5-27D3F5?style=flat-square">
-  <img alt="Linux x86_64 · arm64" src="https://img.shields.io/badge/Linux-x86__64%20·%20arm64-0B1736?style=flat-square">
+  <img alt="NetFlow v5/v9 · IPFIX · sFlow v5" src="https://img.shields.io/badge/NetFlow%20v5%2Fv9%20%C2%B7%20IPFIX%20%C2%B7%20sFlow%20v5-27D3F5?style=flat-square">
+  <img alt="Linux x86_64 · arm64" src="https://img.shields.io/badge/Linux-x86__64%20%C2%B7%20arm64-0B1736?style=flat-square">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Elastic%202.0-8B5CFF?style=flat-square"></a>
 </p>
 
