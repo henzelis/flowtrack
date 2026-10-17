@@ -25,7 +25,7 @@ FlowTrack на цьому сервері:
   sudo flowtrack backup [--full]                          бекап зараз (даних і налаштувань; копії — як у «Налаштування → Бекапи»)
   sudo flowtrack backup list [--from s3|sftp|ftp|ТЕКА]    бекапи тут або на іншому місці
   sudo flowtrack backup verify [ID] [--deep]              перевірити бекап (--deep: відновити в тимчасову базу)
-  sudo flowtrack restore [ID] [--from s3|sftp|ftp|ТЕКА] [--only-settings|--only-data] [--with-license]
+  sudo flowtrack restore [ID] [--from s3|sftp|ftp|ТЕКА] [--only-settings|--only-data] [--with-license] [--unencrypted]
 TXT
   else cat <<'TXT'
 FlowTrack on this server:
@@ -37,7 +37,7 @@ FlowTrack on this server:
   sudo flowtrack backup [--full]                          a backup now (data and settings; copies as in Settings → Backups)
   sudo flowtrack backup list [--from s3|sftp|ftp|DIR]     backups here or on another place
   sudo flowtrack backup verify [ID] [--deep]              check a backup (--deep: restore it into a scratch database)
-  sudo flowtrack restore [ID] [--from s3|sftp|ftp|DIR] [--only-settings|--only-data] [--with-license]
+  sudo flowtrack restore [ID] [--from s3|sftp|ftp|DIR] [--only-settings|--only-data] [--with-license] [--unencrypted]
 TXT
   fi
 }

@@ -1900,8 +1900,8 @@ COOKIE = 'ft_session'
 
 # the page runs only its own script files: even text that slipped into the HTML unescaped could not run code
 # ('unsafe-eval': the 3D globe library builds functions from strings of its own; inline scripts stay blocked)
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-       "font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; "
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+       "font-src 'self' data:; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; "
        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 
 

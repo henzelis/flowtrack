@@ -7,6 +7,18 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 Security review fixes.
 
+- **Forged packets cannot fill the memory** (core 1.4.2). NetFlow / IPFIX / sFlow come over UDP, whose sender address
+  anyone can forge. The collector now tracks at most 16 sources that are neither configured nor in `FT_EXPORTERS`
+  (`FT_MAX_NEW_EXPORTERS`; one idle for 15 minutes makes room, the log says when packets of further ones were
+  ignored), and forgets idle ones in the core too; the core keeps at most 512 fields per template, 1,024 templates and
+  50,000 fields per exporter, and 1,024 exporters. Before, packets from 300,000 forged addresses took 650 MB; now
+  nothing grows. Configured devices are never affected.
+- **Encrypted backups are trusted only encrypted.** While this server encrypts its copies, a restore from S3 / SFTP /
+  FTP refuses a copy that is not encrypted (anyone able to write there could have put it); `--unencrypted` for a copy
+  you made before turning encryption on. A damaged or hostile encrypted file can no longer ask for a huge scrypt cost
+  or a gigabyte chunk.
+- **Fonts served by FlowTrack itself.** Manrope and JetBrains Mono (SIL Open Font License 1.1, in `web/fonts/`) no
+  longer load from Google: the browser asks nobody else, also on networks without internet.
 - **The backup service no longer follows links.** It runs as root and writes its status into the folder of the
   `flowtrack` user; it now creates those files only anew and never through a link left there, and so do the start of
   the collector and the web service (`hw.board`). A restore of the settings removes links in the way, refuses a linked

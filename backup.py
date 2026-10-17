@@ -73,6 +73,11 @@ SKIP_RESTORE = (f'{_C}/env', f'{_C}/clickhouse', f'{_C}/install-lang', f'{_S}/hw
 LICENSE_FILES = (f'{_S}/license.',)
 
 
+# the members are checked here (paths, kinds, modes, links on the way); owners stay as stored (the flowtrack user's
+# files stay its own) — Python 3.14's default filter would make them root's
+TAR_AS_CHECKED = {'filter': 'fully_trusted'} if hasattr(tarfile, 'fully_trusted_filter') else {}
+
+
 class BackupError(Exception):
     pass
 
@@ -251,13 +256,18 @@ def decrypt_stream(src, dst, passphrase):
     if not head.startswith(MAGIC) or len(head) != len(MAGIC) + 24:
         raise BackupError(tr('Not an encrypted FlowTrack backup.'))
     salt, log_n, prefix = head[len(MAGIC):len(MAGIC) + 16], head[len(MAGIC) + 16], head[len(MAGIC) + 17:]
+    if not 10 <= log_n <= 20:                  # the file is not trusted: a huge scrypt cost would never finish
+        raise BackupError(tr('The backup file is damaged.'))
     aes = AESGCM(_key(passphrase, salt, log_n))
     i = 0
     while True:
         n = src.read(4)
         if len(n) != 4:
             raise BackupError(tr('The backup file is cut short.'))
-        ct = src.read(struct.unpack('>I', n)[0])
+        size = struct.unpack('>I', n)[0]
+        if size > CHUNK + 16:                  # a chunk and its tag: never read gigabytes into memory
+            raise BackupError(tr('The backup file is damaged.'))
+        ct = src.read(size)
         for last in (False, True):
             try:
                 pt = aes.decrypt(prefix + struct.pack('>I', i) + (b'\x01' if last else b'\x00'), ct, head)
@@ -1061,9 +1071,10 @@ def _ver(v):
     return tuple(int(x) for x in re.findall(r'\d+', v)[:3]) if v else (0,)
 
 
-def fetch(source, bid, cfg, passphrase=None, log=print):
+def fetch(source, bid, cfg, passphrase=None, log=print, unencrypted=False):
     """Bring a backup (and the full one it needs) from S3 / SFTP / FTP or a folder of .ftbk files into the folder
-    here. -> the manifest."""
+    here. -> the manifest. While this server encrypts its copies, a copy that is not encrypted is refused unless
+    `unencrypted` (whoever can write to the place could have put it there; it is restored as root)."""
     _ensure_dir()
     if os.path.isdir(source):
         names = os.listdir(source)
@@ -1092,6 +1103,10 @@ def fetch(source, bid, cfg, passphrase=None, log=print):
                 f = os.path.join(tmp, b + '.ftbk')
                 get(b + '.ftbk', f)
                 tarp = f
+                if not is_encrypted(f) and cfg['encrypt']['on'] and not unencrypted:
+                    raise BackupError(tr('{id} is not encrypted, while this server encrypts its copies: whoever can write to '
+                                         '{place} could have put it there. If you made it yourself before encryption was '
+                                         'turned on, add --unencrypted.', id=b, place=source))
                 if is_encrypted(f):
                     if passphrase is None:
                         passphrase = cfg['encrypt']['passphrase'] or getpass.getpass(tr('Passphrase of the backups: '))
@@ -1106,7 +1121,7 @@ def fetch(source, bid, cfg, passphrase=None, log=print):
                         if ti.name.startswith('/') or '..' in ti.name.split('/') or not (ti.isfile() or ti.isdir()):
                             raise BackupError(tr('The backup file holds an unsafe path: {p}', p=ti.name))
                         ti.mode &= 0o777
-                    t.extractall(dest)
+                    t.extractall(dest, **TAR_AS_CHECKED)
                 for root, dirs, files in os.walk(dest):
                     for n in dirs + files:
                         os.chown(os.path.join(root, n), CH_UID, CH_UID)
@@ -1242,7 +1257,7 @@ def _restore_settings(path, with_license, root='/'):
                 if i < len(parts) - 1:
                     raise BackupError(tr('The settings cannot be restored: {p} is a link.', p=cur))
                 os.unlink(cur)
-        t.extractall(root, members=members)
+        t.extractall(root, members=members, **TAR_AS_CHECKED)
 
 
 # ---------------------------------------------------------------- the service and the command line
@@ -1380,6 +1395,7 @@ def main(argv=None):
     r.add_argument('--only-data', action='store_true')
     r.add_argument('--with-license', action='store_true')
     r.add_argument('--passphrase-file')
+    r.add_argument('--unencrypted', action='store_true')
     r.add_argument('--yes', action='store_true')
     r.add_argument('--force', action='store_true')
     r.add_argument('--undo', action='store_true')
@@ -1464,7 +1480,7 @@ def main(argv=None):
                 return 1
             with lock():
                 if src:
-                    fetch(src, a.id, cfg, passphrase=pp)
+                    fetch(src, a.id, cfg, passphrase=pp, unencrypted=a.unencrypted)
                 restore(a.id, data=not a.only_settings, settings=not a.only_data, with_license=a.with_license, force=a.force)
                 write_index()
             return 0

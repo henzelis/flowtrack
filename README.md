@@ -176,4 +176,5 @@ Details: [docs/editions.md](docs/editions.md).
 [Elastic License 2.0](LICENSE): free to use, run and modify, including in companies; not allowed: offering FlowTrack as
 a hosted service or circumventing the license checks. The FlowTrack core (`ftcore`) ships compiled under the FlowTrack
 End User License Agreement. Versions up to 1.1.0 were published under MIT and stay so. IP geolocation by
-[DB-IP](https://db-ip.com), licensed under CC BY 4.0. Screenshots show demo data, no real network.
+[DB-IP](https://db-ip.com), licensed under CC BY 4.0. Fonts Manrope and JetBrains Mono ship with FlowTrack under the
+[SIL Open Font License 1.1](web/fonts/). Screenshots show demo data, no real network.

@@ -39,6 +39,11 @@ COUNTER_COLS = ('if_index', 'if_type', 'speed', 'direction', 'status', 'in_octet
                 'in_discards', 'in_errors', 'in_unknown', 'out_octets', 'out_ucast', 'out_mcast', 'out_bcast', 'out_discards', 'out_errors')
 FORWARD = [(h, int(p)) for h, p in (x.strip().rsplit(':', 1) for x in os.environ.get('FT_FORWARD', '').split(',') if x.strip())]
 ALLOW = {x.strip() for x in os.environ.get('FT_EXPORTERS', '').split(',') if x.strip()}
+# (1.9.4) sources that are neither configured nor in FT_EXPORTERS: this many are tracked at once (they show in
+# Settings → Devices to be set up); one idle this long makes room. Packets of others are ignored, so packets with
+# forged source addresses cannot fill the memory.
+MAX_NEW = int(os.environ.get('FT_MAX_NEW_EXPORTERS', '16'))
+NEW_IDLE = 900
 TEMPLATES_FILE = os.path.join(STATE_DIR, 'templates.json')
 # exporters found to send running totals of long sessions (ftcore, 1.4.1): {ip: first seen (unix s)}. The receiver
 # writes it when a worker finds one; the workers read it, and the receiver sends all of such an exporter's packets to
@@ -114,6 +119,7 @@ class Exporter:
     records, the interfaces seen on ingress) lives in the compiled core."""
     def __init__(self, ip, cfg):
         self.ip = ip
+        self.seen = time.monotonic()
         self.configure(cfg)
 
     def configure(self, cfg):
@@ -174,6 +180,8 @@ class Accounting:
                     x['lost'] += diff - 1
             elif last[1] is not None and 0 < diff < 1000000:   # v5 counts flows, IPFIX data records
                 x['lost'] += max(0, diff - last[1])
+        if dom not in x['seq'] and len(x['seq']) >= 256:     # observation domains / sFlow agents of one source
+            x['seq'].clear()
         x['seq'][dom] = (seq, nrec)
         return shared
 
@@ -216,6 +224,12 @@ def packet_body(data):
     return data
 
 
+def _learn(tpl, key, v):
+    if key not in tpl and len(tpl) >= 4096:          # a hostile source: start over rather than grow
+        tpl.clear()
+    tpl[key] = v
+
+
 def peek(data, tpl):
     """(version, sequence, domain, data records or None if unknown, carries templates/options data).
     tpl = {(domain, template id): (record length or None, is options template)}, learned here."""
@@ -249,7 +263,7 @@ def peek(data, tpl):
                 if tid < 256:                # padding
                     break
                 length, off = _tpl_fields(body, off + 4, n, ipfix)
-                tpl[(dom, tid)] = (length, False)
+                _learn(tpl, (dom, tid), (length, False))
         elif sid == o_id:
             shared, off = True, 0
             while off + 6 <= len(body):
@@ -258,7 +272,7 @@ def peek(data, tpl):
                     break
                 n = a if ipfix else (a + b) // 4          # IPFIX: field count; v9: scope + option bytes
                 length, off = _tpl_fields(body, off + 6, n, ipfix)
-                tpl[(dom, tid)] = (length, True)
+                _learn(tpl, (dom, tid), (length, True))
         elif sid >= 256:
             t = tpl.get((dom, sid))
             if t is None or not t[0]:
@@ -269,6 +283,39 @@ def peek(data, tpl):
                     nrec += (slen - 4) // t[0]
         pos += slen
     return ver, seq, dom, nrec, shared
+
+
+class NewSources:
+    """(1.9.4) The sources that are neither configured nor in FT_EXPORTERS, tracked at most MAX_NEW at once."""
+    def __init__(self, limit=None, idle=NEW_IDLE):
+        self.seen, self.limit, self.idle = {}, MAX_NEW if limit is None else limit, idle
+        self.ignored, self.ignored_from = 0, set()
+
+    def admit(self, ip, now=None):
+        """True: take this packet of an unconfigured source; False: ignore it (counted)."""
+        now = time.monotonic() if now is None else now
+        if ip not in self.seen and len(self.seen) >= self.limit:
+            self.expire(now)
+        if ip in self.seen or len(self.seen) < self.limit:
+            self.seen[ip] = now
+            return True
+        self.ignored += 1
+        if len(self.ignored_from) < 1000:
+            self.ignored_from.add(ip)
+        return False
+
+    def expire(self, now=None):
+        """Forget those idle for `idle` seconds -> their addresses."""
+        now = time.monotonic() if now is None else now
+        gone = [ip for ip, t in self.seen.items() if now - t >= self.idle]
+        for ip in gone:
+            del self.seen[ip]
+        return gone
+
+    def take_ignored(self):
+        n, k = self.ignored, len(self.ignored_from)
+        self.ignored, self.ignored_from = 0, set()
+        return n, k
 
 
 class Collector:
@@ -370,6 +417,7 @@ class Collector:
         if self.acct:
             self.acct.account(ip, data)
         e = self.exporter(ip)
+        e.seen = time.monotonic()
         for f in self.dec.packet(ip, data, time.time(), learn_only):
             self.store(e, f)
 
@@ -476,6 +524,15 @@ class Collector:
             e.configure(self.cfg.get(ip, {}))
         log(f'exporter config reloaded ({len(self.cfg)} configured)')
 
+    def forget_idle(self):
+        """(1.9.4) An unconfigured exporter idle for NEW_IDLE is forgotten here and in the core: the receiver tracks
+        only MAX_NEW of them, so the state of sources with forged addresses does not pile up."""
+        mono = time.monotonic()
+        for ip in [ip for ip, e in self.exporters.items() if ip not in self.cfg and mono - e.seen >= NEW_IDLE]:
+            del self.exporters[ip]
+            if hasattr(self.dec, 'forget'):
+                self.dec.forget(ip)
+
     def tick(self, now):
         if now - self.last_sflow >= 1:
             self.last_sflow = now
@@ -488,6 +545,7 @@ class Collector:
             if self.worker == 0:            # every worker sees every template; one of them saves them
                 self.save_templates()
             self.reload_config()
+            self.forget_idle()
             self.load_running()
             if reload_port_names():          # the user's names of ports: new records get them at once
                 log(f'port names: {len(PORT_NAMES)} of your own')
@@ -543,6 +601,7 @@ class Receiver:
     def __init__(self, workers):
         self.n = workers
         self.acct = Accounting()
+        self.new, self.new_logged = NewSources(), 0
         self.cfg = load_exporters()
         self.cfg_mtime = exporters_mtime()
         self.exp_acc, self.col_acc = {}, self.empty_col()
@@ -570,6 +629,19 @@ class Receiver:
                 self.col_acc['queue_drops'] += sum(1 for it in items if not it[2])
             self.pending[i] = []
         self.npending = 0
+
+    def forget_new(self, now):
+        """Unconfigured sources idle for NEW_IDLE make room; say when packets of further ones were ignored."""
+        for ip in self.new.expire():
+            if ip not in self.cfg:
+                self.acct.ex.pop(ip, None)
+        if now - self.new_logged >= 600:
+            n, k = self.new.take_ignored()
+            if n:
+                self.new_logged = now
+                log(f'WARN ignored {n} packets from {k}{"+" if k >= 1000 else ""} new sources: {MAX_NEW} unconfigured exporters '
+                    f'are tracked already ({", ".join(sorted(self.new.seen)[:5])}…). Add your devices in Settings → Devices '
+                    f'(or FT_EXPORTERS), or raise FT_MAX_NEW_EXPORTERS')
 
     def drain_results(self):
         while True:
@@ -838,7 +910,7 @@ class Receiver:
                         except OSError:
                             pass
                     ip = norm_addr(addr[0])
-                    if ALLOW and ip not in ALLOW and ip not in self.cfg:
+                    if ip not in self.cfg and ip not in ALLOW and (ALLOW or not self.new.admit(ip)):
                         continue
                     self.col_acc['packets'] += 1
                     shared = self.acct.account(ip, data)
@@ -867,6 +939,7 @@ class Receiver:
                         self.start_worker(i)
             if now - last_min >= 60:
                 last_min = now
+                self.forget_new(now)
                 self.write_stats()
                 self.reload_config()
                 self.apply_retention()

@@ -22,10 +22,13 @@
   `--only-settings`, `--only-data`; the license files only with `--with-license` (a license is bound to its server).
   On a new server: install FlowTrack, set the same place in *Settings → Backups*, then
   `sudo flowtrack restore --from s3` (or `sftp`, `ftp`, a folder with `.ftbk` files) and pick the backup.
+- **Encrypted copies are trusted only encrypted.** While the server encrypts its copies, a copy on S3 / SFTP / FTP that
+  is not encrypted is refused — whoever can write to that place could have put it there, and a restore runs as root.
+  A copy you made yourself before turning encryption on: add `--unencrypted`.
 
 ```bash
 sudo flowtrack backup [--full]                 # a backup now
 sudo flowtrack backup list [--from s3|sftp|ftp|DIR]
 sudo flowtrack backup verify [ID] [--deep]
-sudo flowtrack restore [ID] [--from …] [--only-settings|--only-data] [--with-license] [--passphrase-file F]
+sudo flowtrack restore [ID] [--from …] [--only-settings|--only-data] [--with-license] [--passphrase-file F] [--unencrypted]
 ```

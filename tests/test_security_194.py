@@ -5,7 +5,9 @@ Run: python -m unittest discover -s tests"""
 import io
 import json
 import os
+import shutil
 import stat
+import struct
 import sys
 import tarfile
 import tempfile
@@ -90,6 +92,53 @@ class NoLinks(unittest.TestCase):
         open(os.path.join(src, '20261017-030000.ftbk'), 'w').close()
         with mock.patch.object(backup, '_ensure_dir'), self.assertRaises(backup.BackupError):
             backup.fetch(src, '20261017-030000', backup.defaults(), log=lambda *a: None)
+
+
+class EncryptedOnly(unittest.TestCase):
+    def _place(self, encrypted):
+        src = tempfile.mkdtemp()
+        bid = '20261017-040000'
+        with open(os.path.join(src, bid + '.json'), 'w') as f:
+            json.dump({'id': bid}, f)
+        tp = os.path.join(src, 'x.tar')
+        with tarfile.open(tp, 'w') as t:
+            ti = tarfile.TarInfo('manifest.json')
+            body = json.dumps({'id': bid, 't': 0, 'version': '1.9.4', 'tables': {}}).encode()
+            ti.size = len(body)
+            t.addfile(ti, io.BytesIO(body))
+        with open(tp, 'rb') as fi, open(os.path.join(src, bid + '.ftbk'), 'wb') as fo:
+            if encrypted:
+                backup.encrypt_stream(fi, fo, 'the right passphrase')
+            else:
+                fo.write(fi.read())
+        return src, bid
+
+    def test_plain_copy_refused_while_encrypting(self):
+        cfg = backup.defaults()
+        cfg['encrypt'] = {'on': True, 'passphrase': 'the right passphrase'}
+        src, bid = self._place(False)
+        with mock.patch.object(backup, '_ensure_dir'), self.assertRaises(backup.BackupError) as e:
+            backup.fetch(src, bid, cfg, log=lambda *a: None)
+        self.assertIn('--unencrypted', str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(backup.DIR, bid)))
+        with mock.patch.object(backup, '_ensure_dir'), mock.patch.object(os, 'chown'):
+            self.assertEqual(backup.fetch(src, bid, cfg, log=lambda *a: None, unencrypted=True)['id'], bid)
+        src, bid2 = self._place(True)                                  # an encrypted one is fine
+        shutil.rmtree(os.path.join(backup.DIR, bid2))
+        with mock.patch.object(backup, '_ensure_dir'), mock.patch.object(os, 'chown'):
+            self.assertEqual(backup.fetch(src, bid2, cfg, log=lambda *a: None)['id'], bid2)
+
+    def test_hostile_header(self):
+        enc = io.BytesIO()
+        backup.encrypt_stream(io.BytesIO(b'x' * 100), enc, 'pp-pp-pp-pp')
+        raw = bytearray(enc.getvalue())
+        bad = raw[:]
+        bad[len(backup.MAGIC) + 16] = 40                             # scrypt cost 2^40
+        with self.assertRaises(backup.BackupError):
+            backup.decrypt_stream(io.BytesIO(bytes(bad)), io.BytesIO(), 'pp-pp-pp-pp')
+        bad = raw[:len(backup.MAGIC) + 24] + struct.pack('>I', 0xFFFFFFF0)    # a 4 GB chunk
+        with self.assertRaises(backup.BackupError):
+            backup.decrypt_stream(io.BytesIO(bytes(bad)), io.BytesIO(), 'pp-pp-pp-pp')
 
 
 class OwnPassword(unittest.TestCase):

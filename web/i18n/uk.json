@@ -1369,5 +1369,6 @@
  "{d} records nothing on its interface towards {p}, although the link works: NetFlow is probably off on that interface.": "{d} нічого не записує на інтерфейсі в бік {p}, хоча зв’язок працює: найімовірніше, на цьому інтерфейсі вимкнено NetFlow.",
  "{s} recorded nothing on {iface} — no packets either way — while {r} sent {bytes} towards it and got nothing back.": "{s} не записав нічого на {iface} — жодного пакета в жоден бік, — хоча {r} надіслав у його бік {bytes} і нічого не отримав назад.",
  "{s} records nothing on {iface}, but {r} received {bytes} from it: the link works.": "{s} нічого не записує на {iface}, але {r} отримав від нього {bytes}: зв’язок працює.",
- "The settings cannot be restored: {p} is a link.": "Налаштування не можна відновити: {p} — це посилання."
+ "The settings cannot be restored: {p} is a link.": "Налаштування не можна відновити: {p} — це посилання.",
+ "{id} is not encrypted, while this server encrypts its copies: whoever can write to {place} could have put it there. If you made it yourself before encryption was turned on, add --unencrypted.": "{id} не зашифрована, а цей сервер шифрує свої копії: її міг покласти будь-хто з правом запису до {place}. Якщо ви зробили її самі до ввімкнення шифрування, додайте --unencrypted."
 }

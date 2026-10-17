@@ -181,5 +181,6 @@ curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh 
 [Elastic License 2.0](LICENSE): можна вільно використовувати, запускати й змінювати, зокрема в компаніях; не можна —
 надавати FlowTrack як хостинговий сервіс чи обходити перевірку ліцензії. Ядро FlowTrack (`ftcore`) постачається
 скомпільованим за Ліцензійною угодою кінцевого користувача FlowTrack. Версії до 1.1.0 опубліковано за MIT, і вони
-такими лишаються. IP-геолокація — [DB-IP](https://db-ip.com), ліцензія CC BY 4.0. На скриншотах — демонстраційні дані,
+такими лишаються. IP-геолокація — [DB-IP](https://db-ip.com), ліцензія CC BY 4.0. Шрифти Manrope і JetBrains Mono
+постачаються з FlowTrack за [SIL Open Font License 1.1](web/fonts/). На скриншотах — демонстраційні дані,
 не реальна мережа.
