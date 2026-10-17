@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.9.3 — 2026-10-17
 
 - **Stars fills the screen.** Path analysis → Stars spreads the neighbours evenly round the Point of View (all but the
   top, where the internet is), sets a device two hops away near the one it is reached through, and lets the rings use
