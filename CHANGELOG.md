@@ -3,6 +3,17 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.9.5 — 2026-10-17
+
+- **Templates belong to their domain** (core 1.5.0). A NetFlow v9 template id is unique only within its source ID, an
+  IPFIX one within its observation domain: line cards of a router or virtual systems of a firewall may each define
+  template 256 with another layout. FlowTrack kept one template per id and device, so such devices could have their
+  records read with another card's layout. Now templates, the sampling rate sent in options records and the
+  duplicate detection by the direction field are kept per domain; when only one domain sends the sampler options (some
+  devices send them under another source ID than the flows), that rate applies to all. Templates saved by earlier
+  versions serve any domain until the device resends them (within minutes). Devices with one domain, like FortiGate
+  and MikroTik, count exactly as before.
+
 ## 1.9.4 — 2026-10-17
 
 Security review fixes.

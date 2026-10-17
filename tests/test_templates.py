@@ -46,12 +46,27 @@ class TemplatePersistence(unittest.TestCase):
         d = decoder()
         d.packet('x', v9(OPT_TPL, FLOW_TPL), NOW)
         saved = json.loads(d.templates_json())['x']
-        self.assertEqual(saved['v9']['256']['o'], [list(f) for f in OPT_FIELDS])     # in the exporter's order
+        self.assertEqual(sorted(saved['v9']), ['0:256', '0:300'])               # (1.9.5) source ID : template id
+        self.assertEqual(saved['v9']['0:256']['o'], [list(f) for f in OPT_FIELDS])   # in the exporter's order
         r = decoder()
         self.assertEqual(r.load_templates('x', json.dumps(saved)), 2)
         r.packet('x', v9(OPT_DATA, seq=2), NOW)                         # the options record still reads as rate 1
         f = r.packet('x', v9(FLOW, seq=3), NOW)
         self.assertEqual([(x[0], x[1], x[2], x[17]) for x in f], [('10.0.0.5', '198.51.100.7', 1000, 0)])
+
+    def test_saved_before_domains_serve_any_domain(self):
+        # templates.json of FlowTrack <= 1.9.4 has no source ID: such a template serves until the domain resends it
+        d = decoder()
+        d.packet('x', v9(FLOW_TPL), NOW)
+        saved = json.loads(d.templates_json())['x']
+        legacy = {'v9': {k.split(':')[1]: v for k, v in saved['v9'].items()}, 'ipfix': {}}
+        r = decoder()
+        self.assertEqual(r.load_templates('x', json.dumps(legacy)), 1)
+        f = r.packet('x', struct.pack('!HHIIII', 9, 1, UP, NOW, 2, 5) + FLOW, NOW)              # source ID 5
+        self.assertEqual([(x[0], x[2]) for x in f], [('10.0.0.5', 1000)])
+        self.assertEqual(sorted(json.loads(r.templates_json())['x']['v9']), ['300'])         # kept as it was
+        r.packet('x', struct.pack('!HHIIII', 9, 1, UP, NOW, 3, 5) + FLOW_TPL, NOW)
+        self.assertEqual(sorted(json.loads(r.templates_json())['x']['v9']), ['5:300'])
 
     def test_unordered_legacy_options_entry_is_skipped(self):
         legacy = {'v9': {'256': {'s': {'1': 2}, 'o': {str(t): ln for t, ln in OPT_FIELDS}}}}

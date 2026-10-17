@@ -22,8 +22,9 @@
 
 **Collection**
 - NetFlow v5, NetFlow v9, IPFIX and sFlow v5 from exporters on IPv4 or IPv6 (the collector and the web
-  interface listen on both). Templates are tracked per exporter and saved, so a collector restart does
-  not drop the first minutes of data while waiting for the exporter to resend them.
+  interface listen on both). Templates are tracked per exporter and per observation domain / source ID
+  (line cards and virtual systems of one device may reuse template ids), and saved, so a collector restart
+  does not drop the first minutes of data while waiting for the exporter to resend them.
 - The protocol of every packet is recognised by itself. *Settings → Devices → Connect a device* gives ready
   configuration for Fortinet, Cisco, MikroTik, Juniper, Palo Alto, Check Point, SonicWall, Huawei, Arista,
   VyOS / EdgeOS, pfSense / OPNsense, HPE Aruba, Linux (pmacct, softflowd, hsflowd) and any other exporter, per export protocol the
