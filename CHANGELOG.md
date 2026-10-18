@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.12.0 — 2026-10-18
 
 - **Sign-in through Active Directory / LDAP** (*Settings → Users → Sign-in through the directory*). The sign-in page
   then asks how to sign in — «Local account» or your directory (e.g. «CORP») — and remembers the choice; a local
