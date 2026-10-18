@@ -26,6 +26,7 @@ import directory  # noqa: E402
 import reports  # noqa: E402
 import notify  # noqa: E402
 import reputation  # noqa: E402
+import capacity  # noqa: E402
 import common  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
@@ -1271,10 +1272,7 @@ def api_ifload(q):
     chunk = max(1, -(-n // 300))           # the chart: at most 300 points (a day stays at 5 minutes), each the busiest 5 minutes in it
     out = []
     for idx in sorted(set(acc) | {int(k) for k in (c.get('if_caps') or {})}):
-        info = iface(c, idx, 0, 0, (), sn)
-        sp = int((cnt.get(idx) or {}).get('speed') or 0) // 1_000_000
-        if sp and not info['cap_auto']:
-            info.update(cap_auto=sp, **({} if info['cap_own'] else {'cap_in': sp, 'cap_out': sp}))
+        info = if_info(c, idx, sn, cnt)
         series = acc.get(idx, [[0] * n, [0] * n])
         d = {}
         for name, b, cap in (('in', series[0], info['cap_in']), ('out', series[1], info['cap_out'])):
@@ -1290,6 +1288,154 @@ def api_ifload(q):
     out.sort(key=lambda i: (-max(i['in']['peak_pct'] or -1, i['out']['peak_pct'] or -1), -(i['in']['bytes'] + i['out']['bytes'])))
     return {'device': dev, 'from': t0, 'to': p['t1'], 'step': 300, 'chart_step': 300 * chunk, 'interfaces': out}
 
+
+
+def if_info(c, idx, sn, cnt):
+    """An interface's name, role and capacity, with the sFlow counters' ifSpeed when SNMP knows no speed."""
+    info = iface(c, idx, 0, 0, (), sn)
+    sp = int((cnt.get(idx) or {}).get('speed') or 0) // 1_000_000
+    if sp and not info['cap_auto']:
+        info.update(cap_auto=sp, **({} if info['cap_own'] else {'cap_in': sp, 'cap_out': sp}))
+    return info
+
+
+CAP_DAYS = (7, 30, 90, 180, 365)
+P95_SKIP = 300 * 5 // 100           # 288 five-minute buckets a day: the 95th percentile is the 15th busiest (14 above it)
+
+
+TZ_OLD = {'Europe/Kyiv': 'Europe/Kiev', 'Europe/Kiev': 'Europe/Kyiv'}     # renamed in tzdata 2022b: one side may lack either
+
+
+def _tz(q):
+    """The browser's time zone for whole local days; its old / new name when the server's tzdata has only that, else
+    the server's own zone (days a few hours off are better than no page)."""
+    tz = q1(q, 'tz', '')
+    for name in (tz, TZ_OLD.get(tz)):
+        if not name:
+            continue
+        try:
+            reports.ZoneInfo(name)
+            return name
+        except (reports.ZoneInfoNotFoundError, ValueError):
+            pass
+    return reports.system_tz()
+
+
+def _five_min(p):
+    """5-minute totals per device, interface and direction (0 = into it, as the input interface; 1 = out of it)."""
+    return f"""SELECT exporter, x.1 AS i, x.2 AS d, t, sum(b) AS v FROM (
+            SELECT exporter, in_if, out_if, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t, sum(bytes) AS b
+            FROM {src(p, ['in_if', 'out_if'], bucketed=True)} GROUP BY exporter, in_if, out_if, t)
+        ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE x.1 != 0 GROUP BY exporter, i, d, t"""
+
+
+def _cap_scope(q, extra_f=()):
+    """(days, tz, where, p): whole local days back from today (today so far included), all traffic, no filters."""
+    days = q1(q, 'days', '30', int)
+    days = max(d for d in CAP_DAYS if d <= max(days, CAP_DAYS[0]))
+    days = min(days, view_days())
+    tz = _tz(q)
+    now = int(time.time())
+    today = int(ch("SELECT toUnixTimestamp(toStartOfDay(now(), {tz:String})) AS d", {'tz': tz}, fmt='JSON')[0]['d'])
+    t0 = today - (days - 1) * 86400
+    qq = {'from': [str(t0)], 'to': [str(now)], 't': ['all'], 'f': [json.dumps(list(extra_f))]}
+    where, p, _, _ = scope(qq)
+    p.update(_step=300, tz=tz, k=P95_SKIP)
+    return days, tz, today, p
+
+
+def api_capacity(q):
+    """(1.13.0) Capacity planning: every interface of every device, day by day over whole local days — the busiest 5
+    minutes, the 95th percentile of the 5-minute load (empty ones count as 0) and the bytes, into and out of it — with
+    the trend, the forecast (capacity.py) and one status, the fullest first."""
+    days, tz, today, p = _cap_scope(q)
+    rows = ch(f"""SELECT exporter, i, d, toUnixTimestamp(toStartOfDay(t, {{tz:String}})) AS day, sum(v) AS bytes, max(v) AS peak, count() AS m,
+            if(count() > {{k:UInt32}}, arrayElement(arraySort(groupArray(v)), toUInt32(count() - {{k:UInt32}})), 0) AS p95
+        FROM ({_five_min(p)}) GROUP BY exporter, i, d, day""", p, fmt='JSON', timeout=120)
+    # the period's own 95th percentile: over its 5-minute buckets from the interface's first record on (a device added
+    # last week is not diluted by the weeks before it), the empty ones as 0; `span` = those seconds, for the average
+    per = {(r['exporter'], int(r['i']), int(r['d'])): (int(r['p95']), int(r['span'])) for r in ch(f"""SELECT exporter, i, d,
+            intDiv({{t1:UInt32}} - toUnixTimestamp(min(t)) + 299, 300) AS n, n * 300 AS span,
+            if(count() > intDiv(n * 5, 100), arrayElement(arraySort(groupArray(v)), toUInt32(count() - intDiv(n * 5, 100))), 0) AS p95
+        FROM ({_five_min(p)}) GROUP BY exporter, i, d""", p, fmt='JSON', timeout=120)}
+    by = {}
+    for r in rows:
+        by.setdefault((r['exporter'], int(r['i'])), []).append(r)
+    cfg = exporters_cfg(raw=True)
+    sset, sdata = snmp.load_settings(), snmp.load_data()
+    cnts = sflow_counters()
+    out = []
+    for (dev, idx), rs in by.items():
+        total = sum(int(r['bytes']) for r in rs)
+        c = cfg.get(dev, {})
+        own = str(idx) in (c.get('if_caps') or {})
+        if total < 1_000_000 and not own:
+            continue
+        info = if_info(c, idx, sdata.get(dev) if sset.get(dev, {}).get('enabled') else None, cnts.get(dev, {}))
+        series = {}
+        for r in rs:
+            e = series.setdefault(int(r['day']), [int(r['day']), 0, 0, 0, 0, 0, 0])
+            d = int(r['d'])
+            e[1 + d], e[3 + d] = int(r['p95']) * 8 / 300, int(r['peak']) * 8 / 300
+            e[5] = max(e[5], int(r['m']))
+            e[6] += int(r['bytes'])
+        days_l = [series[k] for k in sorted(series)]
+        first = days_l[0][0] if days_l else today
+        dirs = {}
+        for name, d, cap in (('in', 0, info['cap_in']), ('out', 1, info['cap_out'])):
+            pts = [(round((e[0] - first) / 86400), e[1 + d]) for e in days_l if e[0] < today and e[5] >= 144]
+            tr_ = capacity.trend(pts)
+            fc = capacity.forecast(tr_, cap * 1e6)
+            peak = max((e[3 + d] for e in days_l), default=0)
+            p95, span = per.get((dev, idx, d), (0, 0))
+            p95 = p95 * 8 / 300
+            byts = sum(int(r['bytes']) for r in rs if int(r['d']) == d)
+            pct = (lambda v: round(100 * v / (cap * 1e6), 1) if cap else None)
+            dirs[name] = {'peak': peak, 'p95': p95, 'avg': byts * 8 / max(300, span), 'bytes': byts, 'since': p['t1'] - span if span else None,
+                          'peak_pct': pct(peak), 'p95_pct': pct(p95), 'trend': tr_ and {**{k: tr_[k] for k in ('slope', 'level', 'busy', 'days')}, 'last_day': first + tr_['last'] * 86400},
+                          'forecast': fc, 'status': capacity.status(pct(peak), pct(p95), fc)}
+        worst = min(('in', 'out'), key=lambda k: (capacity.RANK[dirs[k]['status']], -(dirs[k]['p95_pct'] or 0), -dirs[k]['p95']))
+        out.append({'device': dev, 'device_name': c.get('name') or dev, 'index': idx, 'name': info['name'], 'role': info['role'],
+                    'cap_in': info['cap_in'], 'cap_out': info['cap_out'], 'cap_own': info['cap_own'], 'cap_auto': info['cap_auto'],
+                    'in': dirs['in'], 'out': dirs['out'], 'worst': worst, 'status': dirs[worst]['status'],
+                    'days': [e[:5] for e in days_l]})
+    out.sort(key=lambda x: (capacity.RANK[x['status']], -(x[x['worst']]['p95_pct'] or -1), -(x['in']['bytes'] + x['out']['bytes'])))
+    counts = {k: sum(1 for x in out if x['status'] == k) for k in capacity.RANK}
+    return {'days': days, 'max_days': view_days(), 'choices': [d for d in CAP_DAYS if d <= max(view_days(), CAP_DAYS[0])], 'tz': tz,
+            'from': p['_t0'], 'to': p['t1'], 'today': today, 'forecast_days': capacity.FORECAST_DAYS,
+            'watch_pct': capacity.WATCH_PCT, 'full_pct': capacity.FULL_PCT, 'counts': counts, 'interfaces': out}
+
+
+def api_capacity_iface(q):
+    """(1.13.0) One interface in depth: the load by weekday and hour (the busiest 5 minutes of each hour, averaged over
+    the weeks) and what drives it — the inside hosts and the services on it, the recent half of the period against the
+    earlier one."""
+    try:
+        dev = str(ipaddress.ip_address(q1(q, 'device', '').strip()))
+    except ValueError:
+        raise BadRequest(tr('Invalid device IP address'))
+    idx = q1(q, 'if', '0', int)
+    days, tz, today, p = _cap_scope(q, [{'k': 'device', 'v': dev}, {'k': 'iface', 'v': str(idx)}])
+    p['idx'] = idx
+    heat = ch(f"""SELECT d, w, h, avg(mx) AS v FROM (
+            SELECT d, toDayOfWeek(t, 0, {{tz:String}}) AS w, toHour(t, {{tz:String}}) AS h, toStartOfHour(t) AS hr, max(v) AS mx
+            FROM ({_five_min(p)}) WHERE i = {{idx:UInt32}} GROUP BY d, w, h, hr)
+        GROUP BY d, w, h""", p, fmt='JSON', timeout=120)
+    grid = {'in': [[0] * 24 for _ in range(7)], 'out': [[0] * 24 for _ in range(7)]}
+    for r in heat:
+        grid['in' if int(r['d']) == 0 else 'out'][int(r['w']) - 1][int(r['h'])] = float(r['v']) * 8 / 300
+    # the recent half of the interface's history in the period against the earlier one (whole hours: the per-host
+    # table sums hours)
+    first = int(ch(f"SELECT toUnixTimestamp(min(t)) AS f FROM ({_five_min(p)}) WHERE i = {{idx:UInt32}}", p, fmt='JSON', timeout=120)[0]['f'] or p['_t0'])
+    first = max(first, p['_t0'])
+    p['mid'] = (first + (p['t1'] - first) // 2) // 3600 * 3600
+    drivers = {}
+    for key, col in (('hosts', 'int_ip'), ('services', 'service')):
+        rows = ch(f"""SELECT {col} AS k, sumIf(bytes, ts >= toDateTime({{mid:UInt32}})) AS b2, sumIf(bytes, ts < toDateTime({{mid:UInt32}})) AS b1
+            FROM {src(p, ['in_if', 'out_if', col])} AND {col} != '' GROUP BY k ORDER BY b1 + b2 DESC LIMIT 10""", p, fmt='JSON', timeout=120)
+        drivers[key] = [{'k': r['k'], 'name': NAMES.get(r['k']) if col == 'int_ip' else None, 'recent': int(r['b2']), 'earlier': int(r['b1'])} for r in rows]
+    return {'device': dev, 'index': idx, 'days': days, 'tz': tz, 'mid': p['mid'], 'from': first, 'to': p['t1'],
+            'heat': grid, **drivers}
 
 def api_host(q):
     ip = q1(q, 'ip', '')
@@ -1981,7 +2127,8 @@ class Cache:
 CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/networks': api_networks, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
-          '/api/alerts': api_alerts, '/api/ifload': api_ifload}
+          '/api/alerts': api_alerts, '/api/ifload': api_ifload,
+          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
 

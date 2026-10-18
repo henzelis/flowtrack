@@ -44,6 +44,14 @@ def fake_call(log=None):
                                 'when': '2026-10-12 10:00:00', 'last': '2026-10-12 10:00:00', 'stored': True}] * 20}
         if path == '/api/devices':
             return {'devices': [{'ip': '192.0.2.1', 'name': 'fw', 'proto': 'IPFIX', 'rps': 12.5, 'loss_pct': 0, 'last': t1}]}
+        if path == '/api/capacity':          # (1.13.0) a WAN that fills in 40 days, a quiet LAN port, one without a capacity
+            fc = lambda full: {'growth_pct_month': 12.5, 'direction': 'up', 'clear': True, 'horizon': 60, 'full_in': full, 'over_in': None, 'busy_pct': 60}  # noqa: E731
+            d = lambda pct, full: {'p95': pct * 1e6, 'peak': 2 * pct * 1e6, 'avg': pct * 5e5, 'bytes': 1, 'p95_pct': pct, 'peak_pct': 2 * pct,      # noqa: E731
+                                    'trend': {'slope': 1, 'level': 1, 'busy': 1, 'days': 30, 'last_day': ts(2026, 10, 18)}, 'forecast': fc(full), 'status': 'ok'}
+            return {'days': int(q['days'][0]), 'full_pct': 85, 'watch_pct': 70, 'interfaces': [
+                {'device_name': 'fw', 'name': 'wan1', 'cap_in': 100, 'cap_out': 100, 'worst': 'in', 'status': 'soon', 'in': d(60, 40), 'out': d(20, None)},
+                {'device_name': 'fw', 'name': 'lan', 'cap_in': 1000, 'cap_out': 1000, 'worst': 'out', 'status': 'ok', 'in': d(2, None), 'out': d(3, None)},
+                {'device_name': 'fw', 'name': 'dmz', 'cap_in': 0, 'cap_out': 0, 'worst': 'in', 'status': 'unknown', 'in': d(0, None), 'out': d(0, None)}]}
         raise AssertionError(path)
     return call
 
@@ -316,6 +324,7 @@ class Pdf(unittest.TestCase):
             pdf, data = reports.make(r, t0, t1, fake_call(), '1.10.0')
             self.assertTrue(pdf.startswith(b'%PDF') and len(pdf) > 10000, lang)
             self.assertEqual(len(data['events']), 20)
+            self.assertEqual(data['capacity']['days'], 30)           # a week's report: the trend over 30 days
             self.assertIn(b'Manrope-ExtraBold', pdf)
 
     def test_an_empty_period(self):
@@ -323,7 +332,8 @@ class Pdf(unittest.TestCase):
             if path == '/api/summary':
                 return {'bytes': 0, 'up': 0, 'down': 0, 'flows': 0, 'hosts': 0, 'ips': 0, 'p_bytes': 0, 'p_flows': 0, 'p_hosts': 0,
                         'p_ips': 0, 'has_prev': False, 'oldest': 0}
-            return {'series': {'step': 300, 'rows': []}, 'alerts': [], 'devices': [], 'rows': [], 'total': 0, 'step': 300}
+            return {'series': {'step': 300, 'rows': []}, 'alerts': [], 'devices': [], 'rows': [], 'total': 0, 'step': 300, 'interfaces': [], 'days': 30,
+                    'full_pct': 85, 'watch_pct': 70}
         r = reports.validate({'name': 'Empty', 'every': 'day', 'sections': list(reports.SECTIONS)})
         pdf, _ = reports.make(r, ts(2026, 10, 17), ts(2026, 10, 18), empty)
         self.assertTrue(pdf.startswith(b'%PDF'))
@@ -352,3 +362,19 @@ class Pdf(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NewSections(unittest.TestCase):
+    """(1.13.0) A report made before Link capacity existed gets it once; switched off later, it stays off."""
+    def test_once(self):
+        import tempfile, json as js
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(reports, 'CONFIG', os.path.join(d, 'r.json')):
+            old = ['summary', 'hosts', 'events', 'devices']
+            with open(reports.CONFIG, 'w') as f:
+                js.dump({'reports': [{'id': 'a1', 'name': 'Old', 'sections': old}]}, f)
+            r = reports.load()[0]
+            self.assertEqual(r['sections'], ['summary', 'hosts', 'capacity', 'events', 'devices'])
+            r['sections'] = old                                  # the user switches it off again and saves
+            with open(reports.CONFIG, 'w') as f:
+                js.dump({'reports': [reports.validate(r)]}, f)
+            self.assertNotIn('capacity', reports.load()[0]['sections'])

@@ -499,9 +499,12 @@ function globe(el, geo){
 }
 
 // ===================== shared UI =====================
+// (1.13.0) a gauge
+const CAP_ICON = 'M2.5 13.5a6.5 6.5 0 1 1 13 0M9 13.5l3.2-4.2M4.6 9.6l.9.6M13.4 9.6l-.9.6M9 7v1';
 const NAV = [
   ['overview',T('Overview'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 10 6 10M6 14c3 0 3-10 6-10M6 9h6'], ['network',T('Path analysis'),'M6.9 4a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M1.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M11.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M7.57 6.86L5.43 11.14M10.43 6.86L12.57 11.14M7.2 14L10.8 14'], ['talkers',T('Top hosts'),'M4 6a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M2 15.5c0-2.8 2-4.5 4.5-4.5s4.5 1.7 4.5 4.5M11 7a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M12.6 11.2c.4-.1.9-.2 1.4-.2 1.9 0 3 1.5 3 4'],
   ['apps',T('Services'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation'),'M9 16.2s5.2-4.6 5.2-8.7A5.2 5.2 0 0 0 3.8 7.5c0 4.1 5.2 8.7 5.2 8.7zM7.2 7.4a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0'],
+  ['capacity',T('page::Capacity'),CAP_ICON],
   ['threats',T('Events'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'],
   ['settings',T('Settings'),'M14.29 7.93L16.15 8.14L16.15 9.86L14.29 10.07L13.5 11.98L14.66 13.45L13.45 14.66L11.98 13.5L10.07 14.29L9.86 16.15L8.14 16.15L7.93 14.29L6.02 13.5L4.55 14.66L3.34 13.45L4.5 11.98L3.71 10.07L1.85 9.86L1.85 8.14L3.71 7.93L4.5 6.02L3.34 4.55L4.55 3.34L6.02 4.5L7.93 3.71L8.14 1.85L9.86 1.85L10.07 3.71L11.98 4.5L13.45 3.34L14.66 4.55L13.5 6.02zM6.7 9a2.3 2.3 0 1 0 4.6 0a2.3 2.3 0 1 0 -4.6 0'],
 ];
@@ -1102,6 +1105,169 @@ async function ifLoadPanel(ip, seq){
     ${isAdmin() ? ` <button class="lnk" id="ldCaps">${T('Set capacities')} →</button>` : ''}</p>`);
   const b = document.getElementById('ldCaps');
   if (b) b.onclick = () => { state.view = 'settings'; state.setTab = 'devices'; state.ifDev = ip; render(); };
+}
+// ===================== (1.13.0) Capacity: how full each link is day by day and where it is heading =====================
+// /api/capacity (every interface of every device over whole local days, the fullest first) and /api/capacity/iface
+// (one link: weekday × hour, what drives it). Its own period (7 – 365 days, as far as the edition shows); every traffic
+// type, whatever the selector and the filters at the top.
+const CAP_IN = '#27D3F5', CAP_OUT = '#FF9F43';
+const CAP_STATUS = () => ({over:[T('Over the limit'), 'crit'], full:[T('Near full'), 'crit'], soon:[T('Will fill'), 'warn'], watch:[T('Worth watching'), 'warn'], ok:[T('Fine'), 'ok'], unknown:[T('Capacity unknown'), '']});
+const capTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } };
+const capApi = (path, params = {}) => apiFetch(`api/${path}?${new URLSearchParams({days:state.capDays || 30, tz:capTz(), ...params})}`);
+const dMon = t => new Date(t * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'});
+const capDir = d => d === 'in' ? T('incoming traffic') : T('outgoing traffic');
+const capOf = (x, d) => (d === 'in' ? x.cap_in : x.cap_out) * 1e6;
+// "85 % around 12 Nov" / "not within 58 days" / "now"
+function capWhen(fc, key, lastDay){
+  if (!fc) return '';
+  if (fc[key] === 0) return T('already');
+  if (fc[key] == null) return fc.direction === 'up' && fc.busy_pct != null ? T('not within {n} days', {n:fc.horizon}) : '—';
+  return dMon(lastDay + fc[key] * 86400 + 43200);          // midday: a DST change between does not move the date
+}
+// one sentence about a link, for the detail and the reports' spirit
+function capSentence(x){
+  const d = x.worst, s = x[d], fc = s.forecast, cap = capOf(x, d), who = `${esc(x.device_name)} · ${esc(x.name)}`;
+  if (!cap) return T('{who}: the capacity is unknown — set it (e.g. your ISP contract) in Settings → Devices → Interfaces to see shares and a forecast.', {who});
+  const base = T('{who}, {dir}: the busy hours reach {p95} of {cap} (95th percentile, {pct}%), the busiest 5 minutes {peak}.',
+    {who, dir:capDir(d), p95:fmtR(s.p95), cap:fmtR(cap), pct:s.p95_pct, peak:fmtR(s.peak)});
+  if (!fc) return base + ' ' + T('A forecast needs {n} days of history.', {n:CAP.forecast_days});
+  if (fc.over_in === 0) return base + ' ' + T('Busy days already fill it — time for more capacity.');
+  const g = Math.abs(fc.growth_pct_month).toLocaleString(LOC, {maximumFractionDigits:1});
+  if (fc.direction === 'stable') return base + ' ' + T('The load is stable.');
+  if (fc.direction === 'down') return base + ' ' + T('The load is falling, about {g}% a month.', {g});
+  const last = s.trend.last_day;
+  return base + ' ' + (fc.full_in === 0 ? T('Growing about {g}% a month; already above {full}% on busy days, the limit around {over}.', {g, full:CAP.full_pct, over:capWhen(fc, 'over_in', last)})
+    : fc.full_in != null ? T('Growing about {g}% a month: {full}% around {date}, the limit {over}.', {g, full:CAP.full_pct, date:capWhen(fc, 'full_in', last), over:fc.over_in != null ? T('around {date}', {date:capWhen(fc, 'over_in', last)}) : T('not within {n} days', {n:fc.horizon})})
+    : T('Growing about {g}% a month; {full}% not within {n} days.', {g, full:CAP.full_pct, n:fc.horizon}));
+}
+let CAP = null;
+function vCapacity(){
+  const v = document.getElementById('view');
+  const days = state.capDays || 30;
+  v.innerHTML = `<div class="grid"><div id="capKpi" style="display:contents"></div>
+    <section class="glass panel s12">${ph(CAP_ICON, T('page::Capacity'), T('how full each link is on its busy days and where it is heading · all traffic, whatever the selector and filters at the top · whole days'), '<span id="capDaysBox"></span>', true)}<div id="capTable" class="loading"></div></section>
+    <section class="glass panel s8" id="capDetailS">${ph('chart', `<span id="capDetT">${T('Trend and forecast')}</span>`, `<span id="capDetSub">${T('daily 95th percentile, the trend of the busy days and where it meets the capacity')}</span>`, '<span id="capDirBox"></span>')}<div id="capChart" class="loading"></div><p class="capsay" id="capSay"></p></section>
+    <section class="glass panel s4">${ph('pulse', T('When it is busy'), T('busiest 5 minutes of each hour, averaged over the weeks'))}<div id="capHeat" class="loading"></div></section>
+    <section class="glass panel s6">${ph('users', T('Hosts on this link'), `<span id="capHalfH">${T('recent half of the period against the earlier one')}</span>`)}<div id="capHosts" class="loading"></div></section>
+    <section class="glass panel s6">${ph('grid', T('Services on this link'), `<span id="capHalfS">${T('recent half of the period against the earlier one')}</span>`)}<div id="capSvcs" class="loading"></div></section></div>`;
+  const seq = renderSeq;
+  const done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
+  (async () => {
+    let d;
+    try { d = await capApi('capacity'); } catch (e) { done('capTable', errBox(e)); return; }
+    if (seq !== renderSeq) return;
+    CAP = d;
+    fill('capDaysBox', seg('capDays', [7, 30, 90, 180, 365].map(n => [String(n), T('{n} d', {n}), n > d.max_days ? T('Your edition shows {n} days', {n:d.max_days}) : '']), String(d.days)));
+    document.querySelectorAll('#capDays button').forEach(b => { if (+b.dataset.v > d.max_days) b.disabled = true; });
+    wireSeg('capDays', n => { if (+n === d.days || +n > d.max_days) return; state.capDays = +n; render(); });
+    const all = d.interfaces, st = CAP_STATUS();
+    if (!all.length) { done('capTable', `<div class="empty">${T('No interface traffic in this period')}</div>`); ['capChart', 'capHeat', 'capHosts', 'capSvcs'].forEach(id => done(id, '')); return; }
+    // the cards
+    const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span><span class="nat" style="grid-column:2">${sub}</span></section>`;
+    const near = all.filter(x => x.status === 'over' || x.status === 'full'), soon = all.filter(x => x.status === 'soon');
+    const dated = all.map(x => ({x, fc:x[x.worst].forecast, last:(x[x.worst].trend || {}).last_day})).filter(o => o.fc && o.fc.full_in != null && o.fc.full_in > 0).sort((a, b) => a.fc.full_in - b.fc.full_in);
+    const grow = all.filter(x => capOf(x, x.worst) && x[x.worst].forecast && x[x.worst].forecast.direction === 'up').sort((a, b) => b[b.worst].forecast.growth_pct_month - a[a.worst].forecast.growth_pct_month);
+    const known = all.filter(x => x.status !== 'unknown');
+    const nm = x => `${esc(x.name)} <span class="nat">${esc(x.device_name)}</span>`;
+    fill('capKpi', kc('shield', T('Near full'), String(near.length), near.length ? near.slice(0, 2).map(nm).join(', ') : T('no link at {pct}% on busy days', {pct:d.full_pct}), near.length ? 'var(--crit)' : 'var(--ok)')
+      + kc('chart', T('Will fill'), dated.length ? capWhen(dated[0].fc, 'full_in', dated[0].last) : '—', dated.length ? T('{name} reaches {pct}% first', {name:nm(dated[0].x), pct:d.full_pct}) + (soon.length > 1 ? ` · ${Tn(soon.length - 1, '{n} more link', '{n} more links')}` : '') : T('no link reaches {pct}% within the forecast', {pct:d.full_pct}), dated.length ? 'var(--warn)' : '')
+      + kc('pulse', T('Fastest growth'), grow.length ? `+${grow[0][grow[0].worst].forecast.growth_pct_month.toLocaleString(LOC, {maximumFractionDigits:1})}%` : '—', grow.length ? `${nm(grow[0])} · ${T('a month')}` : T('a forecast needs {n} days of history', {n:d.forecast_days}))
+      + kc('ip', T('Links measured'), `${known.length} / ${all.length}`, known.length < all.length ? T('{n} without a known capacity', {n:all.length - known.length}) : T('every link has a capacity')));
+    // the table
+    const bar = (pct, c) => `<div class="ldbar"><i style="width:${Math.min(100, pct || 0)}%;background:${loadColor(pct)}"></i></div>`;
+    const dirCell = (x, k) => { const s = x[k]; return `<td class="ld"><div class="ldtop"><b class="mono" style="color:${loadColor(s.p95_pct)}">${s.p95_pct == null ? '—' : s.p95_pct + '%'}</b><span class="nat mono">${fmtR(s.p95)}</span></div>${bar(s.p95_pct)}<div class="nat mono ldsub">${T('peak')} ${fmtR(s.peak)}${s.peak_pct == null ? '' : ` (${s.peak_pct}%)`}</div></td>`; };
+    const trendCell = x => { const fc = x[x.worst].forecast; if (!fc) return `<td><span class="nat" title="${T('A forecast needs {n} days of history.', {n:d.forecast_days})}">${T('collecting')}</span></td>`;
+      const a = fc.direction === 'up' ? '↗' : fc.direction === 'down' ? '↘' : '→', col = fc.direction === 'up' ? (capOf(x, x.worst) ? 'var(--warn)' : 'var(--ink2)') : fc.direction === 'down' ? 'var(--ok)' : 'var(--ink2)';
+      return `<td><b class="mono" style="color:${col}">${a} ${fc.growth_pct_month > 0 ? '+' : ''}${fc.growth_pct_month.toLocaleString(LOC, {maximumFractionDigits:1})}%</b><div class="nat">${T('a month')}${fc.clear ? '' : ' · ' + T('unsteady')}</div></td>`; };
+    const whenCell = x => { const s = x[x.worst], fc = s.forecast; if (!capOf(x, x.worst)) return '<td><span class="nat">—</span></td>';
+      if (!fc) return `<td><span class="nat">—</span></td>`;
+      const w = capWhen(fc, 'full_in', s.trend.last_day), hot = fc.full_in != null;
+      return `<td><b class="mono" style="color:${fc.full_in === 0 ? 'var(--crit)' : hot ? 'var(--warn)' : 'var(--ink2)'}">${w}</b>${fc.over_in != null && fc.over_in > 0 ? `<div class="nat">${T('limit {date}', {date:capWhen(fc, 'over_in', s.trend.last_day)})}</div>` : ''}</td>`; };
+    const spark = x => { const w = 200, h = 34, rows = x.days, top = Math.max(capOf(x, 'in'), capOf(x, 'out'), ...rows.map(r => Math.max(r[1], r[2])), 1);
+      const line = (k, color) => `<polyline points="${rows.map((r, n) => `${(n / Math.max(1, rows.length - 1) * w).toFixed(1)},${(h - 2 - r[k] / top * (h - 4)).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="1.4" vector-effect="non-scaling-stroke"/>`;
+      const cy = capOf(x, x.worst) ? (h - 2 - capOf(x, x.worst) / top * (h - 4)).toFixed(1) : null;
+      return `<svg class="ldspark capspark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${cy ? `<line x1="0" x2="${w}" y1="${cy}" y2="${cy}" stroke="var(--ink3)" stroke-dasharray="3 3" stroke-width="1" vector-effect="non-scaling-stroke"/>` : ''}${line(1, CAP_IN)}${line(2, CAP_OUT)}</svg>`; };
+    const capTxt = x => !x.cap_in && !x.cap_out ? `<span class="nat">${T('unknown')}</span>` : `<span class="mono">${x.cap_in === x.cap_out ? fmtR(x.cap_in * 1e6) : `${fmtR(x.cap_in * 1e6)} ↓<br>${fmtR(x.cap_out * 1e6)} ↑`}</span><div class="nat">${x.cap_own ? T('your figures') : T('port speed')}</div>`;
+    const key = x => `${x.device}|${x.index}`;
+    if (!all.some(x => key(x) === state.capSel)) state.capSel = key(all[0]);
+    done('capTable', `<div class="tw"><table class="compact ldtable captable"><thead><tr><th>${T('Status')}</th><th>${T('Interface')}</th><th>${T('Capacity')}</th><th>${T('In (95th percentile)')}</th><th>${T('Out (95th percentile)')}</th><th>${T('Trend')}</th><th>${T('Reaches {pct}%', {pct:d.full_pct})}</th><th>${T('Day by day')} <span class="nat" style="font-weight:500"><span style="color:${CAP_IN}">— ${T('in')}</span> <span style="color:${CAP_OUT}">— ${T('out')}</span></span></th></tr></thead><tbody>
+      ${all.map(x => `<tr class="caprow" data-k="${esc(key(x))}" tabindex="0" aria-selected="${key(x) === state.capSel}"><td><span class="pill ${st[x.status][1]}">${st[x.status][0]}</span></td>
+        <td><b>${esc(x.name)}</b> ${x.role === 'wan' ? '<span class="pill warn">WAN</span>' : ''}<div class="nat">${esc(x.device_name)}</div></td><td>${capTxt(x)}</td>${dirCell(x, 'in')}${dirCell(x, 'out')}${trendCell(x)}${whenCell(x)}<td>${spark(x)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note">${T('95th percentile = the load of the busy hours: only 5% of the 5-minute periods were busier. The trend compares days a whole number of weeks apart, so quiet weekends are no decline, and a forecast never reaches further than twice the history it rests on. In = entering the device through the interface, out = leaving through it.')}
+      ${isAdmin() ? ` <button class="lnk" id="capCaps">${T('Set capacities')} →</button>` : ''}</p>`);
+    const cb = document.getElementById('capCaps');
+    if (cb) cb.onclick = () => { const x = all.find(y => key(y) === state.capSel) || all[0]; state.view = 'settings'; state.setTab = 'devices'; state.ifDev = x.device; render(); };
+    document.querySelectorAll('.caprow').forEach(r => { const pick = () => { state.capSel = r.dataset.k; state.capDir = null;
+      document.querySelectorAll('.caprow').forEach(o => o.setAttribute('aria-selected', String(o === r))); capDetail(all.find(x => key(x) === r.dataset.k), seq); };
+      r.onclick = pick; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }; });
+    capDetail(all.find(x => key(x) === state.capSel), seq);
+  })();
+}
+// the trend chart: daily 95th percentile (dots) and peak (faint), the busy days' trend line carried on dashed into the
+// future, the capacity and the "near full" line, and where they meet
+function capChart(x, d){
+  const s = x[d], cap = capOf(x, d), rows = x.days, k = d === 'in' ? 1 : 2, color = d === 'in' ? CAP_IN : CAP_OUT;
+  const tr = s.trend, fc = s.forecast, today = CAP.today;
+  const t0 = rows.length ? rows[0][0] : today, lastT = tr ? tr.last_day : rows.length ? rows[rows.length - 1][0] : today;
+  const ahead = fc && cap ? Math.min(fc.horizon, Math.max(14, (fc.over_in != null ? fc.over_in : fc.full_in != null ? fc.full_in : 0) + 7)) : 0;
+  const t1 = Math.max(today, lastT + ahead * 86400);
+  const W = 900, H = 280, L = 86, R = 16, Tp = 14, B = 30;
+  const busyAt = t => tr ? tr.busy + tr.slope * (t - lastT) / 86400 : 0;
+  const top = Math.max(1, cap || 0, ...rows.map(r => r[k + 2]), tr ? busyAt(t1) : 0) * 1.08;
+  const X = t => L + (t - t0) / Math.max(86400, t1 - t0) * (W - L - R), Y = v => Tp + (1 - v / top) * (H - Tp - B);
+  const ticks = [...Array(5)].map((_, i) => top / 1.08 * i / 4);
+  let g = ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="cgrid"/><text x="${L - 8}" y="${(Y(v) + 4).toFixed(1)}" class="caxis" text-anchor="end">${esc(fmtR(v))}</text>`).join('');
+  const nT = Math.min(6, Math.max(2, Math.round((t1 - t0) / 86400 / 7)));
+  for (let i = 0; i <= nT; i++) { const t = t0 + (t1 - t0) * i / nT; g += `<text x="${X(t).toFixed(1)}" y="${H - 8}" class="caxis" text-anchor="${i === 0 ? 'start' : i === nT ? 'end' : 'middle'}">${esc(dMon(t))}</text>`; }
+  if (t1 > today) g += `<rect x="${X(today + 86400).toFixed(1)}" y="${Tp}" width="${(X(t1) - X(today + 86400)).toFixed(1)}" height="${H - Tp - B}" class="cfuture"/><text x="${(X(today + 86400) + 6).toFixed(1)}" y="${Tp + 14}" class="caxis">${T('forecast')}</text>`;
+  if (cap) g += `<line x1="${L}" x2="${W - R}" y1="${Y(cap).toFixed(1)}" y2="${Y(cap).toFixed(1)}" class="ccap"/><text x="${W - R - 4}" y="${(Y(cap) - 6).toFixed(1)}" class="caxis ccapt" text-anchor="end">${T('capacity')} ${esc(fmtR(cap))}</text>`
+    + `<line x1="${L}" x2="${W - R}" y1="${Y(cap * CAP.full_pct / 100).toFixed(1)}" y2="${Y(cap * CAP.full_pct / 100).toFixed(1)}" class="cfull"/><text x="${W - R - 4}" y="${(Y(cap * CAP.full_pct / 100) - 6).toFixed(1)}" class="caxis cfullt" text-anchor="end">${CAP.full_pct}%</text>`;
+  g += `<polyline points="${rows.map(r => `${X(r[0] + 43200).toFixed(1)},${Y(r[k + 2]).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-opacity=".35" stroke-width="1.3"/>`;
+  g += rows.map(r => `<circle cx="${X(r[0] + 43200).toFixed(1)}" cy="${Y(r[k]).toFixed(1)}" r="3.2" fill="${color}"${r[0] >= today ? ' fill-opacity=".45"' : ''}><title>${esc(dMon(r[0]))}: p95 ${esc(fmtR(r[k]))} · ${T('peak')} ${esc(fmtR(r[k + 2]))}</title></circle>`).join('');
+  if (tr) {
+    const a = t0 + 43200, b = lastT + 43200, clip = v => Math.max(0, Math.min(top, v));
+    g += `<line x1="${X(a).toFixed(1)}" y1="${Y(clip(busyAt(a))).toFixed(1)}" x2="${X(b).toFixed(1)}" y2="${Y(clip(busyAt(b))).toFixed(1)}" class="ctrend"/>`;
+    if (t1 > b) g += `<line x1="${X(b).toFixed(1)}" y1="${Y(clip(busyAt(b))).toFixed(1)}" x2="${X(t1).toFixed(1)}" y2="${Y(clip(busyAt(t1))).toFixed(1)}" class="ctrend cdash"/>`;
+    for (const [key2, cls, lbl] of [['full_in', 'cfullt', `${CAP.full_pct}%`], ['over_in', 'ccapt', '100%']]) {
+      const n = fc && fc[key2]; if (!n) continue;
+      const t = lastT + n * 86400 + 43200; if (t > t1) continue;
+      g += `<line x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${Tp}" y2="${H - B}" class="cmark"/><circle cx="${X(t).toFixed(1)}" cy="${Y(busyAt(t)).toFixed(1)}" r="5" class="cmarkd"/>`
+        + `<text x="${(X(t) - 6).toFixed(1)}" y="${(Y(busyAt(t)) - 10).toFixed(1)}" class="caxis ${cls}" text-anchor="end">${lbl} ≈ ${esc(dMon(t))}</text>`;
+    }
+  }
+  return `<svg class="capchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${T('Trend and forecast')}">${g}</svg>
+    <div class="legend caplegend"><span><i style="background:${color}"></i>${T('95th percentile of the day')}</span><span><i style="background:${color};opacity:.4"></i>${T('busiest 5 minutes of the day')}</span>${tr ? `<span><i class="lt"></i>${T('trend of the busy days')}</span>` : ''}${cap ? `<span><i class="lc"></i>${T('capacity')}</span>` : ''}</div>`;
+}
+async function capDetail(x, seq){
+  if (!x) return;
+  const d = state.capDir && x[state.capDir] ? state.capDir : x.worst;
+  fill('capDetT', `${esc(x.name)} <span class="nat" style="font-weight:500">· ${esc(x.device_name)}</span>`);
+  fill('capDirBox', seg('capDir', [['in', T('In')], ['out', T('Out')]], d));
+  wireSeg('capDir', v => { state.capDir = v; capDetail(x, seq); });
+  const ch = fill('capChart', capChart(x, d)); if (ch) ch.classList.remove('loading');
+  fill('capSay', capSentence({...x, worst:d}));
+  ['capHeat', 'capHosts', 'capSvcs'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('loading'); });
+  let r;
+  try { r = await capApi('capacity/iface', {device:x.device, if:x.index}); } catch (e) { ['capHeat', 'capHosts', 'capSvcs'].forEach(id => { const el = fill(id, errBox(e)); if (el) el.classList.remove('loading'); }); return; }
+  if (seq !== renderSeq || state.capSel !== `${x.device}|${x.index}`) return;
+  // weekday × hour: share of the capacity when known, else of the busiest hour
+  const grid = r.heat[d], cap = capOf(x, d), max = Math.max(1, ...grid.flat()), wd = WDAYS();
+  const lvl = v => cap ? v / cap : v / max, col = v => { const p = lvl(v); return p <= 0 ? 'rgba(120,160,255,.06)' : cap && p >= CAP.full_pct / 100 ? `rgba(255,92,122,${(.45 + .5 * Math.min(1, p)).toFixed(2)})` : cap && p >= .7 ? `rgba(255,195,77,${(.35 + .5 * p).toFixed(2)})` : `rgba(39,211,245,${(.1 + .8 * Math.min(1, cap ? p / .7 : p)).toFixed(2)})`; };
+  const heat = `<div class="capheat"><span></span>${[...Array(24)].map((_, h) => `<span class="hh">${h % 3 ? '' : h}</span>`).join('')}
+    ${grid.map((row, w) => `<span class="wd">${esc(wd[w].slice(0, 2))}</span>${row.map((v, h) => `<i style="background:${col(v)}" title="${esc(wd[w])} ${String(h).padStart(2, '0')}:00 · ${esc(fmtR(v))}${cap ? ` · ${Math.round(100 * v / cap)}%` : ''}"></i>`).join('')}`).join('')}</div>
+    <p class="note">${cap ? T('Colour = share of the capacity: blue below 70%, amber above, red above {pct}%.', {pct:CAP.full_pct}) : T('Colour = against the busiest hour (the capacity is unknown).')} ${T('Direction: {dir}.', {dir:capDir(d)})}</p>`;
+  const h = fill('capHeat', heat); if (h) h.classList.remove('loading');
+  const half = `${dMon(r.from)} – ${dMon(r.mid)} → ${dMon(r.mid)} – ${dMon(r.to)}`;
+  fill('capHalfH', half); fill('capHalfS', half);
+  const list = (rows, kind) => { if (!rows.length) return `<div class="empty">${T('No traffic under this filter')}</div>`;
+    const top = Math.max(...rows.map(o => o.recent + o.earlier), 1);
+    return '<div class="blist">' + rows.map(o => { const ch = o.earlier ? Math.round(100 * (o.recent - o.earlier) / o.earlier) : null;
+      return `<button class="brow" ${kind === 'hosts' ? 'data-host' : 'data-svc'}="${esc(o.k)}"><span class="n">${esc(o.name || o.k)}${o.name ? ` <span class="nat mono">${esc(o.k)}</span>` : ''}</span><span class="t">${fmtB(o.recent + o.earlier)}</span>
+        <span class="p" style="color:${ch == null ? 'var(--warn)' : ch > 15 ? 'var(--warn)' : ch < -15 ? 'var(--ok)' : 'var(--ink2)'}">${ch == null ? T('new') : `${ch > 0 ? '+' : ''}${ch}%`}</span>
+        <span class="bar2" style="width:${(100 * (o.recent + o.earlier) / top).toFixed(1)}%"><i class="u" style="width:${(100 * o.earlier / ((o.recent + o.earlier) || 1)).toFixed(1)}%;background:rgba(120,160,255,.45)"></i><i class="d" style="flex:1;background:${d === 'in' ? CAP_IN : CAP_OUT}"></i></span></button>`; }).join('') + '</div>'
+      + `<p class="note">${kind === 'hosts' ? T('Bar: the earlier half (grey) and the recent one (colour); the change is recent against earlier. Click a host for its details.') : T('Bar: the earlier half (grey) and the recent one (colour); the change is recent against earlier. Click a service to open it on the Services page.')}</p>`; };
+  for (const [id, kind] of [['capHosts', 'hosts'], ['capSvcs', 'services']]) { const el = fill(id, list(r[kind], kind)); if (el) { el.classList.remove('loading'); wireFilters(el);
+    el.querySelectorAll('[data-svc]').forEach(b => b.onclick = () => { putFilter({k:'service', v:b.dataset.svc, neg:false}); state.view = 'apps'; render(); }); } }
 }
 function vPaths(){
   const v = document.getElementById('view'), live = !!state.pathsLive && !isCustom();
@@ -2625,7 +2791,7 @@ function vSettings(){
 const REP_ICON = 'M4 2h7l3 3v11H4zM11 2v3h3M6.5 9h5M6.5 12h5';
 const REP_EVERY = () => [['day', T('Daily')], ['week', T('Weekly')], ['month', T('Monthly')]];
 const REP_SECTIONS = () => ({summary:T('Totals'), chart:T('Traffic over time'), hosts:T('Busiest inside hosts'), outside:T('Outside networks (AS)'),
-  services:T('Services'), countries:T('Countries'), networks:T('Your networks'), events:T('Security events'), devices:T('Devices')});
+  services:T('Services'), countries:T('Countries'), networks:T('Your networks'), capacity:T('Link capacity'), events:T('Security events'), devices:T('Devices')});
 const REP_TRAFFIC = () => [['internet', T('Internet traffic')], ['internal', T('Traffic between inside hosts')], ['all', T('All traffic')]];
 // weekday names in the language of the page (0 = Monday, as on the server); 5 Jan 2026 was a Monday
 const WDAYS = () => [...Array(7)].map((_, i) => new Date(Date.UTC(2026, 0, 5 + i)).toLocaleDateString(LOC, {weekday:'long', timeZone:'UTC'}));
@@ -3832,7 +3998,7 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });

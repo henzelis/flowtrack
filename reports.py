@@ -29,7 +29,8 @@ STATE = os.path.join(STATE_DIR, 'reports_state.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONTS = os.path.join(HERE, 'report', 'fonts')
 EVERY = ('day', 'week', 'month')
-SECTIONS = ('summary', 'chart', 'hosts', 'outside', 'services', 'countries', 'networks', 'events', 'devices')
+SECTIONS = ('summary', 'chart', 'hosts', 'outside', 'services', 'countries', 'networks', 'capacity', 'events', 'devices')
+NEW_SECTIONS = {'capacity': '1.13.0'}      # added to the reports made before, once (`seen` remembers what a report was offered)
 TRAFFIC = ('internet', 'internal', 'all')
 FILTER_KEYS = ('ip', 'dst', 'net', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface')
 MAX_REPORTS = 20
@@ -52,7 +53,7 @@ def system_tz():
 
 def blank():
     return {'id': '', 'name': '', 'on': True, 'every': 'week', 'wday': 0, 'mday': 1, 'at': '07:00', 'tz': system_tz(), 'lang': 'uk', 'to': [],
-            't': 'internet', 'f': [], 'sections': list(SECTIONS), 'created': 0}
+            't': 'internet', 'f': [], 'sections': list(SECTIONS), 'seen': list(SECTIONS), 'created': 0}
 
 
 def load():
@@ -66,6 +67,10 @@ def load():
         if isinstance(r, dict) and r.get('id'):
             x = blank()
             x.update({k: v for k, v in r.items() if k in x})
+            # (1.13.0) a part that did not exist when the report was made is switched on in it once
+            seen = r.get('seen') or [k for k in SECTIONS if k not in NEW_SECTIONS]
+            x['sections'] = [k for k in SECTIONS if k in x['sections'] or k not in seen]
+            x['seen'] = list(SECTIONS)
             out.append(x)
     return out
 
@@ -141,6 +146,7 @@ def validate(body, old=None):
     if not secs:
         raise ValueError(tr('Choose at least one part of the report.'))
     r['sections'] = [s for s in SECTIONS if s in secs]
+    r['seen'] = list(SECTIONS)
     if not r['id']:
         r['id'] = uuid.uuid4().hex[:10]
         r['created'] = int(time.time())
@@ -271,6 +277,8 @@ def collect(r, t0, t1, call):
         d['events'] = call('/api/alerts', q())['alerts']
     if 'devices' in sec:
         d['devices'] = call('/api/devices', {})['devices']
+    if 'capacity' in sec:          # (1.13.0) whole days up to now in the report's zone: at least 30 for a trend
+        d['capacity'] = call('/api/capacity', {'days': [str(max(30, -(-(t1 - t0) // 86400)))], 'tz': [r['tz']]})
     return d
 
 
@@ -560,6 +568,62 @@ def render(r, data, t0, t1, version='', now=None):
         section(tr('Your networks'),
                 table([tr('Network'), tr('Hosts'), tr('Downloaded'), tr('Uploaded'), tr('Share')], body,
                       [W - 18 * mm - 2 * 24 * mm - 30 * mm, 18 * mm, 24 * mm, 24 * mm, 30 * mm], right=(1, 2, 3)))
+
+    # ---- (1.13.0) link capacity: the links with a known capacity, the fullest first, and what to plan for
+    if 'capacity' in sec and data.get('capacity'):
+        cd = data['capacity']
+        links = [x for x in cd['interfaces'] if x['status'] != 'unknown'][:14]
+        if not links:
+            section(tr('Link capacity'), Paragraph(esc(tr('No link has a known capacity: set the port speeds or your ISP figures in Settings → Devices → Interfaces.')), PM))
+        else:
+            col = {'over': SEV['crit'], 'full': SEV['crit'], 'soon': SEV['warn'], 'watch': SEV['warn'], 'ok': '#1E9E6A'}
+            day = lambda base, n: datetime.datetime.fromtimestamp(base + n * 86400 + 43200, tz).strftime('%Y-%m-%d')      # noqa: E731
+
+            def load(x, k):
+                v = x[k]
+                return [[Paragraph(f'<b>{v["p95_pct"]:g}%</b>\u00a0\u00a0<font color="{INK2}" size="7">{esc(fmt_rate(v["p95"]))}</font>', P)],
+                        [bar((v['p95_pct'] or 0) / 100, col['full'] if (v['p95_pct'] or 0) >= cd['full_pct'] else col['watch'] if (v['p95_pct'] or 0) >= cd['watch_pct'] else BLUE, w=28 * mm)]]
+
+            def when(x):
+                v = x[x['worst']]
+                fc = v['forecast']
+                if not fc:
+                    return Paragraph(f'<font color="{INK3}">{esc(tr("collecting"))}</font>', P)
+                if fc['full_in'] == 0:
+                    return Paragraph(f'<font color="{SEV["crit"]}"><b>{esc(tr("already"))}</b></font>', P)
+                if fc['full_in'] is None:
+                    return Paragraph(f'<font color="{INK3}">{esc(tr("not within {n} days", n=fc["horizon"]))}</font>', P)
+                return Paragraph(f'<font color="{SEV["warn"]}"><b>{day(v["trend"]["last_day"], fc["full_in"])}</b></font>', P)
+
+            def trend(x):
+                fc = x[x['worst']]['forecast']
+                if not fc:
+                    return ''
+                return f"{'↑' if fc['direction'] == 'up' else '↓' if fc['direction'] == 'down' else '='} {fc['growth_pct_month']:+g}%"
+            body = [[dot(col[x['status']]), two_lines(x['name'], x['device_name']),
+                     two_lines(fmt_rate(x['cap_in'] * 1e6), '') if x['cap_in'] == x['cap_out'] else
+                     Paragraph(f"{esc(fmt_rate(x['cap_in'] * 1e6))} ↓<br/>{esc(fmt_rate(x['cap_out'] * 1e6))} ↑", P),
+                     Table(load(x, 'in')), Table(load(x, 'out')), trend(x), when(x)] for x in links]
+            for row in body:
+                for c in (3, 4):
+                    row[c].setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                                                ('TOPPADDING', (0, 0), (-1, -1), 0), ('BOTTOMPADDING', (0, 0), (-1, -1), 0)]))
+            # the links to plan for, in one sentence each
+            says = []
+            for x in [y for y in links if y['status'] in ('over', 'full', 'soon')][:4]:
+                v, d = x[x['worst']], x['worst']
+                fc = v['forecast']
+                who = f"<b>{esc(x['name'])}</b> ({esc(x['device_name'])}), {esc(tr('incoming traffic') if d == 'in' else tr('outgoing traffic'))}: "
+                if fc and fc['full_in'] is not None and fc['full_in'] > 0:
+                    says.append(who + esc(tr('{pct}% of the capacity around {date}, growing {g}% a month.', pct=cd['full_pct'], date=day(v['trend']['last_day'], fc['full_in']), g=f"{fc['growth_pct_month']:g}")))
+                else:
+                    says.append(who + esc(tr('busy hours at {pct}% of the capacity already.', pct=f"{v['p95_pct']:g}")))
+            flow = [table(['', tr('Interface'), tr('Capacity'), tr('In (95th percentile)'), tr('Out (95th percentile)'), tr('Trend'), tr('Reaches {pct}%', pct=cd['full_pct'])],
+                          body, [5 * mm, 34 * mm, 28 * mm, 34 * mm, 34 * mm, 17 * mm, W - 152 * mm], right=(5,))]
+            if says:
+                flow = [Paragraph('<br/>'.join(says), st('say', leading=12.5)), Spacer(0, 2.5 * mm)] + flow
+            section(tr('Link capacity'), *flow,
+                    note=tr('The last {n} days up to when the report was made; 95th percentile = the load of the busy hours, trend a month.', n=cd['days']))
 
     # ---- security events
     if 'events' in sec:
