@@ -3906,12 +3906,26 @@ function qGuide(){
   qBox.hidden = false; qSel = Math.min(qSel, qItems.length - 1); qMark();
 }
 // (1.11.1) the same guide for the filter fields of forms (reports): a suggestion completes the word — nothing is
-// applied — and a space follows a complete filter, so the next one can be typed; every word's error shows at once
+// applied — and a space follows a complete filter, so the next one can be typed; every word's error shows at once.
+// It floats over the window (fixed, on <body>: a scrolling modal would cut or stretch it), under the field or above
+// it when there is more room there, and follows the field when the window scrolls.
 function filterGuide(input){
   const box = document.createElement('div'), items = [];
   let sel = -1;
-  box.className = 'qguide inline'; box.hidden = true; box.setAttribute('role', 'listbox');
-  input.insertAdjacentElement('afterend', box);
+  box.className = 'qguide float'; box.hidden = true; box.setAttribute('role', 'listbox'); box.id = `${input.id}Guide`;
+  input.setAttribute('aria-controls', box.id);
+  document.body.append(box);
+  const place = () => {
+    if (box.hidden) return;
+    const r = input.getBoundingClientRect(), below = innerHeight - r.bottom - 12, above = r.top - 12, w = Math.min(Math.max(r.width, 320), innerWidth - 16);
+    box.style.left = `${Math.max(8, Math.min(r.left, innerWidth - w - 8))}px`; box.style.width = `${w}px`;
+    // down, over what follows the field; up only when there is little room below
+    if (below >= 220 || below >= above) { box.style.top = `${r.bottom + 6}px`; box.style.bottom = 'auto'; box.style.maxHeight = `${Math.max(120, below - 6)}px`; }
+    else { box.style.top = 'auto'; box.style.bottom = `${innerHeight - r.top + 6}px`; box.style.maxHeight = `${Math.max(120, above - 6)}px`; }
+  };
+  addEventListener('scroll', place, true); addEventListener('resize', place);
+  const gone = new MutationObserver(() => { if (!input.isConnected) { box.remove(); gone.disconnect(); removeEventListener('scroll', place, true); removeEventListener('resize', place); } });
+  gone.observe(document.body, {childList:true, subtree:true});
   input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('autocomplete', 'off'); input.spellcheck = false;
   const word = () => (input.value.slice(0, input.selectionStart ?? input.value.length).match(/(\S*)$/) || ['', ''])[1];
   const mark = () => box.querySelectorAll('[data-qi]').forEach(b => { const on = +b.dataset.qi === sel; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); if (on) b.scrollIntoView({block:'nearest'}); });
@@ -3923,7 +3937,7 @@ function filterGuide(input){
     items.length = 0;
     const html = errs.map(([t, e]) => `<div class="qerr" role="alert"><code>${esc(t)}</code> — ${esc(e)}</div>`).join('') + (list && !list.length ? '' :
       guideHtml(list, items, T('words separated by spaces · <b>-</b>key:value leaves out · two values of one key: either of them · <b>↑ ↓</b> and <b>Tab</b> take a suggestion')));
-    box.innerHTML = html; box.hidden = !html; sel = Math.min(sel, items.length - 1); mark();
+    box.innerHTML = html; box.hidden = !html; sel = Math.min(sel, items.length - 1); place(); mark();
   };
   const take = it => {
     if (!it || it.hint) return;
