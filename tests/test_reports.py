@@ -78,11 +78,69 @@ class Periods(unittest.TestCase):
         common.set_lang('en')
         self.assertEqual(reports.period_label(r, ts(2026, 10, 1), ts(2026, 11, 1)), 'October 2026')
 
+    def test_chosen_weekday(self):
+        r = reports.validate({'name': 'x', 'every': 'week', 'wday': 4, 'tz': 'Europe/Kyiv', 'sections': ['summary']})   # Fridays
+        self.assertEqual(reports.period(r, ts(2026, 10, 18, 12)), (ts(2026, 10, 9), ts(2026, 10, 16)))      # Fri 9 — Thu 15
+        self.assertEqual(reports.period(r, ts(2026, 10, 16, 0, 1)), (ts(2026, 10, 9), ts(2026, 10, 16)))
+        self.assertEqual(reports.period(r, ts(2026, 10, 15, 23)), (ts(2026, 10, 2), ts(2026, 10, 9)))
+        self.assertEqual(reports.next_send(r, ts(2026, 10, 16), ts(2026, 10, 18)), ts(2026, 10, 23, 7, 0))
+
+    def test_chosen_day_of_the_month(self):
+        r = reports.validate({'name': 'x', 'every': 'month', 'mday': 15, 'tz': 'Europe/Kyiv', 'sections': ['summary']})
+        self.assertEqual(reports.period(r, ts(2026, 10, 18)), (ts(2026, 9, 15), ts(2026, 10, 15)))
+        self.assertEqual(reports.period(r, ts(2026, 10, 14)), (ts(2026, 8, 15), ts(2026, 9, 15)))
+        self.assertEqual(reports.period(r, ts(2026, 1, 20)), (ts(2025, 12, 15), ts(2026, 1, 15)))
+        self.assertEqual(reports.period_label(r, ts(2026, 9, 15), ts(2026, 10, 15)), '2026-09-15 — 2026-10-14')
+        for bad in ({'mday': 29}, {'mday': 0}, {'wday': 7}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                reports.validate({'name': 'x', 'every': 'month', 'tz': 'Europe/Kyiv', 'sections': ['summary'], **bad})
+
     def test_next_send(self):
         r = self.rep('day', '06:30')
         now = ts(2026, 10, 18, 5)
         self.assertEqual(reports.next_send(r, 0, now), ts(2026, 10, 18, 6, 30))                # yesterday not sent yet
         self.assertEqual(reports.next_send(r, ts(2026, 10, 18), now), ts(2026, 10, 19, 6, 30))  # sent: tomorrow's
+
+
+class Cover(unittest.TestCase):
+    """A period without (all) its records: never bare zeros."""
+    r = reports.validate({'name': 'x', 'every': 'week', 'tz': 'Europe/Kyiv', 'sections': list(reports.SECTIONS)})
+    t0, t1 = ts(2026, 10, 5), ts(2026, 10, 12)
+
+    def sm(self, b, oldest):
+        return {'summary': {'bytes': b, 'oldest': oldest}}
+
+    def test_kinds(self):
+        c = lambda b, o, now=ts(2026, 10, 18, 16, 2): reports.cover(self.r, self.sm(b, o), self.t0, self.t1, now)     # noqa: E731
+        self.assertEqual(c(5, self.t0)['kind'], 'full')
+        self.assertEqual(c(5, ts(2026, 10, 8, 10)), {'kind': 'part', 't0': ts(2026, 10, 8, 10), 't1': self.t1})
+        self.assertEqual(c(0, ts(2026, 10, 16, 10, 20)), {'kind': 'later', 't0': ts(2026, 10, 16, 10, 20), 't1': ts(2026, 10, 18, 16, 0)})
+        self.assertEqual(c(0, ts(2026, 10, 1))['kind'], 'silent')
+        self.assertEqual(c(0, 0)['kind'], 'none')
+        self.assertEqual(c(0, ts(2026, 10, 18, 16), now=ts(2026, 10, 18, 16, 2))['kind'], 'none')       # began a moment ago
+        later = c(0, ts(2026, 9, 1) + 86400 * 30, now=ts(2026, 12, 1))                                   # at most one period
+        self.assertEqual(later['t1'] - later['t0'] <= self.t1 - self.t0, True)
+
+    def test_the_report_shows_what_there_is(self):
+        log = []
+        base = fake_call(log)
+        first = ts(2026, 10, 16, 10, 20)
+        def call(path, q):
+            out = base(path, q)
+            if path == '/api/summary':
+                inside = int(q['to'][0]) > first
+                out.update(bytes=out['bytes'] if inside else 0, oldest=first)
+            return out
+        with mock.patch('time.time', return_value=ts(2026, 10, 18, 16, 3)):
+            pdf, data = reports.make(self.r, self.t0, self.t1, call)
+        self.assertEqual(data['cover']['kind'], 'later')
+        self.assertEqual(data['summary']['bytes'], 9_000_000_000)          # the second collect, over what there is
+        self.assertIn(str(first), {q['from'][0] for p, q in log if 'from' in q})
+        common.set_lang('uk')
+        title, text = reports.cover_note(self.r, data['cover'], self.t0, self.t1)
+        self.assertIn('2026-10-05 — 2026-10-11', title)
+        self.assertIn('2026-10-16 10:20', text)
+        common.set_lang('en')
 
 
 class Settings(unittest.TestCase):
@@ -169,9 +227,38 @@ class Schedule(unittest.TestCase):
         with mock.patch('time.time', return_value=ts(2026, 10, 18, 9)):
             r = reports.upsert({'name': 'D', 'every': 'day', 'tz': 'Europe/Kyiv', 'sections': ['summary']})
         done = reports.load_state()[r['id']]['done']
-        reports.note_sent(r, ts(2026, 10, 17), ts(2026, 10, 18), 2, now=ts(2026, 10, 18, 10))
+        reports.note_sent(r, '2026-10-17', 2, now=ts(2026, 10, 18, 10))
         s = reports.load_state()[r['id']]
         self.assertEqual((s['done'], s['sent_period'], s['to']), (done, '2026-10-17', 2))
+
+    def test_without_a_mail_server_nothing_is_tried(self):
+        with mock.patch('time.time', return_value=ts(2026, 10, 17, 9)):
+            r = reports.upsert({'name': 'D', 'every': 'day', 'tz': 'Europe/Kyiv', 'sections': ['summary'], 'to': ['x@example.com']})
+        with mock.patch.object(notify, 'load', notify.defaults):
+            self.assertEqual(reports.tick(fake_call(), now=ts(2026, 10, 18, 7, 1), log=lambda *a: None), [])
+            st = reports.load_state()[r['id']]
+            self.assertIn('blocked', st)
+            self.assertNotIn('tries', st)
+            self.assertTrue(reports.status()[r['id']]['blocked'])
+        self.assertEqual(reports.tick(fake_call(), now=ts(2026, 10, 18, 7, 2), log=lambda *a: None), [r['id']])   # set up: it goes
+        self.assertEqual(reports.status()[r['id']]['blocked'], '')
+
+    def test_mail_server_alone_keeps_the_notifications(self):
+        cfg = notify.defaults()
+        cfg['email'].update(on=False, to=['noc@example.com'], min_sev='crit', lang='en')
+        new = notify.validate_server({'host': 'smtp.example.com', 'port': 465, 'security': 'ssl', 'sender': 'ft@example.com',
+                                      'user': 'ft', 'password': 'secret', 'to': ['evil@example.com'], 'on': True}, cfg)
+        m = new['email']
+        self.assertEqual((m['host'], m['port'], m['security'], m['sender'], m['password']), ('smtp.example.com', 465, 'ssl', 'ft@example.com', 'secret'))
+        self.assertEqual((m['on'], m['to'], m['min_sev'], m['lang']), (False, ['noc@example.com'], 'crit', 'en'))
+        self.assertNotIn('password', notify.server_public(new))
+        self.assertTrue(notify.server_public(new)['ready'])
+        kept = notify.validate_server({'host': 'smtp.example.com', 'user': 'ft', 'password': ''}, new)
+        self.assertEqual(kept['email']['password'], 'secret')          # an empty password keeps the saved one
+        with self.assertRaises(ValueError):
+            notify.validate_server({'host': 'bad host!'}, cfg)
+        with self.assertRaises(ValueError):
+            notify.test_server(new, 'not mail', 'en')
 
     def test_no_mail_server(self):
         r = reports.validate({'name': 'D', 'every': 'day', 'sections': ['summary']})

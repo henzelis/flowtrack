@@ -2203,7 +2203,7 @@ function vEventsCfg(){
         <label>${T('Language of the messages')}${langSel('tgLang', tg.lang)}</label></div>
       <div><button class="btn" type="button" id="tgTest">${T('Send a test')}</button> <span class="note" id="tgSay"></span></div></div>
       <div class="form tgform" id="ntEmail" ${ntTab === 'email' ? '' : 'hidden'}>
-      <p class="note" style="margin:0">${T('Any mail server or service that takes SMTP: your own, Gmail or Microsoft 365 (with an app password), a relay of your provider. One letter per 10-minute check, to all recipients.')}</p>
+      <p class="note" style="margin:0">${T('Any mail server or service that takes SMTP: your own, Gmail or Microsoft 365 (with an app password), a relay of your provider. One letter per 10-minute check, to all recipients.')} ${T('The same mail server sends the reports (Settings → Reports).')}</p>
       <label class="chk"><input type="checkbox" id="mlOn" ${ml.on ? 'checked' : ''}>${T('Send new events by e-mail')}</label>
       <div class="two"><label>${T('Mail server (SMTP)')}<input id="mlHost" value="${esc(ml.host)}" placeholder="smtp.example.com" autocomplete="off"></label>
         <div class="two"><label>${T('Port')}<input id="mlPort" type="number" min="1" max="65535" value="${esc(ml.port)}"></label>
@@ -2558,8 +2558,25 @@ const REP_EVERY = () => [['day', T('Daily')], ['week', T('Weekly')], ['month', T
 const REP_SECTIONS = () => ({summary:T('Totals'), chart:T('Traffic over time'), hosts:T('Busiest inside hosts'), outside:T('Outside networks (AS)'),
   services:T('Services'), countries:T('Countries'), networks:T('Your networks'), events:T('Security events'), devices:T('Devices')});
 const REP_TRAFFIC = () => [['internet', T('Internet traffic')], ['internal', T('Traffic between inside hosts')], ['all', T('All traffic')]];
-const repWhen = r => r.every === 'day' ? T('every day at {t}', {t:r.at}) : r.every === 'week' ? T('Mondays at {t}, for the week before', {t:r.at})
-  : T('on the 1st at {t}, for the month before', {t:r.at});
+// weekday names in the language of the page (0 = Monday, as on the server); 5 Jan 2026 was a Monday
+const WDAYS = () => [...Array(7)].map((_, i) => new Date(Date.UTC(2026, 0, 5 + i)).toLocaleDateString(LOC, {weekday:'long', timeZone:'UTC'}));
+const repWhen = r => r.every === 'day' ? T('daily at {t}', {t:r.at}) : r.every === 'week' ? T('weekly: {day}, {t}', {day:WDAYS()[r.wday || 0], t:r.at})
+  : T('monthly: day {n}, {t}', {n:r.mday || 1, t:r.at});
+// the next sending and the days it covers, as the server works them out (reports.period): dates only, no clock
+function repNext(r){
+  const d0 = new Date(), today = new Date(d0.getFullYear(), d0.getMonth(), d0.getDate()), [h, m] = (r.at || '07:00').split(':').map(Number);
+  const day = (y, mo, dd) => new Date(y, mo, dd), wd = x => (x.getDay() + 6) % 7;
+  let send = new Date(today), start;
+  const past = x => x < today || (+x === +today && (d0.getHours() * 60 + d0.getMinutes()) >= h * 60 + m);
+  if (r.every === 'day') { if (past(send)) send = day(send.getFullYear(), send.getMonth(), send.getDate() + 1); start = day(send.getFullYear(), send.getMonth(), send.getDate() - 1); }
+  else if (r.every === 'week') { send = day(today.getFullYear(), today.getMonth(), today.getDate() + ((r.wday || 0) - wd(today) + 7) % 7);
+    if (past(send)) send = day(send.getFullYear(), send.getMonth(), send.getDate() + 7); start = day(send.getFullYear(), send.getMonth(), send.getDate() - 7); }
+  else { const n = r.mday || 1; send = day(today.getFullYear(), today.getMonth(), n); if (past(send)) send = day(send.getFullYear(), send.getMonth() + 1, n);
+    start = day(send.getFullYear(), send.getMonth() - 1, n); }
+  const end = day(send.getFullYear(), send.getMonth(), send.getDate() - 1), f = x => x.toLocaleDateString(LOC, {day:'numeric', month:'short'});
+  return T('Next: {when}, covering {from} — {to}', {when:`${send.toLocaleDateString(LOC, {weekday:'short', day:'numeric', month:'short'})} ${r.at}`,
+    from:f(start), to:f(end)});
+}
 // browsers still name some zones by their old names (Chromium: Europe/Kiev); the server's list has the new ones
 const TZ_RENAMED = {'Europe/Kiev':'Europe/Kyiv', 'Europe/Uzhgorod':'Europe/Kyiv', 'Europe/Zaporozhye':'Europe/Kyiv', 'Asia/Calcutta':'Asia/Kolkata',
   'Asia/Saigon':'Asia/Ho_Chi_Minh', 'Asia/Katmandu':'Asia/Kathmandu', 'Asia/Rangoon':'Asia/Yangon', 'Atlantic/Faeroe':'Atlantic/Faroe',
@@ -2578,25 +2595,60 @@ async function repDownload(q, btn){
 }
 function vReports(){
   const v = document.getElementById('setBody'), seq = renderSeq;
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph(REP_ICON, T('Reports'), T('a PDF of the last day, week or month, e-mailed at its hour · the same numbers as the pages'),
+  v.innerHTML = `<div class="grid"><section class="glass panel s12" id="repMailBox">${ph('M2 4h14v10H2zM2 4l7 6 7-6', T('Mail server'), T('reports go out by e-mail (SMTP) · shared with the e-mail notifications'))}<div id="repMail" class="loading"></div></section>
+    <section class="glass panel s12">${ph(REP_ICON, T('Reports'), T('a PDF of the last day, week or month, e-mailed at its hour · the same numbers as the pages'),
     `<button class="btn primary" id="repNew">${T('New report')}</button>`)}<div id="repList" class="loading"></div><p class="err" id="repErr" hidden></p></section></div>`;
-  let d = null;
+  let d = null, mailOpen = false;
+  const $ = id => document.getElementById(id);
   const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
-  const draw = () => {
-    const el = document.getElementById('repList'); if (!el || seq !== renderSeq) return;
+  // ---- the mail server: a summary when it is set up, the form when it is not (or on Change)
+  const drawMail = () => {
+    const el = $('repMail'); if (!el || seq !== renderSeq) return;
     el.classList.remove('loading');
-    const mail = d.mail_ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px">${T('Reports go by e-mail: set up the mail server first in Settings → Events → Notifications.')} <button class="lnk" id="repMail">${T('Open')} →</button></p>`;
-    el.innerHTML = mail + (d.reports.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Report')}</th><th>${T('When')}</th><th>${T('Recipients')}</th><th>${T('Last sent')}</th><th>${T('Next')}</th><th></th></tr></thead><tbody>
+    const m = d.mail, sec = {starttls:'STARTTLS', ssl:'SSL/TLS', none:T('none')};
+    if (m.ready && !mailOpen) {
+      el.innerHTML = `<div class="about"><div><span>${T('Server')}</span><b class="mono">${esc(m.host)}:${esc(m.port)}</b><span class="nat">${m.security === 'none' ? T('no encryption') : esc(sec[m.security])}${m.user ? ' · ' + esc(m.user) : ''}</span></div>
+        <div><span>${T('From')}</span><b class="mono">${esc(m.sender)}</b><button class="lnk" id="rmChange">${T('Change')}</button></div></div>`;
+      $('rmChange').onclick = () => { mailOpen = true; drawMail(); };
+      return;
+    }
+    el.innerHTML = `${m.ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px"><b>${T('Not set up yet: reports are not sent.')}</b> ${T('Enter the SMTP server you send mail through — your own, Gmail or Microsoft 365 (with an app password), or a relay of your provider. FlowTrack only sends: no POP3 or IMAP is needed.')}</p>`}
+      <form class="form" id="rmForm" novalidate>
+      <div class="two"><label>${T('Mail server (SMTP)')}<input id="rmHost" value="${esc(m.host)}" placeholder="smtp.example.com" autocomplete="off"></label>
+        <div class="two"><label>${T('Port')}<input id="rmPort" type="number" min="1" max="65535" value="${esc(m.port)}"></label>
+          <label>${T('Encryption')}<select id="rmSec">${Object.entries(sec).map(([k, l]) => `<option value="${k}" ${m.security === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div></div>
+      <label class="chk"><input type="checkbox" id="rmVerify" ${m.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
+      <div class="two"><label>${T('Login (empty: without a login)')}<input id="rmUser" value="${esc(m.user)}" autocomplete="off"></label>
+        <label>${T('Password')}<input id="rmPass" type="password" autocomplete="new-password" placeholder="${m.password_set ? T('saved — leave empty to keep') : ''}"></label></div>
+      <div class="two"><label>${T('From')}<input id="rmFrom" value="${esc(m.sender)}" placeholder="flowtrack@example.com"></label>
+        <label>${T('Send a test letter to')}<input id="rmTo" value="${esc((d.mail_to || [])[0] || '')}" placeholder="admin@example.com"></label></div>
+      <p class="err" id="rmErr" hidden></p><p class="note" id="rmOk" hidden></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Save')}</button><button class="btn" type="button" id="rmTest">${T('Send a test')}</button>${m.ready ? `<button class="btn" type="button" id="rmNo">${T('Cancel')}</button>` : ''}</div></form>`;
+    const tls = () => { $('rmVerify').disabled = $('rmSec').value === 'none'; }; $('rmSec').onchange = tls; tls();
+    const body = () => ({host:$('rmHost').value.trim(), port:Number($('rmPort').value), security:$('rmSec').value, verify:$('rmVerify').checked,
+      user:$('rmUser').value.trim(), password:$('rmPass').value, sender:$('rmFrom').value.trim()});
+    const say = (ok, msg) => { formErr('rmErr', ok ? '' : msg); const n = $('rmOk'); n.textContent = ok ? msg : ''; n.hidden = !ok; };
+    if ($('rmNo')) $('rmNo').onclick = () => { mailOpen = false; drawMail(); };
+    $('rmTest').onclick = async e => { const b = e.target, old = b.textContent; b.disabled = true; b.textContent = T('Sending…'); say(true, '');
+      try { await apiPost('reports/mail/test', Object.assign(body(), {to:$('rmTo').value.trim(), lang:LANG})); say(true, T('Sent — check the mailbox (and the spam folder).')); }
+      catch (x) { say(false, x.message); } finally { b.disabled = false; b.textContent = old; } };
+    $('rmForm').onsubmit = async e => { e.preventDefault(); say(true, '');
+      try { d = await apiPost('reports/mail', body()); mailOpen = false; drawMail(); draw(); } catch (x) { say(false, x.message); } };
+  };
+  const draw = () => {
+    const el = $('repList'); if (!el || seq !== renderSeq) return;
+    el.classList.remove('loading');
+    el.innerHTML = d.reports.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Report')}</th><th>${T('When')}</th><th>${T('Recipients')}</th><th>${T('Last sent')}</th><th>${T('Next')}</th><th></th></tr></thead><tbody>
       ${d.reports.map(r => { const s = d.status[r.id] || {}, to = r.to.length ? r.to : d.mail_to;
         const last = s.error && s.error_at > (s.sent || 0) ? `<span class="pill crit" title="${esc(s.error)}">${T('failed')}</span> <span class="nat" title="${esc(s.error)}">${esc(s.error.slice(0, 70))}</span>`
           : s.sent ? `${when(s.sent)}<div class="nat">${esc(s.sent_period)} · ${Tn(s.to, '{n} recipient', '{n} recipients', {n:s.to})}</div>` : `<span class="nat">${T('not yet')}</span>`;
+        const next = !r.on ? '—' : s.blocked ? `<span class="pill warn">${T('not sent')}</span><div class="nat" style="font-family:var(--f-body)">${esc(s.blocked)}</div>` : s.next ? when(s.next) : '—';
         return `<tr data-id="${esc(r.id)}"><td><b>${esc(r.name)}</b>${r.on ? '' : ` <span class="pill">${T('off')}</span>`}<div class="nat">${esc(REP_TRAFFIC().find(x => x[0] === r.t)[1])}${r.f.length ? ' · <span class="mono">' + esc(repFilters(r.f)) + '</span>' : ''}</div></td>
           <td>${esc(repWhen(r))}<div class="nat">${esc(r.tz)} · ${esc((langs().find(x => x[0] === r.lang) || [, r.lang])[1])}</div></td>
           <td>${to.length ? esc(to.slice(0, 2).join(', ')) + (to.length > 2 ? ` +${to.length - 2}` : '') : `<span class="nat">${T('none')}</span>`}${r.to.length ? '' : `<div class="nat">${T('those of the notifications')}</div>`}</td>
-          <td>${last}</td><td class="mono">${s.next ? when(s.next) : '—'}</td>
-          <td style="white-space:nowrap;text-align:right"><button class="btn" data-a="pdf" title="${T('Download PDF')} · ${T('The last period, made now')}">PDF ↓</button> <button class="btn" data-a="send" ${d.mail_ready ? '' : 'disabled'}>${T('Send now')}</button> <button class="btn" data-a="edit">${T('Edit')}</button> <button class="btn" data-a="del" title="${T('Delete')}" aria-label="${T('Delete')}">✕</button></td></tr>`; }).join('')}
-      </tbody></table></div>` : `<div class="empty">${T('No reports yet. A weekly report for the management or a daily one for the duty engineer: press New report.')}</div>`);
-    const m = document.getElementById('repMail'); if (m) m.onclick = () => { state.setTab = 'events'; state.evSub = 'notify'; render(); };
+          <td>${last}</td><td class="mono">${next}</td>
+          <td style="white-space:nowrap;text-align:right"><button class="btn" data-a="pdf" title="${T('Download PDF')} · ${T('The last period, made now')}">PDF ↓</button> <button class="btn" data-a="send" ${s.blocked ? `disabled title="${esc(s.blocked)}"` : ''}>${T('Send now')}</button> <button class="btn" data-a="edit">${T('Edit')}</button> <button class="btn" data-a="del" title="${T('Delete')}" aria-label="${T('Delete')}">✕</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : `<div class="empty">${T('No reports yet. A weekly report for the management or a daily one for the duty engineer: press New report.')}</div>`;
     el.querySelectorAll('button[data-a]').forEach(b => b.onclick = async () => {
       const r = d.reports.find(x => x.id === b.closest('tr').dataset.id); formErr('repErr', '');
       if (b.dataset.a === 'edit') return openReport(r);
@@ -2611,13 +2663,16 @@ function vReports(){
   };
   // ---- the form of a new or a changed report (a modal): Download PDF tries it before it is saved
   const openReport = r => {
-    const x = r || Object.assign({}, d.blank, {name:'', to:[]}), secs = REP_SECTIONS();
+    const x = Object.assign({}, d.blank, r || {name:'', to:[]}), secs = REP_SECTIONS();
     let tz = x.tz; if (!r) { try { const b = Intl.DateTimeFormat().resolvedOptions().timeZone, n = TZ_RENAMED[b] || b; if (d.timezones.includes(n)) tz = n; } catch (e) {} }
     if (!r) x.lang = LANG;
     const md = openModal(r ? T('Edit the report') : T('New report'), r ? esc(r.name) : T('sent by e-mail as a PDF'), `<form class="form" id="rpForm" novalidate style="padding:4px 2px">
+      ${d.mail_ready ? '' : `<p class="note" id="rpNoMail" style="margin:0;padding:8px 12px;border-radius:10px;background:rgba(255,195,77,.10);border:1px solid rgba(255,195,77,.35);color:var(--warn)">${T('The mail server is not set up: the report can be saved and downloaded, but it is not sent until you set up the mail server (Mail server, above the list).')}</p>`}
       <label>${T('Name')}<input id="rpName" maxlength="80" value="${esc(x.name)}" placeholder="${T('e.g. Weekly traffic report')}"></label>
-      <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+      <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
         <label>${T('How often')}<select id="rpEvery">${REP_EVERY().map(([k, l]) => `<option value="${k}" ${x.every === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label id="rpWdayL">${T('Day of the week')}<select id="rpWday">${WDAYS().map((l, i) => `<option value="${i}" ${+x.wday === i ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+        <label id="rpMdayL">${T('Day of the month')}<select id="rpMday">${[...Array(28)].map((_, i) => `<option value="${i + 1}" ${+x.mday === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>
         <label>${T('At')}<input id="rpAt" type="time" value="${esc(x.at)}"></label>
         <label>${T('Language')}<select id="rpLang">${langs().map(([k, l]) => `<option value="${k}" ${x.lang === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
       <p class="note" id="rpWhen" style="margin:0"></p>
@@ -2632,14 +2687,14 @@ function vReports(){
       <label class="chk"><input type="checkbox" id="rpOn" ${x.on ? 'checked' : ''}>${T('Send on schedule')}</label>
       <p class="err" id="rpErr" hidden></p>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Save')}</button><button class="btn" type="button" id="rpPdf">${T('Download PDF')}</button><button class="btn" type="button" id="rpNo">${T('Cancel')}</button></div></form>`, true);
-    const $ = id => document.getElementById(id);
-    const hint = () => { $('rpWhen').textContent = repWhen({every:$('rpEvery').value, at:$('rpAt').value || '07:00'}) + ' · ' +
-      ({day:T('covers the day before'), week:T('covers Monday to Sunday'), month:T('covers the calendar month')})[$('rpEvery').value]; };
-    $('rpEvery').onchange = hint; $('rpAt').oninput = hint; hint();
+    const sched = () => ({every:$('rpEvery').value, wday:Number($('rpWday').value), mday:Number($('rpMday').value), at:$('rpAt').value || '07:00'});
+    const hint = () => { const s = sched(); $('rpWdayL').hidden = s.every !== 'week'; $('rpMdayL').hidden = s.every !== 'month';
+      $('rpWhen').textContent = repWhen(s) + ' · ' + repNext(s); };
+    ['rpEvery', 'rpWday', 'rpMday'].forEach(id => $(id).onchange = hint); $('rpAt').oninput = hint; hint();
     const form = () => { const f = [];
       for (const t of $('rpF').value.trim().split(/\s+/).filter(Boolean)) { const p = qParse(t); if (p.err) throw new Error(p.err); if (!p.f) throw new Error(T('Not a filter: {v}', {v:t})); f.push(p.f); }
-      return {id:r ? r.id : '', name:$('rpName').value.trim(), every:$('rpEvery').value, at:$('rpAt').value, lang:$('rpLang').value, tz:$('rpTz').value,
-        to:$('rpTo').value, t:$('rpT').value, f, sections:[...document.querySelectorAll('#rpForm [data-sec]:checked')].map(c => c.dataset.sec), on:$('rpOn').checked}; };
+      return Object.assign(sched(), {id:r ? r.id : '', name:$('rpName').value.trim(), lang:$('rpLang').value, tz:$('rpTz').value, to:$('rpTo').value, t:$('rpT').value, f,
+        sections:[...document.querySelectorAll('#rpForm [data-sec]:checked')].map(c => c.dataset.sec), on:$('rpOn').checked}); };
     $('rpNo').onclick = md.close;
     $('rpPdf').onclick = async e => { let f; try { f = form(); } catch (x) { return formErr('rpErr', x.message); }
       formErr('rpErr', await repDownload({form:JSON.stringify(Object.assign(f, {name:f.name || T('Report')}))}, e.target)); };
@@ -2647,9 +2702,9 @@ function vReports(){
       try { d = await apiPost('reports/save', form()); md.close(); draw(); } catch (x) { formErr('rpErr', x.message); } };
     $('rpName').focus();
   };
-  document.getElementById('repNew').onclick = () => d && openReport(null);
-  (async () => { try { const r = await fetch('api/reports'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; draw(); }
-    catch (e) { const el = document.getElementById('repList'); if (el) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } } })();
+  $('repNew').onclick = () => d && openReport(null);
+  (async () => { try { const r = await fetch('api/reports'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; drawMail(); draw(); }
+    catch (e) { const el = $('repList'); if (el) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } } })();
 }
 function vGeneral(){
   const ed = META.edition || {};

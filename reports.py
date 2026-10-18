@@ -51,7 +51,7 @@ def system_tz():
 
 
 def blank():
-    return {'id': '', 'name': '', 'on': True, 'every': 'week', 'at': '07:00', 'tz': system_tz(), 'lang': 'uk', 'to': [],
+    return {'id': '', 'name': '', 'on': True, 'every': 'week', 'wday': 0, 'mday': 1, 'at': '07:00', 'tz': system_tz(), 'lang': 'uk', 'to': [],
             't': 'internet', 'f': [], 'sections': list(SECTIONS), 'created': 0}
 
 
@@ -104,6 +104,13 @@ def validate(body, old=None):
     if body.get('every') not in EVERY:
         raise ValueError(tr('Choose how often the report is sent.'))
     r['every'] = body['every']
+    # (1.10.0) the day it goes out: a weekday (0 = Monday) for a weekly report, a day of the month 1–28 for a monthly one
+    try:
+        r['wday'] = int(body.get('wday', r['wday']))
+        r['mday'] = int(body.get('mday', r['mday']))
+        assert 0 <= r['wday'] <= 6 and 1 <= r['mday'] <= 28
+    except (TypeError, ValueError, AssertionError):
+        raise ValueError(tr('The day of sending is a weekday, or a day of the month from 1 to 28.')) from None
     at = str(body.get('at') or '07:00').strip()
     if not TIME_RE.match(at):
         raise ValueError(tr('The time of sending is HH:MM, e.g. 07:00.'))
@@ -175,23 +182,31 @@ def remove(rid):
 # ------------------------------------------------------------------ periods
 
 def period(r, now, back=0):
-    """-> (t0, t1): the last whole day / week (Monday to Sunday) / calendar month of the report's time zone that ended
-    by `now` (back=1: the one before it)."""
+    """-> (t0, t1): the last whole period of the report's time zone that ended by `now` (back=1: the one before it).
+    A period ends at midnight of the day the report goes out: a daily one covers the day before, a weekly one the 7 days
+    before its weekday (Monday: Monday to Sunday), a monthly one the month before its day (the 1st: the calendar
+    month; the 15th: 15 September to 14 October)."""
     tz = ZoneInfo(r['tz'])
     d = datetime.datetime.fromtimestamp(now, tz).date()
     if r['every'] == 'day':
         end = d - datetime.timedelta(days=back)
         start = end - datetime.timedelta(days=1)
     elif r['every'] == 'week':
-        end = d - datetime.timedelta(days=d.weekday() + 7 * back)
+        end = d - datetime.timedelta(days=(d.weekday() - r.get('wday', 0)) % 7 + 7 * back)
         start = end - datetime.timedelta(days=7)
     else:
-        end = d.replace(day=1)
+        n = r.get('mday', 1)
+        end = d.replace(day=n) if d.day >= n else _month_before(d.replace(day=n))
         for _ in range(back):
-            end = (end - datetime.timedelta(days=1)).replace(day=1)
-        start = (end - datetime.timedelta(days=1)).replace(day=1)
+            end = _month_before(end)
+        start = _month_before(end)
     ts = lambda x: int(datetime.datetime.combine(x, datetime.time(), tz).timestamp())     # noqa: E731
     return ts(start), ts(end)
+
+
+def _month_before(d):
+    """The same day (1–28) a month earlier."""
+    return (d.replace(day=1) - datetime.timedelta(days=1)).replace(day=d.day)
 
 
 def send_time(r, t1):
@@ -203,12 +218,16 @@ def send_time(r, t1):
 
 
 def period_label(r, t0, t1):
+    """A day (2026-10-17), a calendar month (October 2026), days (2026-10-12 — 2026-10-18), or, for a period that
+    does not start or end at midnight, with the times."""
     tz = ZoneInfo(r['tz'])
-    a = datetime.datetime.fromtimestamp(t0, tz)
-    b = datetime.datetime.fromtimestamp(t1 - 1, tz)
-    if r['every'] == 'day':
+    a, e = datetime.datetime.fromtimestamp(t0, tz), datetime.datetime.fromtimestamp(t1, tz)
+    if (a.hour, a.minute, e.hour, e.minute) != (0, 0, 0, 0):
+        return f"{a.strftime('%Y-%m-%d %H:%M')} — {e.strftime('%Y-%m-%d %H:%M')}"
+    b = e - datetime.timedelta(days=1)
+    if a.date() == b.date():
         return a.strftime('%Y-%m-%d')
-    if r['every'] == 'month':
+    if a.day == 1 and e.day == 1 and (a.year, a.month) == (b.year, b.month):
         return f"{month_name(a.month)} {a.year}"
     return f"{a.strftime('%Y-%m-%d')} — {b.strftime('%Y-%m-%d')}"
 
@@ -325,6 +344,9 @@ def render(r, data, t0, t1, version='', now=None):
     now = now or time.time()
     tz = ZoneInfo(r['tz'])
     sec = set(r['sections'])
+    cov = data.get('cover') or {}
+    p0, p1 = t0, t1                       # the planned period; t0, t1 from here on: what the report really covers
+    t0, t1 = cov.get('t0', t0), cov.get('t1', t1)
     W = A4[0] - 32 * mm - 12          # the frame less its padding
     st = lambda name, **kw: ParagraphStyle(name, **{'fontName': 'FT', 'fontSize': 8.5, 'leading': 11, 'textColor': C(INK), **kw})  # noqa: E731
     P, PM, PR = st('p'), st('pm', textColor=C(INK2)), st('pr', alignment=TA_RIGHT)
@@ -369,6 +391,14 @@ def render(r, data, t0, t1, version='', now=None):
     def two_lines(a, b):
         return Paragraph(f'{esc(a)}<br/><font color="{INK3}" size="7">{esc(b)}</font>' if b else esc(a), P)
 
+    # ---- (1.10.0) a period without (all) its records says so at the top, never as bare zeros
+    note = cover_note(r, cov, p0, p1)
+    if note:
+        b = Table([[Paragraph(f'<font name="FT-Bold">{esc(note[0])}</font><br/>{esc(note[1])}', st('warn', textColor=C('#7A4B00')))]], colWidths=[W])
+        b.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), C('#FFF4DC')), ('LINEBEFORE', (0, 0), (0, -1), 3, C(SEV['warn'])),
+                               ('LEFTPADDING', (0, 0), (-1, -1), 8), ('TOPPADDING', (0, 0), (-1, -1), 6), ('BOTTOMPADDING', (0, 0), (-1, -1), 7)]))
+        story.extend([b, Spacer(0, 4 * mm)])
+
     # ---- totals
     total_b = s['bytes']
     peak = max(((x[1] + x[2] + x[3]) * 8 / step for x in rows), default=0)
@@ -394,14 +424,6 @@ def render(r, data, t0, t1, version='', now=None):
                                ('LINEAFTER', (0, 0), (-2, -1), 3, colors.white), ('LINEBELOW', (0, 0), (-1, 0), 3, colors.white),
                                ('TOPPADDING', (0, 0), (-1, -1), 6), ('LEFTPADDING', (0, 0), (-1, -1), 7)]))
         story.append(t)
-        if not total_b:
-            story.append(Spacer(0, 1.5 * mm))
-            story.append(Paragraph(esc(tr('FlowTrack has no records of this period.')), PM))
-        elif s.get('oldest') and s['oldest'] > t0 + 3600:
-            story.append(Spacer(0, 1.5 * mm))
-            story.append(Paragraph(esc(tr('Records of this period are kept from {when}: the totals cover only that part.',
-                                          when=datetime.datetime.fromtimestamp(s['oldest'], tz).strftime('%Y-%m-%d %H:%M'))), PM))
-
     # ---- traffic over time
     if 'chart' in sec and rows:
         cw, chh, lm, bm = W, 58 * mm, 15 * mm, 7 * mm
@@ -421,14 +443,26 @@ def render(r, data, t0, t1, version='', now=None):
             d.add(Line(lm, y(v), lm + pw, y(v), strokeColor=C(HAIR), strokeWidth=0.5))
             d.add(String(lm - 2, y(v) - 2.5, fmt_rate(v), fontName='FT', fontSize=6.3, fillColor=C(INK3), textAnchor='end'))
             v += tick
-        days = (t1 - t0) // 86400
-        day = datetime.datetime.fromtimestamp(t0, tz).date()
-        marks = []
-        if days <= 1:
-            for hh in range(0, 25, 3):
-                marks.append((t0 + hh * 3600, f'{hh:02d}:00'))
+        marks, span = [], t1 - t0
+        if span <= 2 * 86400:               # clock marks every 3 (6) hours, also for a part of a day
+            every = 3 if span <= 86400 + 3600 else 6
+            t = t0 - t0 % 3600
+            while t <= t1:
+                h = datetime.datetime.fromtimestamp(t, tz)
+                if h.minute == 0 and h.hour % every == 0:
+                    marks.append((t, h.strftime('%H:%M') if h.hour or span <= 86400 + 3600 else h.strftime('%d.%m')))
+                t += 3600
+        elif span <= 4 * 86400:             # a few days: midnights (the date) and noons
+            t = t0 - t0 % 3600
+            while t <= t1:
+                h = datetime.datetime.fromtimestamp(t, tz)
+                if h.minute == 0 and h.hour in (0, 12):
+                    marks.append((t, h.strftime('%d.%m') if h.hour == 0 else '12:00'))
+                t += 3600
         else:
-            every = 1 if days <= 8 else 3 if days <= 31 else 7
+            days = span // 86400 + 1
+            every = 1 if days <= 9 else 3 if days <= 32 else 7
+            day = datetime.datetime.fromtimestamp(t0, tz).date()
             for i in range(0, days + 1, every):
                 dd = day + datetime.timedelta(days=i)
                 marks.append((int(datetime.datetime.combine(dd, datetime.time(), tz).timestamp()), dd.strftime('%d.%m')))
@@ -597,12 +631,58 @@ def render(r, data, t0, t1, version='', now=None):
 
 # ------------------------------------------------------------------ making and sending
 
+def cover(r, data, t0, t1, now):
+    """What the report can really cover of the period (1.10.0). `oldest` of the summary is the first record of the
+    period — or, when it has none, the moment FlowTrack began receiving (0: never). -> {'kind', 't0', 't1'}:
+    full; part (records from a moment inside the period); later (none in the period, all came after it: the report
+    shows what there is instead, up to one period long); silent (the devices sent nothing then); none (never)."""
+    s = data['summary']
+    first = int(s.get('oldest') or 0)
+    if s['bytes']:
+        return {'kind': 'part', 't0': first, 't1': t1} if first > t0 + 3600 else {'kind': 'full', 't0': t0, 't1': t1}
+    if not first:
+        return {'kind': 'none', 't0': t0, 't1': t1}
+    if first >= t1 - 60:
+        end = int(min(now, first + (t1 - t0))) // 300 * 300
+        if end - first >= 300:
+            return {'kind': 'later', 't0': first, 't1': end}
+        return {'kind': 'none', 't0': t0, 't1': t1}
+    return {'kind': 'silent', 't0': t0, 't1': t1}
+
+
+def cover_note(r, cov, p0, p1):
+    """(title, text) of the note on top of a report that does not cover its whole period, or None."""
+    k = cov.get('kind', 'full')
+    if k == 'full':
+        return None
+    tz = ZoneInfo(r['tz'])
+    start = datetime.datetime.fromtimestamp(cov['t0'], tz).strftime('%Y-%m-%d %H:%M')
+    have = period_label(r, cov['t0'], cov['t1'])
+    if k == 'part':
+        return (tr('Not the whole period: records from {start}', start=start),
+                tr('FlowTrack has records of {period} only from {start} (it began collecting then, or older records are no longer kept). '
+                   'The report covers {have}.', period=period_label(r, p0, p1), start=start, have=have))
+    if k == 'later':
+        return (tr('No records of {period} yet: the report shows {have}', period=period_label(r, p0, p1), have=have),
+                tr('FlowTrack has been collecting since {start}, after this period ended. So that the report is not empty, it shows '
+                   'everything collected so far; the next one will cover its whole period.', start=start))
+    if k == 'silent':
+        return (tr('No records in this period'),
+                tr('FlowTrack was running, but the devices sent it nothing then. Check them in Settings → Devices.'))
+    return (tr('FlowTrack has not received any records yet'),
+            tr('Connect a firewall, router or switch in Settings → Devices: the next report will show its traffic.'))
+
+
 def make(r, t0, t1, call, version=''):
     """-> (pdf bytes, data) in the report's language (the caller's language is kept)."""
     ui = get_lang()
     set_lang(r['lang'])
     try:
         data = collect(r, t0, t1, call)
+        cov = cover(r, data, t0, t1, time.time())
+        if cov['kind'] == 'later':           # nothing in the period: what there is, instead of zeros
+            data = collect(r, cov['t0'], cov['t1'], call)
+        data['cover'] = cov
         return render(r, data, t0, t1, version), data
     finally:
         set_lang(ui)
@@ -613,28 +693,40 @@ def file_name(r, t0):
     return f"flowtrack-{slug}-{datetime.datetime.fromtimestamp(t0, ZoneInfo(r['tz'])).strftime('%Y-%m-%d')}.pdf"
 
 
+def mail_problem(r, cfg=None):
+    """Why the report cannot go out by e-mail at all ('' = it can): no mail server, or nobody to send it to."""
+    m = (cfg or notify.load())['email']
+    if not (m['host'] and m['sender']):
+        return tr('No mail server: set it up in Settings → Reports → Mail server.')
+    if not (r['to'] or m['to']):
+        return tr('No recipients: enter them in the report.')
+    return ''
+
+
 def mail(r, pdf, data, t0, t1, cfg=None):
     """The message with the PDF attached, to the report's recipients (or those of the notifications)."""
     cfg = cfg or notify.load()
     m = dict(cfg['email'])
     m['to'] = r['to'] or m['to']
-    if not (m['host'] and m['sender']):
-        raise ValueError(tr('Set up the mail server in Settings → Notifications first.'))
-    if not m['to']:
-        raise ValueError(tr('The report has no recipients.'))
+    why = mail_problem(r, cfg)
+    if why:
+        raise ValueError(why)
     ui = get_lang()
     set_lang(r['lang'])
     try:
-        plabel = period_label(r, t0, t1)
+        plabel = sent_label(r, data, t0, t1)
+        note = cover_note(r, data.get('cover') or {}, t0, t1)
         s = data['summary']
         lines = [(tr('Traffic'), fmt_b(s['bytes'])), (tr('Downloaded'), fmt_b(s['down'])), (tr('Uploaded'), fmt_b(s['up'])),
                  (tr('Inside hosts'), str(s['hosts']))]
         ev = [e for e in data.get('events') or [] if e.get('stored', True)]
         if 'events' in r['sections']:
             lines.append((tr('Security events'), str(len(ev))))
-        text = f"{r['name']} — {plabel}\n\n" + '\n'.join(f'{k}: {v}' for k, v in lines) + '\n\n' + tr('The full report is attached (PDF).')
+        text = f"{r['name']} — {plabel}\n\n" + (f"{note[0]}. {note[1]}\n\n" if note else '') + '\n'.join(f'{k}: {v}' for k, v in lines) + '\n\n' + tr('The full report is attached (PDF).')
         body = (f'<p style="margin:0 0 4px;font-weight:800;font-size:15px">{html.escape(r["name"])}</p>'
-                f'<p style="margin:0 0 14px;color:#5b6478">{html.escape(plabel)}</p><table style="border-collapse:collapse">' +
+                f'<p style="margin:0 0 14px;color:#5b6478">{html.escape(plabel)}</p>' +
+                (f'<div style="background:#fff4dc;border-left:3px solid #f5a524;padding:8px 12px;margin:0 0 14px;color:#7a4b00">'
+                 f'<b>{html.escape(note[0])}</b><br>{html.escape(note[1])}</div>' if note else '') + '<table style="border-collapse:collapse">' +
                 ''.join(f'<tr><td style="padding:3px 18px 3px 0;color:#5b6478">{html.escape(k)}</td><td style="padding:3px 0;font-weight:700">'
                         f'{html.escape(v)}</td></tr>' for k, v in lines) +
                 f'</table><p style="margin:14px 0 0">{html.escape(tr("The full report is attached (PDF)."))}</p>')
@@ -648,14 +740,21 @@ def mail(r, pdf, data, t0, t1, cfg=None):
     return m, msg
 
 
+def sent_label(r, data, t0, t1):
+    """The period a sent report shows: its own, or what there was instead (no records of it yet)."""
+    cov = data.get('cover') or {}
+    return period_label(r, cov['t0'], cov['t1']) if cov.get('kind') == 'later' else period_label(r, t0, t1)
+
+
 def send(r, t0, t1, call, version=''):
+    """-> (recipients, the period the report shows)."""
     pdf, data = make(r, t0, t1, call, version)
     m, msg = mail(r, pdf, data, t0, t1)
     try:
         notify.smtp_send(m, msg, timeout=60)
     except notify.MailError as e:
         raise ValueError(str(e)) from None
-    return len(m['to'])
+    return len(m['to']), sent_label(r, data, t0, t1)
 
 
 def next_send(r, done, now):
@@ -669,13 +768,13 @@ def next_send(r, done, now):
     return 0
 
 
-def note_sent(r, t0, t1, n, now=None):
+def note_sent(r, label, n, now=None):
     """Send now: shown as the last sending; the schedule (what period is done) is left as it was."""
     with _lock:
         st = load_state()
         if any(x['id'] == r['id'] for x in load()):
             s = st.get(r['id'], {})
-            s.update(sent=int(now or time.time()), sent_period=period_label(r, t0, t1), to=n)
+            s.update(sent=int(now or time.time()), sent_period=label, to=n)
             for k in ('error', 'error_at'):
                 s.pop(k, None)
             st[r['id']] = s
@@ -684,10 +783,10 @@ def note_sent(r, t0, t1, n, now=None):
 
 def status():
     """Per report: when it was last sent, the error of the last try, the next sending."""
-    st, now, out = load_state(), time.time(), {}
+    st, now, out, cfg = load_state(), time.time(), {}, notify.load()
     for r in load():
         s = st.get(r['id'], {})
-        out[r['id']] = {'sent': s.get('sent', 0), 'sent_period': s.get('sent_period', ''), 'to': s.get('to', 0),
+        out[r['id']] = {'blocked': mail_problem(r, cfg), 'sent': s.get('sent', 0), 'sent_period': s.get('sent_period', ''), 'to': s.get('to', 0),
                         'error': s.get('error', ''), 'error_at': s.get('error_at', 0),
                         'next': next_send(r, s.get('done', 0), now) if r['on'] else 0}
     return out
@@ -707,11 +806,20 @@ def tick(call, version='', now=None, log=lambda m: print(m, flush=True)):
             s = st.get(r['id'], {})
         if now < at or s.get('done', 0) >= t1 or now - s.get('error_at', 0) < RETRY:
             continue
+        why = mail_problem(r)
+        if why:                         # nothing to try until the settings change: no tries spent, shown in the list
+            if s.get('blocked') != why:
+                with _lock:
+                    st = load_state()
+                    st[r['id']] = dict(st.get(r['id'], {}), blocked=why)
+                    _write(STATE, st)
+                log(f"[flowtrack-api] report {r['name']!r} not sent: {why}")
+            continue
         try:
-            n = send(r, t0, t1, call, version)
-            s = {'done': t1, 'sent': int(now), 'sent_period': period_label(r, t0, t1), 'to': n}
+            n, label = send(r, t0, t1, call, version)
+            s = {'done': t1, 'sent': int(now), 'sent_period': label, 'to': n}      # (blocked and errors cleared)
             sent.append(r['id'])
-            log(f"[flowtrack-api] report {r['name']!r} ({period_label(r, t0, t1)}) sent to {n} recipient(s)")
+            log(f"[flowtrack-api] report {r['name']!r} ({label}) sent to {n} recipient(s)")
         except Exception as e:          # noqa: BLE001 — a report must never stop the schedule of the others
             tries = s.get('tries', 0) + 1 if s.get('try_period') == t1 else 1
             s = dict(s, error=str(e)[:300], error_at=int(now), tries=tries, try_period=t1)

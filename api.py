@@ -1260,6 +1260,19 @@ def _alerts_now(kinds):
                     'text': tr('{device}: {lost} packets ({pct}%) lost in the last hour. Check the path to the collector.',
                                device=exporters_cfg().get(r['exporter'], {}).get('name', r['exporter']), lost=r['lost'], pct=f'{pct:.2f}'),
                     'when': tr('last hour')})
+    # (1.10.0) scheduled reports that cannot go out (no mail server, nobody to send to) or whose last sending failed
+    st = reports.status()
+    for r in reports.load():
+        x = st.get(r['id'], {})
+        if not r['on']:
+            continue
+        if x.get('blocked'):
+            out.append({'sev': 'warn', 'kind': 'report', 'title': tr('Report not sent'), 'when': tr('now'),
+                        'text': tr('{name}: {why}', name=r['name'], why=x['blocked'])})
+        elif x.get('error') and x.get('error_at', 0) > x.get('sent', 0) and time.time() - x['error_at'] < 3 * 86400:
+            out.append({'sev': 'warn', 'kind': 'report', 'title': tr('Report not sent'),
+                        'when': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(x['error_at'])),
+                        'text': tr('{name}: the last sending failed — {error}', name=r['name'], error=x['error'])})
     col = collector_health(60)
     if col and col['socket_drops'] + col['queue_drops']:
         lost = col['socket_drops'] + col['queue_drops']
@@ -2098,6 +2111,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/reports/save': lambda: post_report_save(body),
                 '/api/reports/delete': lambda: post_report_delete(body),
                 '/api/reports/send': lambda: post_report_send(body),
+                '/api/reports/mail': lambda: post_report_mail(body),
+                '/api/reports/mail/test': lambda: post_report_mail_test(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
@@ -2215,7 +2230,7 @@ def report_call(path, q):
 def get_reports():
     cfg = notify.load()
     return {'reports': reports.load(), 'status': reports.status(), 'blank': reports.blank(), 'sections': list(reports.SECTIONS),
-            'mail_ready': bool(cfg['email']['host'] and cfg['email']['sender']), 'mail_to': cfg['email']['to'],
+            'mail': notify.server_public(cfg), 'mail_ready': bool(cfg['email']['host'] and cfg['email']['sender']), 'mail_to': cfg['email']['to'],
             'timezones': sorted(reports.available_timezones())}
 
 
@@ -2233,11 +2248,10 @@ def _report_of(body):
 
 
 def _report_period(r, back):
-    t0, t1 = reports.period(r, time.time(), back)
-    floor = int(time.time()) - (view_days() + 1) * 86400
-    if t1 <= floor:
+    t0, t1 = reports.period(r, time.time(), back)      # older records than the edition keeps: the report says so itself
+    if t1 <= int(time.time()) - (view_days() + 1) * 86400:
         raise BadRequest(tr('This period is older than the records FlowTrack keeps.'))
-    return max(t0, floor + 3600), t1
+    return t0, t1
 
 
 def get_report_pdf(q):
@@ -2271,18 +2285,37 @@ def post_report_delete(body):
     return get_reports()
 
 
+def post_report_mail(body):
+    """The mail server (shared with the e-mail notifications) from Settings → Reports."""
+    try:
+        cfg = notify.validate_server(body, notify.load())
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    notify.save(cfg)
+    return get_reports()
+
+
+def post_report_mail_test(body):
+    """A test letter through the typed (not saved) mail server to the address given."""
+    try:
+        notify.test_server(notify.validate_server(body, notify.load()), str(body.get('to') or '').strip(), body.get('lang'))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return {'ok': True}
+
+
 def post_report_send(body):
     """Send the last period now (the schedule is not changed)."""
     r = _report_of(body)
     t0, t1 = _report_period(r, 0)
     try:
-        n = reports.send(r, t0, t1, report_call, VERSION)
-        reports.note_sent(r, t0, t1, n)
+        n, label = reports.send(r, t0, t1, report_call, VERSION)
+        reports.note_sent(r, label, n)
     except ValueError as e:
         raise BadRequest(str(e)) from None
     except CHError as e:
         raise BadRequest(ch_error_answer(e)[1]) from None
-    return {'ok': True, 'sent': n, 'period': reports.period_label(r, t0, t1)}
+    return {'ok': True, 'sent': n, 'period': label}
 
 
 def get_backups():

@@ -161,6 +161,41 @@ def _validate_email(src, old):
     return m
 
 
+SERVER_KEYS = ('host', 'port', 'security', 'verify', 'user', 'password', 'sender')
+
+
+def validate_server(src, cfg):
+    """(1.10.0) The mail server alone (Settings → Reports → Mail server: shared with the e-mail notifications), checked
+    over the stored settings; recipients, priorities and on/off of the notifications are kept."""
+    old = cfg['email']
+    m = _validate_email(dict(old, on=False, **{k: src[k] for k in SERVER_KEYS if k in src}), old)
+    m.update(on=old['on'], to=old['to'], min_sev=old['min_sev'], lang=old['lang'])
+    return dict(cfg, email=m)
+
+
+def server_public(cfg):
+    m = cfg['email']
+    return dict({k: m[k] for k in SERVER_KEYS if k != 'password'}, password_set=bool(m['password']), ready=bool(m['host'] and m['sender']))
+
+
+def test_server(cfg, to, lang):
+    """A test letter to one address through the given mail server (not saved yet); ValueError for people."""
+    if not MAIL_RE.match(str(to or '')):
+        raise ValueError(tr('Enter the address to send the test letter to.'))
+    m = dict(cfg['email'], to=[to], lang=lang if known_lang(lang) else cfg['email']['lang'])
+    if not (m['host'] and m['sender']):
+        raise ValueError(tr('Enter the mail server and the sender first.'))
+    ui = get_lang()
+    set_lang(m['lang'])
+    t = tr('Test message: FlowTrack reports reach this mailbox.')
+    msg = _mail(m, 'FlowTrack: ' + tr('test message'), t, f'<p>✅ {html.escape(t)}</p>')
+    set_lang(ui)
+    try:
+        smtp_send(m, msg)
+    except MailError as e:
+        raise ValueError(str(e)) from None
+
+
 class TelegramError(Exception):
     pass
 
