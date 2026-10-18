@@ -1990,7 +1990,7 @@ POLLER = snmp.Poller()
 ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf', '/api/mail', '/api/tokens', '/api/ldap'}
 # (1.11.0) what an API token can never do, whatever its scope: people's accounts, the tokens themselves, the license,
 # deleting backups, and what only a browser session has
-TOKEN_DENY = {'/api/users', '/api/users/update', '/api/users/delete', '/api/tokens', '/api/tokens/delete', '/api/ldap', '/api/ldap/test', '/api/license',
+TOKEN_DENY = {'/api/users', '/api/users/update', '/api/users/delete', '/api/tokens', '/api/tokens/delete', '/api/ldap', '/api/ldap/test', '/api/mail/delete', '/api/license',
               '/api/license/deactivate', '/api/license/checkin', '/api/backups/delete', '/api/me/password', '/api/me/prefs',
               '/api/logout', '/api/cancel'}
 COOKIE = 'ft_session'
@@ -2238,6 +2238,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/reports/send_once': lambda: post_report_send_once(body),
                 '/api/mail': lambda: post_mail(body),
                 '/api/mail/test': lambda: post_mail_test(body),
+                '/api/mail/delete': lambda: post_mail_delete(),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
@@ -2489,6 +2490,13 @@ def post_mail(body):
         cfg = notify.validate_server(body, notify.load())
     except ValueError as e:
         raise BadRequest(str(e)) from None
+    notify.save(cfg)
+    return get_mail()
+
+
+def post_mail_delete():
+    """(1.12.1) Settings → General → Mail server → Delete (confirmed in the browser)."""
+    cfg = notify.clear_server(notify.load())
     notify.save(cfg)
     return get_mail()
 

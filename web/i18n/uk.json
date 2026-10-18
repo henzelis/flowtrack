@@ -1686,5 +1686,11 @@
  "in": "вхід",
  "out": "вихід",
  "Gmail did not accept the login or the password. Gmail needs an app password: turn on 2-Step Verification in your Google account, create an app password (Security → App passwords) and enter it here instead of your usual password.": "Gmail не прийняв логін або пароль. Gmail потребує пароль застосунку: увімкніть двоетапну перевірку в акаунті Google, створіть пароль застосунку (Безпека → Паролі застосунків) і введіть його тут замість звичайного пароля.",
- "Microsoft 365 did not accept the login or the password: use an app password, and check that SMTP AUTH is allowed for this mailbox.": "Microsoft 365 не прийняв логін або пароль: використайте пароль застосунку і перевірте, що для цієї скриньки дозволено SMTP AUTH."
+ "Microsoft 365 did not accept the login or the password: use an app password, and check that SMTP AUTH is allowed for this mailbox.": "Microsoft 365 не прийняв логін або пароль: використайте пароль застосунку і перевірте, що для цієї скриньки дозволено SMTP AUTH.",
+ "Delete the mail server": "Видалити поштовий сервер",
+ "Delete the mail server?": "Видалити поштовий сервер?",
+ "FlowTrack forgets the server, the login and the password. Until you set up another one:": "FlowTrack забуде сервер, логін і пароль. Доки ви не налаштуєте інший:",
+ "Telegram, webhooks and the SIEM go on as before.": "Telegram, вебхуки й SIEM працюватимуть як і раніше.",
+ "e-mail notifications are switched off (their recipients are kept);": "сповіщення e-mail вимкнуться (їхні отримувачі збережуться);",
+ "scheduled reports are not sent (they stay, marked «not sent»);": "звіти за розкладом не надсилатимуться (вони лишаться з позначкою «не надсилається»);"
 }

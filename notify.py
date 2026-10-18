@@ -200,6 +200,13 @@ def validate_server(src, cfg):
     return dict(cfg, email=m)
 
 
+def clear_server(cfg):
+    """(1.12.1) Forget the mail server (host, login, password, sender); e-mail notifications are switched off —
+    their recipients, priority and kinds are kept for a server set up later."""
+    m = dict(cfg['email'], **{k: defaults()['email'][k] for k in SERVER_KEYS}, on=False)
+    return dict(cfg, email=m)
+
+
 def server_public(cfg):
     m = cfg['email']
     return dict({k: m[k] for k in SERVER_KEYS if k != 'password'}, password_set=bool(m['password']), ready=bool(m['host'] and m['sender']))

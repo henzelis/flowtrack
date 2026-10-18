@@ -292,6 +292,14 @@ class Schedule(unittest.TestCase):
         with self.assertRaises(ValueError):                 # e-mail on without a mail server: says where to set it up
             notify.validate({'telegram': {}, 'email': {'on': True, 'to': 'noc@example.com'}}, notify.defaults())
 
+    def test_deleting_the_mail_server(self):
+        cfg = notify.validate_server({'host': 'smtp.example.com', 'sender': 'ft@example.com', 'user': 'ft', 'password': 'secret'}, notify.defaults())
+        cfg['email'].update(on=True, to=['noc@example.com'], min_sev='crit')
+        m = notify.clear_server(cfg)['email']
+        self.assertEqual((m['host'], m['user'], m['password'], m['sender'], m['on']), ('', '', '', '', False))
+        self.assertEqual((m['to'], m['min_sev']), (['noc@example.com'], 'crit'))          # kept for a server set up later
+        self.assertFalse(notify.server_public(notify.clear_server(cfg))['ready'])
+
     def test_no_mail_server(self):
         r = reports.validate({'name': 'D', 'every': 'day', 'sections': ['summary']})
         with mock.patch.object(notify, 'load', notify.defaults):

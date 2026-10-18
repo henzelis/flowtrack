@@ -3,6 +3,12 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Delete the mail server** (*Settings → General → Mail server*): asked for in a window of its own that says what
+  stops — scheduled reports are not sent, e-mail notifications are switched off (their recipients are kept);
+  Telegram, webhooks and the SIEM go on.
+
 ## 1.12.0 — 2026-10-18
 
 - **Sign-in through Active Directory / LDAP** (*Settings → Users → Sign-in through the directory*). The sign-in page

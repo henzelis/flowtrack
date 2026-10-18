@@ -2682,8 +2682,22 @@ function mailPanel(el, d){
     const m = d.mail, sec = {starttls:'STARTTLS', ssl:'SSL/TLS', none:T('none')};
     if (m.ready && !open) {
       el.innerHTML = `<div class="about"><div><span>${T('Server')}</span><b class="mono">${esc(m.host)}:${esc(m.port)}</b><span class="nat">${m.security === 'none' ? T('no encryption') : esc(sec[m.security])}${m.user ? ' · ' + esc(m.user) : ''}</span></div>
-        <div><span>${T('From')}</span><b class="mono">${esc(m.sender)}</b><button class="lnk" id="rmChange">${T('Change')}</button></div></div>`;
+        <div><span>${T('From')}</span><b class="mono">${esc(m.sender)}</b><button class="lnk" id="rmChange">${T('Change')}</button></div></div>
+        <div style="margin-top:10px"><button class="btn danger" type="button" id="rmDel">${T('Delete the mail server')}</button></div>`;
       $('rmChange').onclick = () => { open = true; draw(); };
+      // (1.12.1) deleting it: asked for in a window of its own that says what stops working
+      $('rmDel').onclick = () => {
+        const md = openModal(T('Delete the mail server?'), esc(`${m.host}:${m.port}`), `<div class="form" style="padding:4px 2px">
+          <p class="note" style="margin:0">${T('FlowTrack forgets the server, the login and the password. Until you set up another one:')}</p>
+          <ul class="note" style="margin:0;padding-left:18px"><li>${T('scheduled reports are not sent (they stay, marked «not sent»);')}</li>
+            <li>${T('e-mail notifications are switched off (their recipients are kept);')}</li><li>${T('Telegram, webhooks and the SIEM go on as before.')}</li></ul>
+          <p class="err" id="rmDelErr" hidden></p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn danger" type="button" id="rmDelYes">${T('Delete')}</button><button class="btn" type="button" id="rmDelNo">${T('Cancel')}</button></div></div>`);
+        document.getElementById('rmDelNo').onclick = md.close;
+        document.getElementById('rmDelYes').onclick = async () => {
+          try { d = await apiPost('mail/delete', {}); md.close(); open = false; draw(); }
+          catch (x) { formErr('rmDelErr', x.message); } };
+      };
       return;
     }
     el.innerHTML = `${m.ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px"><b>${T('Not set up yet: nothing is sent by e-mail.')}</b> ${T('Enter the SMTP server you send mail through — your own, Gmail or Microsoft 365 (with an app password), or a relay of your provider. FlowTrack only sends: no POP3 or IMAP is needed.')}</p>`}
