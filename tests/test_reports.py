@@ -320,6 +320,19 @@ class Pdf(unittest.TestCase):
         pdf, _ = reports.make(r, ts(2026, 10, 17), ts(2026, 10, 18), empty)
         self.assertTrue(pdf.startswith(b'%PDF'))
 
+    def test_one_bucket_is_drawn(self):
+        def one(path, q):
+            out = fake_call()(path, q)
+            if path == '/api/series':
+                out = {'step': 300, 'rows': [[ts(2026, 10, 17, 17, 50), 40_000_000, 3_000_000, 0, 9]]}
+            if path == '/api/summary':
+                out['oldest'] = ts(2026, 10, 17, 17, 54)
+            return out
+        r = reports.validate({'name': 'x', 'every': 'day', 'tz': 'Europe/Kyiv', 'sections': ['summary', 'chart']})
+        pdf, data = reports.make(r, ts(2026, 10, 17), ts(2026, 10, 18), one)
+        self.assertEqual(data['cover']['kind'], 'part')
+        self.assertTrue(pdf.startswith(b'%PDF'))
+
     def test_numbers(self):
         self.assertEqual(reports.fmt_b(9_340_000_000), '9.34 GB')
         self.assertEqual(reports.fmt_b(512), '512 B')

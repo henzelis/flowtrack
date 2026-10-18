@@ -416,6 +416,7 @@ def render(r, data, t0, t1, version='', now=None):
     total_b = s['bytes']
     peak = max(((x[1] + x[2] + x[3]) * 8 / step for x in rows), default=0)
     avg = total_b * 8 / max(t1 - t0, 1)
+    peak = max(peak, avg)        # a bucket wider than a few minutes covered must not show a peak under the average
     empty = cov.get('kind') in ('before', 'none')       # nothing at all: the note says it, no rows of zeros
     if 'summary' in sec and not empty:
         tiles = [(tr('Traffic'), fmt_b(total_b), delta(total_b, s['p_bytes']) if s.get('has_prev') else ''),
@@ -488,10 +489,13 @@ def render(r, data, t0, t1, version='', now=None):
             if t0 <= t <= t1:
                 d.add(Line(x(t), bm, x(t), bm - 1.5, strokeColor=C(INK3), strokeWidth=0.5))
                 d.add(String(x(t), 0.5, label, fontName='FT', fontSize=6.3, fillColor=C(INK3), textAnchor='middle'))
+        xin = lambda t: x(min(max(t, t0), t1))      # noqa: E731 — a bucket that began before the period starts at its edge
         for col, color in ((1, DOWN), (2, UP)):
             pts = []
             for row in rows:
-                pts += [x(row[0] + step / 2), y(row[col] * 8 / step)]
+                pts += [xin(row[0] + step / 2), y(row[col] * 8 / step)]
+            if len(pts) == 2:                    # one bucket (a short burst): a narrow column instead of nothing
+                pts = [pts[0] - 1.5, pts[1], pts[0] + 1.5, pts[1]]
             if len(pts) >= 4:
                 d.add(Polygon([pts[0], bm] + pts + [pts[-2], bm], fillColor=C(color), fillOpacity=0.16, strokeColor=None))
                 d.add(PolyLine(pts, strokeColor=C(color), strokeWidth=0.9))
@@ -705,6 +709,8 @@ def make(r, t0, t1, call, version=''):
         cov = cover(r, data, t0, t1, time.time())
         if cov['kind'] == 'later':           # nothing in the period: what there is, instead of zeros
             data = collect(r, cov['t0'], cov['t1'], call)
+        elif cov['kind'] == 'part' and 'series' in data and cov['t1'] - cov['t0'] >= 300:
+            data['series'] = collect(dict(r, sections=['chart']), cov['t0'], cov['t1'], call)['series']     # steps of the part there is
         data['cover'] = cov
         return render(r, data, t0, t1, version), data
     finally:
