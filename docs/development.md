@@ -26,4 +26,3 @@
 - Host names from DHCP leases (FortiGate API); SNMP interface counters cross-checked with the flows
 - FortiGate application names from `APPLICATION_TAG` (already stored with every record, not shown yet)
 - DSCP / traffic class: breakdown and colouring by QoS marking
-- Scheduled reports

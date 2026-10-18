@@ -2,6 +2,12 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.10**
+- **Scheduled reports** (*Settings → Reports*): a PDF of the last day, week or month e-mailed at its hour — totals
+  against the period before, traffic over time, the busiest hosts, outside networks, services, countries, named
+  networks, security events and devices; English or Ukrainian, any time zone, narrowed by filters if you like.
+  *Download PDF* and *Send now* any time.
+
 **New in 1.8 – 1.9**
 - *Path analysis* comes alive: five map views — **Classic**, **Lines**, **Stars**, **Metro** and **River** — with the
   traffic moving along every link in the direction it really goes, as dense and as fast as its rate. Each user keeps

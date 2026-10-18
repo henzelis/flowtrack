@@ -3,6 +3,16 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Scheduled reports** (Settings → Reports). A PDF of the last day, week (Monday to Sunday) or calendar month goes by
+  e-mail at its hour, through the mail server of the notifications, to the report's own recipients: totals against
+  the period before, traffic over time, the busiest inside hosts, outside networks, services, countries, your named
+  networks, security events and the state of the devices — in English or Ukrainian, in the time zone you choose.
+  A report can be narrowed by filters (`net:Office`, `device:…`) and to internet or inside traffic; *Download PDF*
+  and *Send now* work at any time. The numbers come from the same queries as the pages. A server that was off at the
+  hour sends the report when it is back; a failed sending is tried again every 15 minutes.
+
 ## 1.9.5 — 2026-10-17
 
 - **Templates belong to their domain** (core 1.5.0). A NetFlow v9 template id is unique only within its source ID, an

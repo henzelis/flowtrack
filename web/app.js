@@ -2538,7 +2538,7 @@ function editionBadge(){
 }
 // ===================== settings: one page, tabs on top =====================
 const SET_TABS = () => [['general', T('General'), ICO.grid], ['devices', T('Devices'), DEV_ICON], ['flowcfg', T('Flow configuration'), ICO.flow],
-  ...(isAdmin() ? [['users', T('Users'), USER_ICON], ['events', T('Events'), ICO.pulse], ['backups', T('Backups'), BK_ICON]] : []), ['license', T('License'), ICO.shield]];
+  ...(isAdmin() ? [['users', T('Users'), USER_ICON], ['events', T('Events'), ICO.pulse], ['backups', T('Backups'), BK_ICON], ['reports', T('Reports'), REP_ICON]] : []), ['license', T('License'), ICO.shield]];
 function vSettings(){
   const tabs = SET_TABS(); if (!tabs.some(t => t[0] === state.setTab)) state.setTab = 'general';
   document.getElementById('view').innerHTML = `<nav class="settabs glass" role="tablist" aria-label="${T('Settings')}">${tabs.map(([k, l, ic]) =>
@@ -2550,7 +2550,106 @@ function vSettings(){
   bar.addEventListener('keydown', e => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;   // arrow keys move between tabs
     const i = tabs.findIndex(t => t[0] === state.setTab), n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length][0];
     state.setTab = n; render(); setTimeout(() => { const b = document.querySelector(`.settabs [data-tab="${n}"]`); if (b) b.focus(); }); });
-  ({general:vGeneral, devices:vDevices, flowcfg:vFlowCfg, users:vUsers, events:vEventsCfg, backups:vBackups, license:vLicense})[state.setTab]();
+  ({general:vGeneral, devices:vDevices, flowcfg:vFlowCfg, users:vUsers, events:vEventsCfg, backups:vBackups, reports:vReports, license:vLicense})[state.setTab]();
+}
+// (1.10.0) scheduled reports: a PDF of the last day / week / month e-mailed at its hour; Download and Send now any time
+const REP_ICON = 'M4 2h7l3 3v11H4zM11 2v3h3M6.5 9h5M6.5 12h5';
+const REP_EVERY = () => [['day', T('Daily')], ['week', T('Weekly')], ['month', T('Monthly')]];
+const REP_SECTIONS = () => ({summary:T('Totals'), chart:T('Traffic over time'), hosts:T('Busiest inside hosts'), outside:T('Outside networks (AS)'),
+  services:T('Services'), countries:T('Countries'), networks:T('Your networks'), events:T('Security events'), devices:T('Devices')});
+const REP_TRAFFIC = () => [['internet', T('Internet traffic')], ['internal', T('Traffic between inside hosts')], ['all', T('All traffic')]];
+const repWhen = r => r.every === 'day' ? T('every day at {t}', {t:r.at}) : r.every === 'week' ? T('Mondays at {t}, for the week before', {t:r.at})
+  : T('on the 1st at {t}, for the month before', {t:r.at});
+// browsers still name some zones by their old names (Chromium: Europe/Kiev); the server's list has the new ones
+const TZ_RENAMED = {'Europe/Kiev':'Europe/Kyiv', 'Europe/Uzhgorod':'Europe/Kyiv', 'Europe/Zaporozhye':'Europe/Kyiv', 'Asia/Calcutta':'Asia/Kolkata',
+  'Asia/Saigon':'Asia/Ho_Chi_Minh', 'Asia/Katmandu':'Asia/Kathmandu', 'Asia/Rangoon':'Asia/Yangon', 'Atlantic/Faeroe':'Atlantic/Faroe',
+  'America/Buenos_Aires':'America/Argentina/Buenos_Aires', 'Pacific/Truk':'Pacific/Chuuk', 'Etc/UTC':'UTC'};
+const repFilters = f => (f || []).map(x => (x.neg ? '-' : '') + x.k + ':' + x.v).join(' ');
+async function repDownload(q, btn){
+  const old = btn.textContent; btn.disabled = true; btn.textContent = T('Making the PDF…');
+  try {
+    const r = await fetch('api/reports/pdf?' + new URLSearchParams(q));
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.status); }
+    const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'flowtrack-report.pdf';
+    const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    return '';
+  } catch (e) { return e.message; } finally { btn.disabled = false; btn.textContent = old; }
+}
+function vReports(){
+  const v = document.getElementById('setBody'), seq = renderSeq;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph(REP_ICON, T('Reports'), T('a PDF of the last day, week or month, e-mailed at its hour · the same numbers as the pages'),
+    `<button class="btn primary" id="repNew">${T('New report')}</button>`)}<div id="repList" class="loading"></div><p class="err" id="repErr" hidden></p></section></div>`;
+  let d = null;
+  const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
+  const draw = () => {
+    const el = document.getElementById('repList'); if (!el || seq !== renderSeq) return;
+    el.classList.remove('loading');
+    const mail = d.mail_ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px">${T('Reports go by e-mail: set up the mail server first in Settings → Events → Notifications.')} <button class="lnk" id="repMail">${T('Open')} →</button></p>`;
+    el.innerHTML = mail + (d.reports.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Report')}</th><th>${T('When')}</th><th>${T('Recipients')}</th><th>${T('Last sent')}</th><th>${T('Next')}</th><th></th></tr></thead><tbody>
+      ${d.reports.map(r => { const s = d.status[r.id] || {}, to = r.to.length ? r.to : d.mail_to;
+        const last = s.error && s.error_at > (s.sent || 0) ? `<span class="pill crit" title="${esc(s.error)}">${T('failed')}</span> <span class="nat" title="${esc(s.error)}">${esc(s.error.slice(0, 70))}</span>`
+          : s.sent ? `${when(s.sent)}<div class="nat">${esc(s.sent_period)} · ${Tn(s.to, '{n} recipient', '{n} recipients', {n:s.to})}</div>` : `<span class="nat">${T('not yet')}</span>`;
+        return `<tr data-id="${esc(r.id)}"><td><b>${esc(r.name)}</b>${r.on ? '' : ` <span class="pill">${T('off')}</span>`}<div class="nat">${esc(REP_TRAFFIC().find(x => x[0] === r.t)[1])}${r.f.length ? ' · <span class="mono">' + esc(repFilters(r.f)) + '</span>' : ''}</div></td>
+          <td>${esc(repWhen(r))}<div class="nat">${esc(r.tz)} · ${esc((langs().find(x => x[0] === r.lang) || [, r.lang])[1])}</div></td>
+          <td>${to.length ? esc(to.slice(0, 2).join(', ')) + (to.length > 2 ? ` +${to.length - 2}` : '') : `<span class="nat">${T('none')}</span>`}${r.to.length ? '' : `<div class="nat">${T('those of the notifications')}</div>`}</td>
+          <td>${last}</td><td class="mono">${s.next ? when(s.next) : '—'}</td>
+          <td style="white-space:nowrap;text-align:right"><button class="btn" data-a="pdf" title="${T('Download PDF')} · ${T('The last period, made now')}">PDF ↓</button> <button class="btn" data-a="send" ${d.mail_ready ? '' : 'disabled'}>${T('Send now')}</button> <button class="btn" data-a="edit">${T('Edit')}</button> <button class="btn" data-a="del" title="${T('Delete')}" aria-label="${T('Delete')}">✕</button></td></tr>`; }).join('')}
+      </tbody></table></div>` : `<div class="empty">${T('No reports yet. A weekly report for the management or a daily one for the duty engineer: press New report.')}</div>`);
+    const m = document.getElementById('repMail'); if (m) m.onclick = () => { state.setTab = 'events'; state.evSub = 'notify'; render(); };
+    el.querySelectorAll('button[data-a]').forEach(b => b.onclick = async () => {
+      const r = d.reports.find(x => x.id === b.closest('tr').dataset.id); formErr('repErr', '');
+      if (b.dataset.a === 'edit') return openReport(r);
+      if (b.dataset.a === 'pdf') return formErr('repErr', await repDownload({id:r.id}, b));
+      if (b.dataset.a === 'del') { if (!confirm(T('Delete the report {name}?', {name:r.name}))) return;
+        try { d = await apiPost('reports/delete', {id:r.id}); draw(); } catch (e) { formErr('repErr', e.message); } return; }
+      const old = b.textContent; b.disabled = true; b.textContent = T('Sending…');
+      try { const x = await apiPost('reports/send', {id:r.id}); b.textContent = '✓ ' + Tn(x.sent, 'sent to {n} recipient', 'sent to {n} recipients', {n:x.sent});
+        setTimeout(async () => { try { d = await (await fetch('api/reports')).json(); draw(); } catch (e) { b.textContent = old; b.disabled = false; } }, 2500); }
+      catch (e) { b.textContent = old; b.disabled = false; formErr('repErr', e.message); }
+    });
+  };
+  // ---- the form of a new or a changed report (a modal): Download PDF tries it before it is saved
+  const openReport = r => {
+    const x = r || Object.assign({}, d.blank, {name:'', to:[]}), secs = REP_SECTIONS();
+    let tz = x.tz; if (!r) { try { const b = Intl.DateTimeFormat().resolvedOptions().timeZone, n = TZ_RENAMED[b] || b; if (d.timezones.includes(n)) tz = n; } catch (e) {} }
+    if (!r) x.lang = LANG;
+    const md = openModal(r ? T('Edit the report') : T('New report'), r ? esc(r.name) : T('sent by e-mail as a PDF'), `<form class="form" id="rpForm" novalidate style="padding:4px 2px">
+      <label>${T('Name')}<input id="rpName" maxlength="80" value="${esc(x.name)}" placeholder="${T('e.g. Weekly traffic report')}"></label>
+      <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+        <label>${T('How often')}<select id="rpEvery">${REP_EVERY().map(([k, l]) => `<option value="${k}" ${x.every === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>${T('At')}<input id="rpAt" type="time" value="${esc(x.at)}"></label>
+        <label>${T('Language')}<select id="rpLang">${langs().map(([k, l]) => `<option value="${k}" ${x.lang === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
+      <p class="note" id="rpWhen" style="margin:0"></p>
+      <label>${T('Time zone')}<select id="rpTz">${d.timezones.map(z => `<option ${z === tz ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
+      <label>${T('Recipients')}<textarea id="rpTo" rows="2" placeholder="${esc(d.mail_to.length ? T('empty: those of the notifications ({to})', {to:d.mail_to.join(', ')}) : 'noc@example.com, boss@example.com')}">${esc(x.to.join(', '))}</textarea></label>
+      <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+        <label>${T('Traffic')}<select id="rpT">${REP_TRAFFIC().map(([k, l]) => `<option value="${k}" ${x.t === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>${T('Filters')}<input id="rpF" class="mono" value="${esc(repFilters(x.f))}" placeholder="net:Office -service:Windows Update"></label></div>
+      <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('What the report holds')}</legend>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px">${Object.entries(secs).map(([k, l]) =>
+          `<label class="chk"><input type="checkbox" data-sec="${k}" ${x.sections.includes(k) ? 'checked' : ''}>${l}</label>`).join('')}</div></fieldset>
+      <label class="chk"><input type="checkbox" id="rpOn" ${x.on ? 'checked' : ''}>${T('Send on schedule')}</label>
+      <p class="err" id="rpErr" hidden></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Save')}</button><button class="btn" type="button" id="rpPdf">${T('Download PDF')}</button><button class="btn" type="button" id="rpNo">${T('Cancel')}</button></div></form>`, true);
+    const $ = id => document.getElementById(id);
+    const hint = () => { $('rpWhen').textContent = repWhen({every:$('rpEvery').value, at:$('rpAt').value || '07:00'}) + ' · ' +
+      ({day:T('covers the day before'), week:T('covers Monday to Sunday'), month:T('covers the calendar month')})[$('rpEvery').value]; };
+    $('rpEvery').onchange = hint; $('rpAt').oninput = hint; hint();
+    const form = () => { const f = [];
+      for (const t of $('rpF').value.trim().split(/\s+/).filter(Boolean)) { const p = qParse(t); if (p.err) throw new Error(p.err); if (!p.f) throw new Error(T('Not a filter: {v}', {v:t})); f.push(p.f); }
+      return {id:r ? r.id : '', name:$('rpName').value.trim(), every:$('rpEvery').value, at:$('rpAt').value, lang:$('rpLang').value, tz:$('rpTz').value,
+        to:$('rpTo').value, t:$('rpT').value, f, sections:[...document.querySelectorAll('#rpForm [data-sec]:checked')].map(c => c.dataset.sec), on:$('rpOn').checked}; };
+    $('rpNo').onclick = md.close;
+    $('rpPdf').onclick = async e => { let f; try { f = form(); } catch (x) { return formErr('rpErr', x.message); }
+      formErr('rpErr', await repDownload({form:JSON.stringify(Object.assign(f, {name:f.name || T('Report')}))}, e.target)); };
+    $('rpForm').onsubmit = async e => { e.preventDefault(); formErr('rpErr', '');
+      try { d = await apiPost('reports/save', form()); md.close(); draw(); } catch (x) { formErr('rpErr', x.message); } };
+    $('rpName').focus();
+  };
+  document.getElementById('repNew').onclick = () => d && openReport(null);
+  (async () => { try { const r = await fetch('api/reports'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; draw(); }
+    catch (e) { const el = document.getElementById('repList'); if (el) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } } })();
 }
 function vGeneral(){
   const ed = META.edition || {};

@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import detect  # noqa: E402
+import reports  # noqa: E402
 import notify  # noqa: E402
 import reputation  # noqa: E402
 import common  # noqa: E402
@@ -1894,7 +1895,7 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups'}
+ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf'}
 COOKIE = 'ft_session'
 
 
@@ -1954,6 +1955,9 @@ class H(BaseHTTPRequestHandler):
         self.send_header('Content-Type', ctype)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', cache)
+        if getattr(self, '_disposition', None):
+            self.send_header('Content-Disposition', self._disposition)
+            self._disposition = None
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.wfile.write(body)
@@ -1979,6 +1983,15 @@ class H(BaseHTTPRequestHandler):
                     return self.json(200, notify.public(notify.load()))
                 if u.path == '/api/backups':
                     return self.json(200, get_backups())
+                if u.path == '/api/reports':
+                    return self.json(200, get_reports())
+                if u.path == '/api/reports/pdf':
+                    try:
+                        name, pdf = get_report_pdf(parse_qs(u.query))
+                    except BadRequest as e:
+                        return self.json(400, {'error': str(e)})
+                    self._disposition = f'attachment; filename="{name}"'
+                    return self.send(200, pdf, 'application/pdf')
                 return self.json(200, {'users': AUTH.list_users()})
         fn = ROUTES.get(u.path)
         if fn:
@@ -2082,6 +2095,9 @@ class H(BaseHTTPRequestHandler):
                 '/api/backups/verify': lambda: post_backups_verify(body),
                 '/api/backups/delete': lambda: post_backups_delete(body, user, self.client_ip()),
                 '/api/backups/test': lambda: post_backups_test(body),
+                '/api/reports/save': lambda: post_report_save(body),
+                '/api/reports/delete': lambda: post_report_delete(body),
+                '/api/reports/send': lambda: post_report_send(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
@@ -2182,6 +2198,91 @@ def ch_error_answer(e):
 
 # ---------------------------------------------------------------- backups (1.8.0): the work is done by root (backup.py)
 SECRETS = {'s3': ('secret',), 'sftp': ('password', 'key'), 'ftp': ('password',)}
+
+
+# ---------------------------------------------------------------- scheduled reports (1.10.0)
+
+def report_call(path, q):
+    """The pages' own queries for a report (reports.collect): as a page asks them, with a longer time limit and
+    below the pages in priority (a month on a busy network). A month of 31 days + the hour of a clock change is
+    trimmed to the longest period the edition shows."""
+    if q.get('from') and q.get('to') and int(q['to'][0]) - int(q['from'][0]) > (view_days() + 1) * 86400:
+        q = dict(q, **{'from': [str(int(q['to'][0]) - (view_days() + 1) * 86400)]})
+    with web_query(f'ftr-{os.urandom(3).hex()}', dict(web_settings(path, q), max_execution_time=max(WEB_SECONDS, 600), priority=8)):
+        return ROUTES[path](q)
+
+
+def get_reports():
+    cfg = notify.load()
+    return {'reports': reports.load(), 'status': reports.status(), 'blank': reports.blank(), 'sections': list(reports.SECTIONS),
+            'mail_ready': bool(cfg['email']['host'] and cfg['email']['sender']), 'mail_to': cfg['email']['to'],
+            'timezones': sorted(reports.available_timezones())}
+
+
+def _report_of(body):
+    """The stored report of body['id'], or the typed one (not saved: Download / Send before saving)."""
+    if body.get('form'):
+        try:
+            return reports.validate(body['form'])
+        except ValueError as e:
+            raise BadRequest(str(e)) from None
+    r = next((x for x in reports.load() if x['id'] == body.get('id')), None)
+    if not r:
+        raise BadRequest(tr('There is no such report any more.'))
+    return r
+
+
+def _report_period(r, back):
+    t0, t1 = reports.period(r, time.time(), back)
+    floor = int(time.time()) - (view_days() + 1) * 86400
+    if t1 <= floor:
+        raise BadRequest(tr('This period is older than the records FlowTrack keeps.'))
+    return max(t0, floor + 3600), t1
+
+
+def get_report_pdf(q):
+    """The PDF of a report's last period (back=1: the one before) for the browser to save."""
+    try:
+        body = {'id': q1(q, 'id', ''), 'form': json.loads(q1(q, 'form', '')) if q.get('form') else None}
+    except ValueError:
+        raise BadRequest('bad form') from None
+    r = _report_of(body)
+    t0, t1 = _report_period(r, max(0, min(q1(q, 'back', '0', int), 12)))
+    try:
+        pdf, _ = reports.make(r, t0, t1, report_call, VERSION)
+    except CHError as e:
+        raise BadRequest(ch_error_answer(e)[1]) from None
+    return reports.file_name(r, t0), pdf
+
+
+def post_report_save(body):
+    try:
+        r = reports.upsert(body)
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return dict(get_reports(), saved=r['id'])
+
+
+def post_report_delete(body):
+    try:
+        reports.remove(str(body.get('id') or ''))
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    return get_reports()
+
+
+def post_report_send(body):
+    """Send the last period now (the schedule is not changed)."""
+    r = _report_of(body)
+    t0, t1 = _report_period(r, 0)
+    try:
+        n = reports.send(r, t0, t1, report_call, VERSION)
+        reports.note_sent(r, t0, t1, n)
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    except CHError as e:
+        raise BadRequest(ch_error_answer(e)[1]) from None
+    return {'ok': True, 'sent': n, 'period': reports.period_label(r, t0, t1)}
 
 
 def get_backups():
@@ -2383,6 +2484,7 @@ if __name__ == '__main__':
             print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
         topo_refresher(threading.Event())
     threading.Thread(target=_topo_warm, daemon=True).start()
+    threading.Thread(target=reports.scheduler, args=(report_call, VERSION), daemon=True).start()      # (1.10.0)
     for srv in servers[1:]:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
     servers[0].serve_forever()

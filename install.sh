@@ -501,7 +501,9 @@ make_venv() {
   "$PREFIX/venv/bin/python" -m pip install -q --upgrade pip
   # backups (1.8): copies to S3 (boto3) and SFTP (paramiko, which brings cryptography: also the encryption of copies)
   "$PREFIX/venv/bin/python" -m pip install -q "maxminddb>=2.2,<3" "boto3>=1.34,<2" "paramiko>=3.4,<4"
-  "$PREFIX/venv/bin/python" -c 'import maxminddb, boto3, paramiko, cryptography'
+  # scheduled reports (1.10): the PDF (reportlab, which brings pillow)
+  "$PREFIX/venv/bin/python" -m pip install -q "reportlab>=4.2,<6"
+  "$PREFIX/venv/bin/python" -c 'import maxminddb, boto3, paramiko, cryptography, reportlab'
   # decoding and license checks moved into the compiled core (FlowTrack 1.2)
   "$PREFIX/venv/bin/python" -m pip uninstall -y -q netflow >/dev/null 2>&1 || true
 }

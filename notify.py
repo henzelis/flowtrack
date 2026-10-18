@@ -8,6 +8,7 @@ server never holds up the detections or the other channel.
 
 The bot token and the SMTP password are secrets: kept in STATE_DIR/notify.json (0600, the service user only), never
 sent to the browser and never written to the log."""
+import functools
 import html
 import json
 import os
@@ -250,13 +251,20 @@ class MailError(Exception):
     pass
 
 
+@functools.lru_cache(maxsize=1)
+def ehlo_name():
+    """This server's name for EHLO, looked up once (1.10.0): with a slow reverse DNS socket.getfqdn() took 5 s for
+    every message."""
+    return socket.getfqdn()
+
+
 def smtp_send(m, msg, timeout=20):
     """Sends one message through the configured server; errors are explained for people (never with the password)."""
     ctx = ssl.create_default_context() if m['verify'] else ssl._create_unverified_context()
     where = f"{m['host']}:{m['port']}"
     try:
-        s = (smtplib.SMTP_SSL(m['host'], m['port'], timeout=timeout, context=ctx) if m['security'] == 'ssl'
-             else smtplib.SMTP(m['host'], m['port'], timeout=timeout))
+        s = (smtplib.SMTP_SSL(m['host'], m['port'], timeout=timeout, context=ctx, local_hostname=ehlo_name()) if m['security'] == 'ssl'
+             else smtplib.SMTP(m['host'], m['port'], timeout=timeout, local_hostname=ehlo_name()))
         with s:
             s.ehlo()
             if m['security'] == 'starttls':
