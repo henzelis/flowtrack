@@ -2,6 +2,10 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.12**
+- **Sign-in through Active Directory / LDAP**: the sign-in page offers «Local account» or your directory; roles from
+  groups (nested in AD), LDAPS / STARTTLS, a *Check* that shows the user's groups and role before you switch it on.
+
 **New in 1.11**
 - **API tokens** (*Settings → API*) for scripts and monitoring — read only, or read and change — and **webhooks**
   (FlowTrack JSON, Slack / Mattermost / Rocket.Chat, Discord; signed with HMAC-SHA256) next to Telegram and e-mail.

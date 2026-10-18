@@ -2872,7 +2872,7 @@ function vGeneral(){
     ${card('shield', T('Edition'), ed.status === 'active' ? 'Pro' : 'Community', `<button class="lnk" id="toLic">${T('License')} →</button>`)}
     ${card('globe', T('Language'), `<select id="langSel" aria-label="${T('Language')}">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${LANG === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
       T('only in this browser'))}
-    ${card(USER_ICON, T('Account'), esc(ME.name), `${ME.role === 'admin' ? T('Administrator') : T('Viewer')} · <button class="lnk" id="myPass">${T('Change my password')}</button>`)}
+    ${card(USER_ICON, T('Account'), esc(ME.display || ME.name), `${ME.role === 'admin' ? T('Administrator') : T('Viewer')}${ME.source === 'ldap' ? ` · ${T('directory account')}` : ` · <button class="lnk" id="myPass">${T('Change my password')}</button>`}`)}
     ${isAdmin() ? `<section class="glass panel s12" id="mailBox">${ph(MAIL_ICON, T('Mail server'), T('e-mail (SMTP) for the reports and the e-mail notifications'))}<div id="mailBody" class="loading"></div></section>` : ''}</div>`;
   if (isAdmin()) (async () => { const el = document.getElementById('mailBody');
     try { const r = await fetch('api/mail'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); mailPanel(el, j);
@@ -2880,7 +2880,7 @@ function vGeneral(){
     catch (e) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } })();
   document.getElementById('langSel').onchange = e => { if (e.target.value !== LANG) setLang(e.target.value); };
   document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
-  document.getElementById('myPass').onclick = openPassword;
+  const mp = document.getElementById('myPass'); if (mp) mp.onclick = openPassword;
 }
 // (1.8.4) a table of settings rows: each added with a checked form, changed or deleted in its row, saved at once.
 // o: {id, admin, fields:[{k, label, opts:[[v, label]], ph, max, mono, num, def}], cols (grid of the form), items,
@@ -3587,17 +3587,20 @@ function openDevice(dev){
 const ROLE_LABEL = {admin:T('Administrator'), viewer:T('Viewer')};
 function vUsers(){
   const v = document.getElementById('setBody');
-  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', T('Users'), T('an administrator manages everything; «Viewer» is read-only, no changes to devices or users'), `<button class="btn primary" id="addUser">${T('+ New user')}</button>`)}<div id="uBox" class="loading"></div></section></div>`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('users', T('Users'), T('an administrator manages everything; «Viewer» is read-only, no changes to devices or users'), `<button class="btn primary" id="addUser">${T('+ New user')}</button>`)}<div id="uBox" class="loading"></div></section>
+    <section class="glass panel s12" id="ldapBox">${ph('M9 2l6 3v4c0 4-3 6.5-6 7.5C6 15.5 3 13 3 9V5zM6.5 9l2 2 3.5-4', T('Sign-in through the directory'), T('Active Directory or LDAP · the sign-in page then offers «Local account» or the directory'))}<div id="ldapBody" class="loading"></div></section></div>`;
+  ldapPanel(document.getElementById('ldapBody'));
   document.getElementById('addUser').onclick = () => openUser(null);
   section('uBox', async () => { const r = await fetch('api/users'); if (!r.ok) throw new Error((await r.json()).error || r.status); const users = (await r.json()).users;
     setTimeout(() => document.querySelectorAll('[data-user]').forEach(b => b.onclick = () => openUser(users.find(u => u.name === b.dataset.user))));
     const when = t => t ? new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : T('never signed in');
     return `<div class="tw"><table><thead><tr><th>${T('Username')}</th><th>${T('Role')}</th><th>${T('Created')}</th><th>${T('Last sign-in')}</th><th></th></tr></thead><tbody>
-      ${users.map(u => `<tr><td><b class="mono">${esc(u.name)}</b>${u.name === ME.name ? ` <span class="tag">${T('you')}</span>` : ''}${u.default_password ? ` <span class="pill warn">${T('default password')}</span>` : ''}</td><td>${u.role === 'admin' ? `<span class="pill info">${T('Administrator')}</span>` : `<span class="tag">${T('Viewer')}</span>`}</td>
+      ${users.map(u => `<tr><td><b class="mono">${esc(u.display || u.name)}</b>${u.source === 'ldap' ? ` <span class="tag" title="${T('signs in through the directory')}">LDAP</span>` : ''}${u.name === ME.name ? ` <span class="tag">${T('you')}</span>` : ''}${u.default_password ? ` <span class="pill warn">${T('default password')}</span>` : ''}</td><td>${u.role === 'admin' ? `<span class="pill info">${T('Administrator')}</span>` : `<span class="tag">${T('Viewer')}</span>`}</td>
         <td class="nat">${when(u.created)}</td><td class="nat">${when(u.last_login)}</td><td><button class="btn" data-user="${esc(u.name)}">${T('Edit')}</button></td></tr>`).join('')}</tbody></table></div>`; });
 }
 function genPassword(){ const a = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'; const b = new Uint32Array(14); crypto.getRandomValues(b); return [...b].map(x => a[x % a.length]).join(''); }
 function openUser(u){
+  if (u && u.source === 'ldap') return openDirUser(u);
   const editing = !!u, self = editing && u.name === ME.name;
   const m = openModal(editing ? T('User {name}', {name: u.name}) : T('New user'), '', `<form class="form" id="uForm">
     <label>${T('Username')}<input id="uName" ${editing ? `value="${esc(u.name)}" readonly` : 'required placeholder="olena"'} autocomplete="off"></label>
@@ -3621,16 +3624,85 @@ function openUser(u){
     document.getElementById('uDelYes').onclick = async () => { try { await apiPost('users/delete', {name:u.name}); m.close(); render(); } catch (err) { formErr('uErr', err.message); } }; }
 }
 
+// (1.12.0) a directory user: the role comes from the groups at each sign-in, the password from the directory; only
+// removing the entry here (it comes back at the next sign-in, while the groups allow it)
+function openDirUser(u){
+  const self = u.name === ME.name;
+  const m = openModal(T('User {name}', {name:u.display || u.name}), T('signs in through the directory'), `<div class="form" style="padding:4px 2px">
+    <div class="about"><div><span>${T('Role')}</span><b>${u.role === 'admin' ? T('Administrator') : T('Viewer')}</b><span class="nat">${T('from the directory groups, at each sign-in')}</span></div>
+      <div><span>${T('Last sign-in')}</span><b>${u.last_login ? new Date(u.last_login * 1000).toLocaleString(LOC) : T('never signed in')}</b></div></div>
+    <p class="note" style="margin:0">${T('To change the role, move the user to another group in the directory; the password is changed in the directory too.')}</p>
+    <p class="err" id="duErr" hidden></p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${self ? '' : `<button class="btn" type="button" id="duDel">${T('Remove from FlowTrack')}</button>`}<button class="btn" type="button" id="duNo">${T('Close')}</button></div></div>`);
+  document.getElementById('duNo').onclick = m.close;
+  const del = document.getElementById('duDel');
+  if (del) del.onclick = async () => { try { await apiPost('users/delete', {name:u.name}); m.close(); render(); } catch (e) { formErr('duErr', e.message); } };
+}
+// the directory settings + a check that shows what FlowTrack finds for a user (groups, role) before anyone relies on it
+function ldapPanel(el){
+  let d = null;
+  const $ = id => document.getElementById(id);
+  const lines = a => (a || []).join('\n');
+  const draw = () => {
+    el.classList.remove('loading');
+    const sec = [['ldaps', T('LDAPS (port 636)')], ['starttls', T('STARTTLS (port 389)')], ['none', T('none — test networks only')]];
+    el.innerHTML = `<form class="form" id="ldForm" novalidate>
+      <label class="chk"><input type="checkbox" id="ldOn" ${d.on ? 'checked' : ''}>${T('Offer sign-in through the directory')}</label>
+      <div class="two"><label>${T('Directory type')}<select id="ldKind"><option value="ad" ${d.kind === 'ad' ? 'selected' : ''}>Active Directory</option><option value="ldap" ${d.kind === 'ldap' ? 'selected' : ''}>${T('LDAP (OpenLDAP, FreeIPA, …)')}</option></select></label>
+        <label>${T('Name on the sign-in page')}<input id="ldLabel" maxlength="40" value="${esc(d.label)}" placeholder="${d.kind === 'ad' ? 'CORP' : 'LDAP'}"></label></div>
+      <div class="two"><label>${T('Server')}<input id="ldHost" value="${esc(d.host)}" placeholder="dc1.corp.example.com" autocomplete="off"></label>
+        <div class="two"><label>${T('Encryption')}<select id="ldSec">${sec.map(([k, l]) => `<option value="${k}" ${d.security === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label>${T('Port')}<input id="ldPort" type="number" min="1" max="65535" value="${esc(d.port)}"></label></div></div>
+      <label class="chk"><input type="checkbox" id="ldVerify" ${d.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
+      <label>${T('CA certificate of the directory (optional, PEM)')}<textarea id="ldCa" rows="2" class="mono" placeholder="-----BEGIN CERTIFICATE-----">${esc(d.ca)}</textarea></label>
+      <div class="two"><label>${T('Service account (bind DN)')}<input id="ldBind" value="${esc(d.bind_dn)}" placeholder="${d.kind === 'ad' ? 'svc-flowtrack@corp.example.com' : 'cn=flowtrack,ou=services,dc=example,dc=org'}" autocomplete="off"></label>
+        <label>${T('Its password')}<input id="ldBindPw" type="password" autocomplete="new-password" placeholder="${d.bind_password_set ? T('saved — leave empty to keep') : ''}"></label></div>
+      <div class="two"><label>${T('Where users are (base DN)')}<input id="ldBase" value="${esc(d.base_dn)}" placeholder="${d.kind === 'ad' ? 'DC=corp,DC=example,DC=com' : 'dc=example,dc=org'}"></label>
+        <label>${T('User filter (optional)')}<input id="ldFilter" class="mono" value="${esc(d.user_filter)}" placeholder="${esc(d.default_filters[d.kind])}"></label></div>
+      <div class="two"><label>${T('Administrator groups (one per line: name or DN)')}<textarea id="ldAdm" rows="2" class="mono" placeholder="FT-Admins">${esc(lines(d.admin_groups))}</textarea></label>
+        <label>${T('Viewer groups')}<textarea id="ldView" rows="2" class="mono" placeholder="FT-Viewers">${esc(lines(d.viewer_groups))}</textarea></label></div>
+      <label class="chk"><input type="checkbox" id="ldAll" ${d.everyone_viewer ? 'checked' : ''}>${T('Anyone else who signs in through the directory gets the viewer role')}</label>
+      <p class="note" style="margin:0">${T('Nested groups count in Active Directory. Local users keep signing in with «Local account»; at least one local administrator always remains — your way in when the directory is unreachable.')}</p>
+      <div class="ldtest"><h4 style="margin:4px 0 6px">${T('Check before switching it on')}</h4>
+        <div class="two"><label>${T('A user to look up (optional)')}<input id="ldTU" autocomplete="off" placeholder="anna"></label>
+          <label>${T('Their password (optional — also checks it)')}<input id="ldTP" type="password" autocomplete="new-password"></label></div>
+        <div><button class="btn" type="button" id="ldTest">${T('Check')}</button></div><div id="ldOut"></div></div>
+      <p class="err" id="ldErr" hidden></p><p class="note" id="ldOk" hidden></p>
+      <div><button class="btn primary" type="submit">${T('Save')}</button></div></form>`;
+    const tls = () => { $('ldVerify').disabled = $('ldSec').value === 'none'; $('ldCa').disabled = $('ldSec').value === 'none'; };
+    $('ldSec').onchange = () => { const p = $('ldPort'); if (['389', '636'].includes(p.value)) p.value = $('ldSec').value === 'ldaps' ? '636' : '389'; tls(); };
+    $('ldKind').onchange = () => { $('ldFilter').placeholder = d.default_filters[$('ldKind').value]; }; tls();
+    const body = () => ({on:$('ldOn').checked, kind:$('ldKind').value, label:$('ldLabel').value.trim(), host:$('ldHost').value.trim(), security:$('ldSec').value,
+      port:$('ldPort').value, verify:$('ldVerify').checked, ca:$('ldCa').value.trim(), bind_dn:$('ldBind').value.trim(), bind_password:$('ldBindPw').value,
+      base_dn:$('ldBase').value.trim(), user_filter:$('ldFilter').value.trim(), admin_groups:$('ldAdm').value, viewer_groups:$('ldView').value, everyone_viewer:$('ldAll').checked});
+    const say = (ok, msg) => { formErr('ldErr', ok ? '' : msg); const n = $('ldOk'); n.textContent = ok ? msg : ''; n.hidden = !ok; };
+    $('ldTest').onclick = async e => { const b = e.target, old = b.textContent; b.disabled = true; b.textContent = T('Checking…'); say(true, ''); $('ldOut').innerHTML = '';
+      try { const r = await apiPost('ldap/test', Object.assign(body(), {test_user:$('ldTU').value.trim(), test_password:$('ldTP').value}));
+        const u = r.user, role = x => x === 'admin' ? T('Administrator') : x === 'viewer' ? T('Viewer') : '';
+        $('ldOut').innerHTML = `<div class="about" style="margin-top:8px"><div><span>${T('Service account')}</span><b style="color:var(--ok)">✓ ${T('signed in, base DN found')}</b></div>
+          ${!u ? '' : !u.found ? `<div><span>${T('User')}</span><b style="color:var(--warn)">${T('not found with this filter')}</b></div>`
+          : `<div><span>${T('User')}</span><b class="mono">${esc(u.name)}</b><span class="nat mono" style="word-break:break-all">${esc(u.dn)}</span></div>
+             <div><span>${T('Groups')}</span><b class="mono" style="font-weight:500;font-size:12px;white-space:normal">${u.groups.length ? u.groups.map(g => esc(g.split(',')[0].split('=')[1] || g)).join(', ') : '—'}</b></div>
+             <div><span>${T('Role in FlowTrack')}</span><b style="color:${u.role ? 'var(--ok)' : 'var(--crit)'}">${u.role ? role(u.role) : T('none — would not get in')}</b>${u.admin_match.length || u.viewer_match.length ? `<span class="nat">${T('by')} ${esc([...u.admin_match, ...u.viewer_match].join(', '))}</span>` : ''}</div>
+             ${'password_ok' in u ? `<div><span>${T('Password')}</span><b style="color:${u.password_ok ? 'var(--ok)' : 'var(--crit)'}">${u.password_ok ? '✓ ' + T('right') : '✕ ' + T('wrong')}</b></div>` : ''}`}</div>`; }
+      catch (x) { say(false, x.message); } finally { b.disabled = false; b.textContent = old; } };
+    $('ldForm').onsubmit = async e => { e.preventDefault(); say(true, '');
+      try { d = await apiPost('ldap', body()); draw(); say(true, T('Saved.') + (d.on ? ' ' + T('The sign-in page now offers «{label}».', {label:d.label || (d.kind === 'ad' ? 'Active Directory' : 'LDAP')}) : '')); }
+      catch (x) { say(false, x.message); } };
+  };
+  fetch('api/ldap').then(r => r.json()).then(j => { d = j; draw(); }).catch(e => { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+}
+
 // ===================== session: login, user menu, password =====================
 function renderUser(){
   const w = document.getElementById('userWrap'); if (!w || !ME) return;
   w.innerHTML = `${ME.default_password ? `<button class="pill warn" id="pwWarn" style="border:0;cursor:pointer" title="${T('Change the default password')}">${T('change password')}</button>` : ''}
-    <button class="user" id="userBtn" aria-haspopup="menu" aria-expanded="false"><span class="avatar">${esc(ME.name[0].toUpperCase())}</span><span class="who"><b>${esc(ME.name)}</b><small>${ROLE_LABEL[ME.role]}</small></span></button>
-    <div class="menu glass" id="userMenu" role="menu" hidden><button role="menuitem" id="miPass">${T('Change password')}</button>${isAdmin() ? `<button role="menuitem" id="miUsers">${T('Users')}</button>` : ''}<button role="menuitem" id="miOut">${T('Sign out')}</button></div>`;
+    <button class="user" id="userBtn" aria-haspopup="menu" aria-expanded="false"><span class="avatar">${esc((ME.display || ME.name)[0].toUpperCase())}</span><span class="who"><b>${esc(ME.display || ME.name)}</b><small>${ROLE_LABEL[ME.role]}</small></span></button>
+    <div class="menu glass" id="userMenu" role="menu" hidden>${ME.source === 'ldap' ? '' : `<button role="menuitem" id="miPass">${T('Change password')}</button>`}${isAdmin() ? `<button role="menuitem" id="miUsers">${T('Users')}</button>` : ''}<button role="menuitem" id="miOut">${T('Sign out')}</button></div>`;
   const btn = document.getElementById('userBtn'), menu = document.getElementById('userMenu');
   btn.onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; btn.setAttribute('aria-expanded', String(!menu.hidden)); };
   menu.addEventListener('click', () => closeUserMenu());
-  document.getElementById('miPass').onclick = openPassword;
+  const mi = document.getElementById('miPass'); if (mi) mi.onclick = openPassword;      // a directory user's password is the directory's
   const pw = document.getElementById('pwWarn'); if (pw) pw.onclick = openPassword;
   const mu = document.getElementById('miUsers'); if (mu) mu.onclick = () => { state.view = 'settings'; state.setTab = 'users'; render(); };
   document.getElementById('miOut').onclick = async () => { try { await apiPost('logout', {}); } catch (e) {} ME = null; showLogin(); };
@@ -3664,13 +3736,23 @@ function showLogin(msg){
     ${msg ? `<p class="note" style="margin:0">${esc(msg)}</p>` : ''}
     <label>${T('Username')}<input id="lUser" required autocomplete="username" autofocus></label>
     <label>${T('Password')}<input id="lPass" type="password" required autocomplete="current-password"></label>
+    <label id="lMethodL" hidden>${T('Sign in with')}<select id="lMethod"></select></label>
     <p class="err" id="lErr" hidden></p>
     <button class="btn primary" type="submit" style="justify-self:stretch;text-align:center;padding:9px">${T('button::Sign in')}</button></form>`;
   document.body.appendChild(box);
   document.getElementById('lUser').focus();
+  // (1.12.0) the directory, when one is set up: the person chooses how to sign in (a local "admin" and the
+  // directory's "admin" are two accounts); the browser remembers the last choice
+  fetch('api/login/methods').then(r => r.json()).then(j => { const ms = j.methods || []; if (ms.length < 2) return;
+    let last = 'ldap'; try { last = localStorage.getItem('ft-login-method') || 'ldap'; } catch (e) {}
+    const sel = document.getElementById('lMethod'); if (!sel) return;
+    sel.innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === last ? 'selected' : ''}>${m.id === 'local' ? T('Local account') : esc(m.label)}</option>`).join('');
+    document.getElementById('lMethodL').hidden = false; }).catch(() => {});
   document.getElementById('loginForm').addEventListener('submit', async e => { e.preventDefault(); formErr('lErr');
     try {
-      ME = await apiPost('login', {username:document.getElementById('lUser').value.trim(), password:document.getElementById('lPass').value});
+      const sel = document.getElementById('lMethod'), method = sel && !document.getElementById('lMethodL').hidden ? sel.value : 'local';
+      ME = await apiPost('login', {username:document.getElementById('lUser').value.trim(), password:document.getElementById('lPass').value, method});
+      try { if (method) localStorage.setItem('ft-login-method', method); } catch (e) {}
       box.remove(); loginShown = false; document.querySelector('.app').hidden = false;
       META = await fetch('api/meta').then(r => r.json()); render(); health();
     } catch (err) { formErr('lErr', err.message); document.getElementById('lPass').select(); } });

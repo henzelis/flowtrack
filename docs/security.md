@@ -29,3 +29,16 @@
 - Webhook secrets and extra headers stay in `notify.json` (0600), are never sent to the browser or the log; with a
   secret each request is signed (HMAC-SHA256 over the timestamp and the body).
 
+## Sign-in through Active Directory / LDAP (1.12.0)
+
+- The sign-in page offers «Local account» or the directory; nothing is guessed from the name. Directory users are kept
+  as `ldap:<name>` without a password; their role comes from their groups at every sign-in and their sessions end
+  after 12 hours (no sliding), so someone removed from a group loses access within that time at the latest.
+- FlowTrack binds with a service account to find the user (the typed name is escaped and restricted to letters,
+  digits and `. _ @ -`, so it cannot change the LDAP filter), then binds as the user to check the password.
+  Use LDAPS or STARTTLS with "Verify the certificate" (paste the directory's CA if it is not a public one); the
+  service account only needs read access. Its password is stored in `/var/lib/flowtrack/ldap.json` (0600) and never
+  sent to the browser.
+- Wrong directory passwords count with the failed logins of the address. At least one local administrator always
+  remains, so a broken or unreachable directory never locks you out. API tokens cannot change these settings.
+

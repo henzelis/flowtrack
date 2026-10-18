@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import Auth, AuthError  # noqa: E402
 import detect  # noqa: E402
+import directory  # noqa: E402
 import reports  # noqa: E402
 import notify  # noqa: E402
 import reputation  # noqa: E402
@@ -1912,10 +1913,10 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf', '/api/mail', '/api/tokens'}
+ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf', '/api/mail', '/api/tokens', '/api/ldap'}
 # (1.11.0) what an API token can never do, whatever its scope: people's accounts, the tokens themselves, the license,
 # deleting backups, and what only a browser session has
-TOKEN_DENY = {'/api/users', '/api/users/update', '/api/users/delete', '/api/tokens', '/api/tokens/delete', '/api/license',
+TOKEN_DENY = {'/api/users', '/api/users/update', '/api/users/delete', '/api/tokens', '/api/tokens/delete', '/api/ldap', '/api/ldap/test', '/api/license',
               '/api/license/deactivate', '/api/license/checkin', '/api/backups/delete', '/api/me/password', '/api/me/prefs',
               '/api/logout', '/api/cancel'}
 COOKIE = 'ft_session'
@@ -1999,6 +2000,9 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path.startswith('/api/'):
+            if u.path == '/api/login/methods':     # (1.12.0) the sign-in page: local, and the directory when it is on
+                m = directory.method(directory.load())
+                return self.json(200, {'methods': [{'id': 'local'}] + ([m] if m else [])})
             try:
                 user, role, tok = self.who()
             except AuthError as e:
@@ -2035,6 +2039,8 @@ class H(BaseHTTPRequestHandler):
                     return self.json(200, get_mail())
                 if u.path == '/api/tokens':
                     return self.json(200, {'tokens': AUTH.list_tokens()})
+                if u.path == '/api/ldap':
+                    return self.json(200, directory.public(directory.load()))
                 if u.path == '/api/reports/pdf':
                     try:
                         name, pdf = get_report_pdf(parse_qs(u.query))
@@ -2099,9 +2105,9 @@ class H(BaseHTTPRequestHandler):
             return self.json(400, {'error': 'bad JSON'})
         try:
             if u.path == '/api/login':
-                token = AUTH.login(body.get('username'), body.get('password'), self.client_ip())
+                token = AUTH.login(body.get('username'), body.get('password'), self.client_ip(), body.get('method') or 'local')
                 self.set_cookie(token, 7 * 86400)
-                return self.json(200, AUTH.public(body['username']))
+                return self.json(200, AUTH.public(AUTH.session_user(token)))      # a directory user: the directory's name
             user, role, api = self.who()
             tok = self.token()
             if not user:
@@ -2125,6 +2131,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/users/update': lambda: AUTH.update_user(user, body.get('name'), body.get('role'), body.get('password')),
                 '/api/users/delete': lambda: AUTH.delete_user(user, body.get('name')),
                 '/api/tokens': lambda: post_token_create(body, user),
+                '/api/ldap': lambda: post_ldap(body),
+                '/api/ldap/test': lambda: post_ldap_test(body),
                 '/api/tokens/delete': lambda: (AUTH.delete_token(body.get('id')), {'tokens': AUTH.list_tokens()})[1],
                 '/api/devices/save': lambda: post_device_save(body, user),
                 '/api/devices/delete': lambda: post_device_delete(body, user),
@@ -2368,6 +2376,26 @@ def post_report_delete(body):
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return get_reports()
+
+
+def post_ldap(body):
+    """(1.12.0) Sign-in through Active Directory / LDAP."""
+    try:
+        cfg = directory.validate(body, directory.load())
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    directory.save(cfg)
+    return directory.public(cfg)
+
+
+def post_ldap_test(body):
+    """The typed (not saved) settings against the server: the service account, the base DN and, with a name, the user,
+    their groups and the role FlowTrack would give (with a password also that)."""
+    try:
+        cfg = directory.validate(dict(body, on=False), directory.load())
+        return directory.test(cfg, str(body.get('test_user') or '').strip(), str(body.get('test_password') or ''))
+    except (ValueError, directory.DirectoryError) as e:
+        raise BadRequest(str(e)) from None
 
 
 def post_token_create(body, user):

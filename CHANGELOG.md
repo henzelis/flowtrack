@@ -3,6 +3,18 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Sign-in through Active Directory / LDAP** (*Settings → Users → Sign-in through the directory*). The sign-in page
+  then asks how to sign in — «Local account» or your directory (e.g. «CORP») — and remembers the choice; a local
+  `admin` and the directory's `admin` are two different accounts. The role comes from the user's groups at every
+  sign-in (administrator groups → Administrator, viewer groups → Viewer, optionally anyone else as a viewer; nested
+  groups count in Active Directory); people in no group are told why they cannot get in. LDAPS or STARTTLS with
+  certificate checking (paste your CA), the service account's password kept on the server only, sign-in by name or
+  by UPN, directory sessions of 12 hours, wrong passwords counted with the failed logins. *Check* shows what FlowTrack
+  finds for a user — DN, groups, the resulting role, whether the password is right — before you switch it on. At least
+  one local administrator always remains: the way in when the directory is unreachable.
+
 ## 1.11.1 — 2026-10-18
 
 - **Filter hints in the report forms**: the *Filters* field of a report and of *Report for a period* now has the guide

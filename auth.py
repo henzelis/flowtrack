@@ -9,6 +9,11 @@
   installation (not to a user), carry a scope — 'read' (what a viewer sees) or 'write' (also the administrator's
   changes, without users, tokens, the license and deleting backups) — and an optional end date. Only their SHA-256 is
   stored (api_tokens.json); the token itself is shown once. Wrong tokens count with the failed logins of the address.
+- Directory users (1.12.0, directory.py): the sign-in page offers "Local account" or the directory (Active Directory /
+  LDAP) when that is on — the person chooses, nothing is guessed. Directory users are kept here as "ldap:<name>"
+  (local names cannot hold ':', so a local "admin" and the directory's "admin" are two accounts), without a password,
+  the role from their groups at every sign-in, sessions of 12 hours without sliding. At least one LOCAL administrator
+  always remains: the way in when the directory is unreachable.
 """
 import hashlib
 import hmac
@@ -20,12 +25,15 @@ import threading
 import time
 from collections import defaultdict, deque
 
+import directory
 from common import tr
 
 STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
 USERS_FILE = os.path.join(STATE_DIR, 'users.json')
 SESSIONS_FILE = os.path.join(STATE_DIR, 'sessions.json')
 SESSION_TTL = 7 * 86400
+DIRECTORY_TTL = 12 * 3600               # (1.12.0) a directory user's session: their groups are checked again after it
+LDAP_PREFIX = 'ldap:'                   # a directory user's key in users.json (local names cannot contain ':')
 ROLES = ('admin', 'viewer')
 NAME_RE = re.compile(r'^[A-Za-z0-9._-]{2,32}$')
 MIN_PASSWORD = 8
@@ -111,7 +119,8 @@ class Auth:
     def public(self, name):
         u = self.users[name]
         return {'name': name, 'role': u['role'], 'created': u.get('created', 0), 'last_login': u.get('last_login', 0),
-                'default_password': bool(u.get('default')), 'prefs': dict(u.get('prefs') or {})}
+                'default_password': bool(u.get('default')), 'prefs': dict(u.get('prefs') or {}), 'source': u.get('source', 'local'),
+                'display': name[len(LDAP_PREFIX):] if u.get('source') == 'ldap' else name}
 
     # (1.9.0) what a user chose for themself, kept with the account (any browser): the Path analysis map view
     PREFS = {'path_view': ('classic', 'lines', 'stars', 'metro', 'river')}
@@ -135,7 +144,7 @@ class Auth:
         """The password of `name`, under the lock; 5 wrong ones from one address in 5 minutes -> 429 for a while."""
         now = time.time()
         q = self._too_many(ip, now)
-        u = self.users.get(name) if isinstance(name, str) else None
+        u = self._local(name)              # a directory user has no local password (1.12.0)
         # always run scrypt so response time does not reveal whether the user exists
         calc = _hash(password if isinstance(password, str) else '', bytes.fromhex(u['salt']) if u else b'0' * 16)
         if not u or not hmac.compare_digest(calc, u['hash']):
@@ -146,20 +155,64 @@ class Auth:
 
     def check_password(self, name, password, ip):
         """(1.8.8) Confirm a dangerous action with the signed-in user's own password (no new session); wrong ones
-        count with the failed logins."""
+        count with the failed logins. A directory user's password is checked by the directory (1.12.0)."""
+        if self.users.get(name, {}).get('source') == 'ldap':
+            now = time.time()
+            with self.lock:
+                q = self._too_many(ip, now)
+            try:
+                r = directory.authenticate(directory.load(), name[len(LDAP_PREFIX):], password)
+            except directory.DirectoryError:
+                raise AuthError(tr('The directory cannot be reached now to check your password.'), 503) from None
+            if not r or LDAP_PREFIX + r['name'] != name:
+                with self.lock:
+                    q.append(now)
+                raise AuthError(tr('Wrong password'))
+            return
         with self.lock:
             self._verify(name, password, ip, tr('Wrong password'))
 
-    def login(self, name, password, ip):
+    def _local(self, name):
+        u = self.users.get(name) if isinstance(name, str) else None
+        return u if u and u.get('source') != 'ldap' else None
+
+    def login(self, name, password, ip, method='local'):
         now = time.time()
         with self.lock:
-            u = self._verify(name, password, ip, tr('Wrong username or password'))
-            token = secrets.token_urlsafe(32)
-            self.sessions[_tok_id(token)] = {'user': name, 'exp': now + SESSION_TTL, 'created': int(now)}
-            u['last_login'] = int(now)
-            self._save_users()
-            self._save_sessions()
-            return token
+            q = self._too_many(ip, now)
+        if method != 'ldap':
+            with self.lock:
+                u = self._verify(name, password, ip, tr('Wrong username or password'))
+                return self._open_session(name, u, now, SESSION_TTL)
+        # (1.12.0) through the directory — outside the lock: it talks to the network
+        cfg = directory.load()
+        if not cfg['on']:
+            raise AuthError(tr('Sign-in through the directory is off: choose «Local account».'))
+        try:
+            r = directory.authenticate(cfg, name, password)
+        except directory.DirectoryError as e:
+            print(f'[flowtrack-api] directory sign-in of {str(name)[:64]!r}: {e}', flush=True)
+            raise AuthError(tr('The directory cannot be reached now (local users can still sign in). Ask an administrator.'), 503) from None
+        with self.lock:
+            if r is None:
+                q.append(now)
+                raise AuthError(tr('Wrong username or password'))
+            if not r['role']:
+                raise AuthError(tr('Your directory account is not in a FlowTrack group: ask an administrator to add you.'), 403)
+            q.clear()
+            key = LDAP_PREFIX + r['name']
+            u = self.users.get(key) or {'created': int(now), 'source': 'ldap'}
+            u.update(source='ldap', role=r['role'], dn=r['dn'])
+            self.users[key] = u
+            return self._open_session(key, u, now, DIRECTORY_TTL, fixed=True)
+
+    def _open_session(self, name, u, now, ttl, fixed=False):
+        token = secrets.token_urlsafe(32)
+        self.sessions[_tok_id(token)] = {'user': name, 'exp': now + ttl, 'created': int(now), **({'fixed': True} if fixed else {})}
+        u['last_login'] = int(now)
+        self._save_users()
+        self._save_sessions()
+        return token
 
     def session_user(self, token):
         if not token:
@@ -170,7 +223,7 @@ class Auth:
             s = self.sessions.get(tid)
             if not s or s['exp'] < now or s['user'] not in self.users:
                 return None
-            if s['exp'] - now < SESSION_TTL - 86400:      # sliding expiry, written at most once a day
+            if not s.get('fixed') and s['exp'] - now < SESSION_TTL - 86400:      # sliding expiry, written at most once a day
                 s['exp'] = now + SESSION_TTL
                 self._save_sessions()
             return s['user']
@@ -246,6 +299,8 @@ class Auth:
 
     # ------------------------------------------------------------ self-service
     def change_own_password(self, name, current, new, token, ip):
+        if self.users.get(name, {}).get('source') == 'ldap':
+            raise AuthError(tr('Your password belongs to the directory: change it there (e.g. Ctrl+Alt+Del in Windows).'))
         with self.lock:
             self._verify(name, current, ip, tr('The current password is wrong'))     # wrong ones count as failed logins
             self._check_new_password(new)
@@ -271,12 +326,15 @@ class Auth:
             self._set_password(name, password, role=role)
 
     def _admins(self):
-        return [n for n, u in self.users.items() if u['role'] == 'admin']
+        """The LOCAL administrators: one always remains, a way in when the directory is unreachable (1.12.0)."""
+        return [n for n, u in self.users.items() if u['role'] == 'admin' and u.get('source') != 'ldap']
 
     def update_user(self, actor, name, role=None, password=None):
         with self.lock:
             if name not in self.users:
                 raise AuthError(tr('User not found'))
+            if self.users[name].get('source') == 'ldap' and (role not in (None, self.users[name]['role']) or password is not None):
+                raise AuthError(tr('A directory user\'s role comes from their groups and the password from the directory.'))
             if role is not None:
                 if role not in ROLES:
                     raise AuthError(tr('Unknown role'))
@@ -298,7 +356,7 @@ class Auth:
                 raise AuthError(tr('User not found'))
             if name == actor:
                 raise AuthError(tr('You cannot delete yourself'))
-            if self.users[name]['role'] == 'admin' and len(self._admins()) == 1:
+            if self.users[name]['role'] == 'admin' and self.users[name].get('source') != 'ldap' and len(self._admins()) == 1:
                 raise AuthError(tr('At least one administrator must remain'))
             del self.users[name]
             self._save_users()
