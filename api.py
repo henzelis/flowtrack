@@ -1554,6 +1554,8 @@ def _notify_form(body):
     form = dict(body, telegram=dict(body.get('telegram') or {}, on=False))
     if 'email' in body:
         form['email'] = dict(body.get('email') or {}, on=False)
+    if 'webhook' in body:
+        form['webhook'] = dict(body.get('webhook') or {}, on=False)
     try:
         return notify.validate(form, notify.load())
     except ValueError as e:
@@ -1561,10 +1563,10 @@ def _notify_form(body):
 
 
 def post_notify_test(body):
-    """A test message on one channel: 'telegram' (default) or 'email'."""
+    """A test message on one channel: 'telegram' (default), 'email' or 'webhook' (1.11.0)."""
     cfg = _notify_form(body)
     try:
-        notify.test_mail(cfg) if body.get('channel') == 'email' else notify.test(cfg)
+        {'email': notify.test_mail, 'webhook': notify.test_webhook}.get(body.get('channel'), notify.test)(cfg)
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return {'ok': True}
@@ -1908,7 +1910,12 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf', '/api/mail'}
+ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf', '/api/mail', '/api/tokens'}
+# (1.11.0) what an API token can never do, whatever its scope: people's accounts, the tokens themselves, the license,
+# deleting backups, and what only a browser session has
+TOKEN_DENY = {'/api/users', '/api/users/update', '/api/users/delete', '/api/tokens', '/api/tokens/delete', '/api/license',
+              '/api/license/deactivate', '/api/license/checkin', '/api/backups/delete', '/api/me/password', '/api/me/prefs',
+              '/api/logout', '/api/cancel'}
 COOKIE = 'ft_session'
 
 
@@ -1938,6 +1945,18 @@ class H(BaseHTTPRequestHandler):
 
     def token(self):
         return self.cookie(COOKIE)
+
+    def who(self):
+        """(user, role, api token or None) of the request: a browser session, else `Authorization: Bearer ftapi_…`
+        (1.11.0: a 'write' token acts as an administrator, a 'read' one as a viewer). AuthError for a wrong token."""
+        user = AUTH.session_user(self.token())
+        if user:
+            return user, AUTH.users[user]['role'], None
+        h = self.headers.get('Authorization') or ''
+        if h[:7].lower() == 'bearer ' and h[7:].strip():
+            t = AUTH.token_user(h[7:].strip(), self.client_ip())
+            return f"token:{t['name']}", 'admin' if t['scope'] == 'write' else 'viewer', t
+        return None, None, None
 
     def parse_request(self):
         ok = super().parse_request()
@@ -1978,13 +1997,18 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path.startswith('/api/'):
-            user = AUTH.session_user(self.token())
+            try:
+                user, role, tok = self.who()
+            except AuthError as e:
+                return self.json(e.status, {'error': str(e)})
             if not user:
                 return self.json(401, {'error': 'login required'})
+            if tok and u.path in TOKEN_DENY:
+                return self.json(403, {'error': tr('An API token cannot do this: sign in as an administrator.')})
             if u.path == '/api/me':
-                return self.json(200, AUTH.public(user))
+                return self.json(200, AUTH.public(user) if not tok else {'name': user, 'role': role, 'token': tok['scope']})
             if u.path == '/api/edition':
-                return self.json(200, edition_info(admin=AUTH.users[user]['role'] == 'admin'))
+                return self.json(200, edition_info(admin=role == 'admin'))
             if u.path == '/api/progress':      # not a page query itself: it neither cancels nor counts in what it reports
                 return self.json(200, page_progress(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page')))
             if u.path == '/api/report/pdf':        # (1.10.0) a report of any period: any user, it shows what the pages show
@@ -1995,7 +2019,7 @@ class H(BaseHTTPRequestHandler):
                 self._disposition = f'attachment; filename="{name}"'
                 return self.send(200, pdf, 'application/pdf')
             if u.path in ADMIN_GET:
-                if AUTH.users[user]['role'] != 'admin':
+                if role != 'admin':
                     return self.json(403, {'error': tr('Administrator rights required')})
                 if u.path == '/api/events/config':
                     return self.json(200, get_events_config())
@@ -2007,6 +2031,8 @@ class H(BaseHTTPRequestHandler):
                     return self.json(200, get_reports())
                 if u.path == '/api/mail':
                     return self.json(200, get_mail())
+                if u.path == '/api/tokens':
+                    return self.json(200, {'tokens': AUTH.list_tokens()})
                 if u.path == '/api/reports/pdf':
                     try:
                         name, pdf = get_report_pdf(parse_qs(u.query))
@@ -2074,10 +2100,13 @@ class H(BaseHTTPRequestHandler):
                 token = AUTH.login(body.get('username'), body.get('password'), self.client_ip())
                 self.set_cookie(token, 7 * 86400)
                 return self.json(200, AUTH.public(body['username']))
+            user, role, api = self.who()
             tok = self.token()
-            user = AUTH.session_user(tok)
             if not user:
                 return self.json(401, {'error': 'login required'})
+            if api and (u.path in TOKEN_DENY or role != 'admin'):        # (1.11.0) a 'read' token changes nothing
+                return self.json(403, {'error': tr('An API token cannot do this: sign in as an administrator.') if u.path in TOKEN_DENY
+                                       else tr('This API token can only read: create one with changes allowed.')})
             if u.path == '/api/cancel':
                 return self.json(200, cancel_page(tok, self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page')))
             if u.path == '/api/logout':
@@ -2093,6 +2122,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/users': lambda: AUTH.create_user(body.get('name'), body.get('role'), body.get('password')),
                 '/api/users/update': lambda: AUTH.update_user(user, body.get('name'), body.get('role'), body.get('password')),
                 '/api/users/delete': lambda: AUTH.delete_user(user, body.get('name')),
+                '/api/tokens': lambda: post_token_create(body, user),
+                '/api/tokens/delete': lambda: (AUTH.delete_token(body.get('id')), {'tokens': AUTH.list_tokens()})[1],
                 '/api/devices/save': lambda: post_device_save(body, user),
                 '/api/devices/delete': lambda: post_device_delete(body, user),
                 '/api/devices/interfaces': lambda: post_device_interfaces(body, user),
@@ -2126,7 +2157,7 @@ class H(BaseHTTPRequestHandler):
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
-            if AUTH.users[user]['role'] != 'admin':
+            if role != 'admin':
                 return self.json(403, {'error': tr('Administrator rights required')})
             res = admin_routes[u.path]()
             return self.json(200, res if isinstance(res, dict) else {'ok': True})
@@ -2335,6 +2366,12 @@ def post_report_delete(body):
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return get_reports()
+
+
+def post_token_create(body, user):
+    """(1.11.0) A new API token: shown once, in this answer only."""
+    token, row = AUTH.create_token(user, body.get('name'), body.get('scope'), body.get('days'))
+    return {'token': token, 'row': row, 'tokens': AUTH.list_tokens()}
 
 
 def get_mail():

@@ -3,6 +3,18 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **API tokens** (*Settings → API*): scripts and monitoring systems read FlowTrack — and, with a *Read and change*
+  token, change what an administrator changes — through `Authorization: Bearer ftapi_…`, without a password. Shown
+  once, kept as a fingerprint, optional end date, revoked with one click; the list shows when and from where each was
+  last used. A token never manages users, tokens or the license, nor deletes backups; wrong tokens count with the
+  failed logins. Examples and the endpoints: *Settings → API* and [docs/api.md](docs/api.md#api-tokens).
+- **Webhooks** (*Settings → Events → Notifications → Webhook*): new events as an HTTP POST — FlowTrack JSON for your
+  own systems, or messages to Slack, Mattermost, Rocket.Chat or Discord — with the same priority, kinds and hourly
+  limit as the other channels, an optional HMAC-SHA256 signature (`X-FlowTrack-Signature`) and an extra header,
+  retries for an hour, and *Send a test*.
+
 ## 1.10.0 — 2026-10-18
 
 - **Report for a period**: the report button in the top bar makes a PDF of exactly the period and filters on screen —

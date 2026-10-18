@@ -5,6 +5,10 @@
   sessions file cannot be replayed. Sliding expiry of 7 days.
 - Roles: 'admin' (everything, incl. users and devices) and 'viewer' (read-only).
 - On first start, when no users exist, creates admin / flowtrack and flags the password as default.
+- API tokens (1.11.0): for scripts and monitoring, sent as `Authorization: Bearer ftapi_…`. They belong to the
+  installation (not to a user), carry a scope — 'read' (what a viewer sees) or 'write' (also the administrator's
+  changes, without users, tokens, the license and deleting backups) — and an optional end date. Only their SHA-256 is
+  stored (api_tokens.json); the token itself is shown once. Wrong tokens count with the failed logins of the address.
 """
 import hashlib
 import hmac
@@ -25,6 +29,11 @@ SESSION_TTL = 7 * 86400
 ROLES = ('admin', 'viewer')
 NAME_RE = re.compile(r'^[A-Za-z0-9._-]{2,32}$')
 MIN_PASSWORD = 8
+TOKENS_FILE = os.path.join(STATE_DIR, 'api_tokens.json')
+TOKEN_PREFIX = 'ftapi_'
+SCOPES = ('read', 'write')
+TOKEN_DAYS = (0, 30, 90, 365)            # 0 = no end date
+MAX_TOKENS = 50
 DEFAULT_USER, DEFAULT_PASSWORD = 'admin', 'flowtrack'
 
 
@@ -65,6 +74,7 @@ class Auth:
         os.makedirs(STATE_DIR, exist_ok=True)
         self.users = _read_json(USERS_FILE, {})
         self.sessions = _read_json(SESSIONS_FILE, {})
+        self.tokens = _read_json(TOKENS_FILE, {})
         self.fails = defaultdict(deque)          # ip -> timestamps of failed logins
         if not self.users:
             self._set_password(DEFAULT_USER, DEFAULT_PASSWORD, role='admin', default=True)
@@ -78,6 +88,9 @@ class Auth:
 
     def _save_sessions(self):
         _write_json(SESSIONS_FILE, self.sessions)
+
+    def _save_tokens(self):
+        _write_json(TOKENS_FILE, self.tokens)
 
     def _set_password(self, name, password, role=None, default=False):
         salt = secrets.token_bytes(16)
@@ -121,11 +134,7 @@ class Auth:
     def _verify(self, name, password, ip, wrong):
         """The password of `name`, under the lock; 5 wrong ones from one address in 5 minutes -> 429 for a while."""
         now = time.time()
-        q = self.fails[ip]
-        while q and now - q[0] > 300:
-            q.popleft()
-        if len(q) >= 5:
-            raise AuthError(tr('Too many failed attempts. Try again in a few minutes.'), 429)
+        q = self._too_many(ip, now)
         u = self.users.get(name) if isinstance(name, str) else None
         # always run scrypt so response time does not reveal whether the user exists
         calc = _hash(password if isinstance(password, str) else '', bytes.fromhex(u['salt']) if u else b'0' * 16)
@@ -165,6 +174,66 @@ class Auth:
                 s['exp'] = now + SESSION_TTL
                 self._save_sessions()
             return s['user']
+
+    def _too_many(self, ip, now):
+        q = self.fails[ip]
+        while q and now - q[0] > 300:
+            q.popleft()
+        if len(q) >= 5:
+            raise AuthError(tr('Too many failed attempts. Try again in a few minutes.'), 429)
+        return q
+
+    def token_user(self, token, ip):
+        """(1.11.0) The API token of a request -> {'name', 'scope'}; AuthError 401 (unknown, ended) or 429."""
+        now = time.time()
+        with self.lock:
+            q = self._too_many(ip, now)
+            t = self.tokens.get(_tok_id(token)) if isinstance(token, str) and token.startswith(TOKEN_PREFIX) else None
+            if not t or (t.get('expires') and t['expires'] < now):
+                q.append(now)
+                raise AuthError(tr('Invalid or expired API token'), 401)
+            if now - t.get('last_used', 0) > 60 or t.get('last_ip') != ip:      # written at most once a minute
+                t['last_used'], t['last_ip'] = int(now), ip
+                self._save_tokens()
+            return {'name': t['name'], 'scope': t['scope']}
+
+    def list_tokens(self):
+        with self.lock:
+            return sorted(({'id': k[:16], **{f: v.get(f) for f in ('name', 'scope', 'hint', 'created', 'by', 'expires', 'last_used', 'last_ip')}}
+                           for k, v in self.tokens.items()), key=lambda x: -x['created'])
+
+    def create_token(self, actor, name, scope, days):
+        """-> (the token, shown once; its public row)."""
+        name = str(name or '').strip()
+        if not name or len(name) > 48 or any(ord(c) < 32 for c in name):
+            raise AuthError(tr('Give the token a name (up to 48 characters).'))
+        if scope not in SCOPES:
+            raise AuthError(tr('Unknown access level'))
+        try:
+            days = int(days or 0)
+        except (TypeError, ValueError):
+            days = -1
+        if days not in TOKEN_DAYS:
+            raise AuthError(tr('Unknown validity'))
+        now = int(time.time())
+        with self.lock:
+            if any(t['name'].lower() == name.lower() for t in self.tokens.values()):
+                raise AuthError(tr('A token with this name already exists'))
+            if len(self.tokens) >= MAX_TOKENS:
+                raise AuthError(tr('At most {n} tokens.', n=MAX_TOKENS))
+            token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+            self.tokens[_tok_id(token)] = {'name': name, 'scope': scope, 'hint': token[:10] + '…', 'created': now, 'by': actor,
+                                           'expires': now + days * 86400 if days else 0, 'last_used': 0, 'last_ip': ''}
+            self._save_tokens()
+        return token, next(t for t in self.list_tokens() if t['name'] == name)
+
+    def delete_token(self, tid):
+        with self.lock:
+            k = next((k for k in self.tokens if k[:16] == tid and isinstance(tid, str) and len(tid) == 16), None)
+            if not k:
+                raise AuthError(tr('There is no such token any more.'))
+            del self.tokens[k]
+            self._save_tokens()
 
     def logout(self, token):
         with self.lock:

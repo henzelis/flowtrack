@@ -19,3 +19,13 @@
 - ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.
 - Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
   users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`.
+
+## API tokens and webhooks (1.11.0)
+
+- API tokens (`ftapi_…`, 256 random bits) are stored only as SHA-256 in `/var/lib/flowtrack/api_tokens.json` (0600)
+  and shown once. They never manage users, tokens or the license, nor delete backups; a *Read only* token changes
+  nothing. Wrong tokens share the failed-login limit of the address (5 in 5 minutes). Revoke a leaked one in
+  *Settings → API*: it stops working at once.
+- Webhook secrets and extra headers stay in `notify.json` (0600), are never sent to the browser or the log; with a
+  secret each request is signed (HMAC-SHA256 over the timestamp and the body).
+

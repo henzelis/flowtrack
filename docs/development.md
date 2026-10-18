@@ -18,11 +18,10 @@
 ## Roadmap
 
 **Next — scale and reach**
-- CI (GitHub Actions) running the test suite on every push; API tokens for scripts and monitoring
+- CI (GitHub Actions) running the test suite on every push
 - Recommended server sizes for each range of records/s, measured on real hardware
 
 **Features**
-- Notifications: webhook
 - Host names from DHCP leases (FortiGate API); SNMP interface counters cross-checked with the flows
 - FortiGate application names from `APPLICATION_TAG` (already stored with every record, not shown yet)
 - DSCP / traffic class: breakdown and colouring by QoS marking

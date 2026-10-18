@@ -1,4 +1,5 @@
-"""Notifications: new events go to Telegram through the user's own bot (1.6.2) and by e-mail over SMTP (1.6.4).
+"""Notifications: new events go to Telegram through the user's own bot (1.6.2), by e-mail over SMTP (1.6.4) and to a
+webhook (1.11.0: JSON, Slack / Mattermost / Rocket.Chat or Discord, signed with HMAC-SHA256 when a secret is set).
 
 Only an event's first appearance is sent — an activity that goes on extends its event quietly; looking back over the
 past at the first start sends nothing. What goes out: the kinds ticked for it, at or above a minimum priority, at most
@@ -6,9 +7,11 @@ past at the first start sends nothing. What goes out: the kinds ticked for it, a
 check go as one message. Each channel sends from its own thread with retries, so an unreachable Telegram or mail
 server never holds up the detections or the other channel.
 
-The bot token and the SMTP password are secrets: kept in STATE_DIR/notify.json (0600, the service user only), never
+The bot token, the SMTP password and the webhook's secret and extra header are secrets: kept in STATE_DIR/notify.json (0600, the service user only), never
 sent to the browser and never written to the log."""
 import functools
+import hashlib
+import hmac
 import html
 import json
 import os
@@ -24,7 +27,7 @@ import urllib.request
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
-from common import STATE_DIR, get_lang, known_lang, set_lang, tr, trn
+from common import STATE_DIR, VERSION, get_lang, known_lang, set_lang, tr, trn
 
 CONFIG = os.path.join(STATE_DIR, 'notify.json')
 SEVERITIES = ('info', 'warn', 'crit')
@@ -33,8 +36,10 @@ CHAT_RE = re.compile(r'^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$')
 MAIL_RE = re.compile(r'^[^@\s<>"(),;:\\]{1,64}@[A-Za-z0-9.-]{1,253}$')
 HOST_RE = re.compile(r'^([A-Za-z0-9_-]{1,63}\.)*[A-Za-z0-9_-]{1,63}$|^[0-9a-fA-F:]{2,39}$')
 SECURITY = ('starttls', 'ssl', 'none')
-CHANNELS = ('telegram', 'email')
-KINDS = {'telegram': 'kinds', 'email': 'email_kinds'}      # per channel: which kinds go out (absent = yes)
+CHANNELS = ('telegram', 'email', 'webhook')
+KINDS = {'telegram': 'kinds', 'email': 'email_kinds', 'webhook': 'webhook_kinds'}      # per channel: which kinds go out (absent = yes)
+FORMATS = ('json', 'slack', 'discord')
+HEADER_RE = re.compile(r'^([A-Za-z0-9-]{1,64}):\s*([^\r\n]{1,1000})$')
 SEV_COLOR = {'crit': '#e5484d', 'warn': '#f5a524', 'info': '#3e8ed0'}
 RECENT = 1800              # only windows that ended this recently are notified (not the look back at the first start)
 ICON = {'crit': '🔴', 'warn': '🟠', 'info': '🔵'}
@@ -48,7 +53,8 @@ def defaults():
     return {'telegram': {'on': False, 'token': '', 'chat': '', 'min_sev': 'warn', 'lang': 'uk'},
             'email': {'on': False, 'host': '', 'port': 587, 'security': 'starttls', 'verify': True, 'user': '', 'password': '',
                       'sender': '', 'to': [], 'min_sev': 'warn', 'lang': 'uk'},
-            'kinds': {}, 'email_kinds': {}, 'link': '', 'per_hour': 20}
+            'webhook': {'on': False, 'url': '', 'format': 'json', 'secret': '', 'header': '', 'verify': True, 'min_sev': 'warn', 'lang': 'uk'},
+            'kinds': {}, 'email_kinds': {}, 'webhook_kinds': {}, 'link': '', 'per_hour': 20}
 
 
 def load():
@@ -79,8 +85,10 @@ def public(cfg):
     """The settings for the browser: the token and the password only as 'set or not'."""
     t = dict(cfg['telegram'], token='', token_set=bool(cfg['telegram']['token']))
     m = dict(cfg['email'], password='', password_set=bool(cfg['email']['password']))
-    return {'telegram': t, 'email': m, 'kinds': cfg['kinds'], 'email_kinds': cfg['email_kinds'], 'link': cfg['link'],
-            'per_hour': cfg['per_hour']}
+    w = cfg['webhook']
+    w = dict(w, secret='', secret_set=bool(w['secret']), header=w['header'].split(':', 1)[0] if w['header'] else '', header_set=bool(w['header']))
+    return {'telegram': t, 'email': m, 'webhook': w, 'kinds': cfg['kinds'], 'email_kinds': cfg['email_kinds'],
+            'webhook_kinds': cfg['webhook_kinds'], 'link': cfg['link'], 'per_hour': cfg['per_hour']}
 
 
 def validate(body, old):
@@ -113,6 +121,11 @@ def validate(body, old):
         cfg['email_kinds'] = {str(k): bool(v) for k, v in (body.get('email_kinds') or {}).items()}
     else:                                         # a client that knows only Telegram keeps the e-mail settings
         cfg['email'], cfg['email_kinds'] = dict(old['email']), dict(old['email_kinds'])
+    if 'webhook' in body:
+        cfg['webhook'] = _validate_webhook(body.get('webhook') or {}, old['webhook'])
+        cfg['webhook_kinds'] = {str(k): bool(v) for k, v in (body.get('webhook_kinds') or {}).items()}
+    else:
+        cfg['webhook'], cfg['webhook_kinds'] = dict(old['webhook']), dict(old['webhook_kinds'])
     try:
         cfg['per_hour'] = max(1, min(600, int(body.get('per_hour', 20))))
     except (TypeError, ValueError):
@@ -194,6 +207,100 @@ def test_server(cfg, to, lang):
     try:
         smtp_send(m, msg)
     except MailError as e:
+        raise ValueError(str(e)) from None
+
+
+def _validate_webhook(src, old):
+    """(1.11.0) The webhook from the UI: an empty secret / header field keeps the stored one, `clear_*` removes it."""
+    w = defaults()['webhook']
+    w['on'] = bool(src.get('on'))
+    url = str(src.get('url') or '').strip()
+    if url and (len(url) > 1000 or not re.match(r'^https?://[^\s<>"]+$', url)):
+        raise ValueError(tr('The webhook address must start with https:// or http://.'))
+    w['url'] = url
+    if src.get('format') in FORMATS:
+        w['format'] = src['format']
+    sec = str(src.get('secret') or '')
+    if len(sec) > 256 or any(ord(c) < 32 for c in sec):
+        raise ValueError(tr('The secret: up to 256 characters, no control characters.'))
+    w['secret'] = '' if src.get('clear_secret') else (sec or old['secret'])
+    hdr = str(src.get('header') or '').strip()
+    if hdr and not HEADER_RE.match(hdr):
+        raise ValueError(tr('The extra header is "Name: value", e.g. Authorization: Bearer abc123.'))
+    w['header'] = '' if src.get('clear_header') else (hdr or old['header'])
+    w['verify'] = bool(src.get('verify', True))
+    if src.get('min_sev') in SEVERITIES:
+        w['min_sev'] = src['min_sev']
+    if known_lang(src.get('lang')):
+        w['lang'] = src['lang']
+    if w['on'] and not w['url']:
+        raise ValueError(tr('Enter the webhook address to switch the webhook on.'))
+    return w
+
+
+class WebhookError(Exception):
+    pass
+
+
+def webhook_body(w, events, more, link):
+    """The JSON a webhook gets: FlowTrack's own (`json`) or a message for Slack / Mattermost / Rocket.Chat or Discord."""
+    if w['format'] == 'json':
+        keep = lambda r: {k: v for k, v in (r or {}).items() if isinstance(v, (str, int, float, bool)) and k not in ('addrs', 'ports')}   # noqa: E731
+        return {'source': 'FlowTrack', 'version': VERSION, 'link': link or '', 'more': more,
+                'events': [{'kind': e.get('kind', ''), 'severity': e.get('sev', 'info'), 'title': e.get('title', ''), 'text': e.get('text', ''),
+                            'details': keep(e.get('row')) or keep({k: e[k] for k in ('src', 'dst', 'port', 'ip', 'device', 'when') if k in e})}
+                           for e in events]}
+    bold = (lambda t: f'*{t}*') if w['format'] == 'slack' else (lambda t: f'**{t}**')
+    lines = [f"{ICON.get(e.get('sev'), '•')} {bold(e.get('title', '')[:200])}\n{e.get('text', '')[:1500]}" for e in events]
+    if more:
+        lines.append(trn(more, '…and {n} more event (the hourly limit of messages).', '…and {n} more events (the hourly limit of messages).'))
+    if link:
+        lines.append(f"{link}/#v=threats")
+    text = '\n\n'.join(lines)
+    return {'text': text} if w['format'] == 'slack' else {'content': text[:1990]}
+
+
+def webhook_send(w, body, timeout=15):
+    """POSTs the JSON; with a secret the request carries X-FlowTrack-Timestamp and X-FlowTrack-Signature =
+    sha256=HMAC-SHA256(secret, "<timestamp>.<body>"). WebhookError for people (never with the secret)."""
+    data = json.dumps(body, ensure_ascii=False).encode()
+    req = urllib.request.Request(w['url'], data=data, method='POST', headers={'Content-Type': 'application/json; charset=utf-8',
+                                                                              'User-Agent': f'FlowTrack/{VERSION}'})
+    if w['secret']:
+        ts = str(int(time.time()))
+        req.add_header('X-FlowTrack-Timestamp', ts)
+        req.add_header('X-FlowTrack-Signature', 'sha256=' + hmac.new(w['secret'].encode(), ts.encode() + b'.' + data, hashlib.sha256).hexdigest())
+    if w['header']:
+        k, v = HEADER_RE.match(w['header']).groups()
+        req.add_header(k, v)
+    ctx = ssl.create_default_context() if w['verify'] else ssl._create_unverified_context()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+            r.read(4096)
+    except urllib.error.HTTPError as e:
+        raise WebhookError(tr('The webhook answered {code}: {text}', code=e.code, text=e.read(300).decode(errors='replace').strip()[:200] or e.reason)) from None
+    except urllib.error.URLError as e:
+        why = e.reason
+        if isinstance(why, ssl.SSLCertVerificationError):
+            raise WebhookError(tr('The certificate of the webhook is not trusted ({error}). Untick "Verify the certificate" only for your own server.',
+                                  error=why.verify_message or why.reason)) from None
+        raise WebhookError(tr('No connection to the webhook ({error}).', error=getattr(why, 'strerror', None) or why)) from None
+    except (socket.timeout, TimeoutError):
+        raise WebhookError(tr('The webhook did not answer in {n} s.', n=timeout)) from None
+
+
+def test_webhook(cfg):
+    w = cfg['webhook']
+    if not w['url']:
+        raise ValueError(tr('Enter the webhook address first.'))
+    ui = get_lang()
+    set_lang(w['lang'])
+    t = tr('Test message: notifications reach this webhook.')
+    body = webhook_body(w, [{'kind': 'test', 'sev': 'info', 'title': 'FlowTrack', 'text': t}], 0, cfg['link'])
+    set_lang(ui)
+    try:
+        webhook_send(w, body)
+    except WebhookError as e:
         raise ValueError(str(e)) from None
 
 
@@ -413,7 +520,11 @@ def format_events(events, more, lang, link):
 
 def _ready(cfg, ch):
     c = cfg[ch]
-    return bool(c['on'] and (c['token'] and c['chat'] if ch == 'telegram' else c['host'] and c['sender'] and c['to']))
+    if ch == 'webhook':
+        return bool(c['on'] and c['url'])
+    if ch == 'email':      # (1.10.0) the server of Settings → General with the notification recipients
+        return bool(c['on'] and c['host'] and c['sender'] and c['to'])
+    return bool(c['on'] and c['token'] and c['chat'])
 
 
 class Notifier:
@@ -462,7 +573,12 @@ class Notifier:
 
     def _send(self, ch, events, more, c):
         texts = [render(e, c['lang']) for e in events]
-        if ch == 'telegram':
+        if ch == 'webhook':
+            set_lang(c['lang'])
+            body = webhook_body(c, texts, more, c['link'])
+            set_lang('en')                        # errors go to the log, in English
+            webhook_send(c, body)
+        elif ch == 'telegram':
             call(c['token'], 'sendMessage', {'chat_id': c['chat'], 'parse_mode': 'HTML', 'disable_web_page_preview': True,
                                              'text': format_events(texts, more, c['lang'], c['link'])})
         else:
@@ -477,7 +593,7 @@ class Notifier:
                 try:
                     self._send(ch, events, more, c)
                     break
-                except (TelegramError, MailError) as e:
+                except (TelegramError, MailError, WebhookError) as e:
                     set_lang('en')
                     why = _explain(e) if ch == 'telegram' else str(e)
                     self.log(f'WARN {ch}: {why}' + (' — trying again' if attempt < 4 else ' — not sent'))

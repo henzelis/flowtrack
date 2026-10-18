@@ -2180,18 +2180,19 @@ function vEventsCfg(){
   const show = res => {
     const cfg = res.config, kinds = EV_KINDS(), sevs = SEV();
     const box = (id, html) => { const el = document.getElementById(id); el.classList.remove('loading'); el.innerHTML = html; };
-    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On')}</th><th>${T('Event')}</th><th>${T('Priority')}</th><th title="${T('Send this kind to Telegram')}">Telegram</th><th title="${T('Send this kind by e-mail')}">E-mail</th><th>${T('Triggers at')}</th></tr></thead><tbody>
+    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On')}</th><th>${T('Event')}</th><th>${T('Priority')}</th><th title="${T('Send this kind to Telegram')}">Telegram</th><th title="${T('Send this kind by e-mail')}">E-mail</th><th title="${T('Send this kind to the webhook')}">${T('Webhook')}</th><th>${T('Triggers at')}</th></tr></thead><tbody>
       ${Object.entries(kinds).map(([k, [name, desc, thr]]) => { const c = cfg.kinds[k] || {};
         return `<tr data-k="${k}"><td><label class="chk"><input type="checkbox" data-x="on" ${c.on ? 'checked' : ''} aria-label="${esc(name)}"></label></td><td class="wrap"><b>${name}</b><p class="note">${desc}</p></td>
         <td><select data-x="sev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${c.sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></td>
         <td><label class="chk"><input type="checkbox" data-n="${k}" ${res.notify.kinds[k] !== false ? 'checked' : ''} aria-label="Telegram: ${esc(name)}"></label></td>
         <td><label class="chk"><input type="checkbox" data-m="${k}" ${res.notify.email_kinds[k] !== false ? 'checked' : ''} aria-label="E-mail: ${esc(name)}"></label></td>
+        <td><label class="chk"><input type="checkbox" data-w="${k}" ${(res.notify.webhook_kinds || {})[k] !== false ? 'checked' : ''} aria-label="${T('Webhook')}: ${esc(name)}"></label></td>
         <td class="thr"><div>${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</div></td></tr>`; }).join('')}</tbody></table></div>`);
-    const tg = res.notify.telegram, ml = res.notify.email, sevSel = (id, v) => `<select id="${id}">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${v === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select>`;
+    const tg = res.notify.telegram, ml = res.notify.email, wh = res.notify.webhook || {}, sevSel = (id, v) => `<select id="${id}">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${v === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select>`;
     const langSel = (id, v) => `<select id="${id}">${langs().map(([c, l]) => `<option value="${c}" lang="${c}" ${v === c ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
     const on = ch => res.notify[ch].on ? ` <span class="pill ok">${T('on')}</span>` : '';
     const ntTab = state.ntTab || 'telegram';
-    box('evtBox', `<div class="seg ntseg" id="ntSeg" role="tablist">${[['telegram', 'Telegram'], ['email', 'E-mail']].map(([v, l]) =>
+    box('evtBox', `<div class="seg ntseg" id="ntSeg" role="tablist">${[['telegram', 'Telegram'], ['email', 'E-mail'], ['webhook', T('Webhook')]].map(([v, l]) =>
         `<button type="button" role="tab" data-v="${v}" aria-pressed="${v === ntTab}" aria-selected="${v === ntTab}">${l}${on(v)}</button>`).join('')}</div>
       <div class="form tgform" id="ntTelegram" ${ntTab === 'telegram' ? '' : 'hidden'}>
       <p class="note" style="margin:0">${T('1) In Telegram open <b>@BotFather</b>, send /newbot and copy the token. 2) Write any message to your new bot (or add it to a group). 3) Paste the token, press <b>Find chat</b>, pick the chat, Save, and Send a test.')}</p>
@@ -2210,11 +2211,30 @@ function vEventsCfg(){
       <div class="two"><label>${T('Send from priority')}${sevSel('mlSev', ml.min_sev)}</label>
         <label>${T('Language of the messages')}${langSel('mlLang', ml.lang)}</label></div>
       <div><button class="btn" type="button" id="mlTest">${T('Send a test')}</button> <span class="note" id="mlSay"></span></div></div>
+      <div class="form tgform" id="ntWebhook" ${ntTab === 'webhook' ? '' : 'hidden'}>
+      <p class="note" style="margin:0">${T('New events as an HTTP POST: to your own system (FlowTrack JSON), or a message to Slack, Mattermost, Rocket.Chat or Discord (their incoming webhook address).')}</p>
+      <label class="chk"><input type="checkbox" id="whOn" ${wh.on ? 'checked' : ''}>${T('Send new events to the webhook')}</label>
+      <div class="two"><label>${T('Webhook address')}<input id="whUrl" value="${esc(wh.url)}" placeholder="https://hooks.example.com/flowtrack" autocomplete="off"></label>
+        <label>${T('Format')}<select id="whFmt">${[['json', T('FlowTrack JSON')], ['slack', 'Slack / Mattermost / Rocket.Chat'], ['discord', 'Discord']].map(([v, l]) => `<option value="${v}" ${wh.format === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+      <div class="two"><label>${T('Secret for the signature (optional)')}<input id="whSec" type="password" autocomplete="new-password" placeholder="${wh.secret_set ? T('saved — leave empty to keep') : T('e.g. a long random string')}"></label>
+        <label>${T('Extra header (optional)')}<input id="whHdr" autocomplete="off" placeholder="${wh.header_set ? esc(wh.header) + ': ' + T('saved — leave empty to keep') : 'Authorization: Bearer abc123'}"></label></div>
+      ${wh.secret_set || wh.header_set ? `<div style="display:flex;gap:14px;flex-wrap:wrap">${wh.secret_set ? `<label class="chk"><input type="checkbox" id="whSecX">${T('Remove the saved secret')}</label>` : ''}${wh.header_set ? `<label class="chk"><input type="checkbox" id="whHdrX">${T('Remove the saved header')}</label>` : ''}</div>` : ''}
+      <label class="chk"><input type="checkbox" id="whVerify" ${wh.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
+      <div class="two"><label>${T('Send from priority')}${sevSel('whSev', wh.min_sev)}</label>
+        <label>${T('Language of the messages')}${langSel('whLang', wh.lang)}</label></div>
+      <details class="note"><summary>${T('How to check the signature')}</summary><p style="margin:6px 0 0">${T('With a secret every request carries X-FlowTrack-Timestamp and X-FlowTrack-Signature: sha256=HMAC-SHA256(secret, timestamp + "." + body). Compute it over the raw body and compare; refuse timestamps older than 5 minutes.')}</p></details>
+      <div><button class="btn" type="button" id="whTest">${T('Send a test')}</button> <span class="note" id="whSay"></span></div></div>
       <div class="form tgform ntshared"><div class="two"><label>${T('FlowTrack address for the link in messages (optional)')}<input id="tgLink" value="${esc(res.notify.link)}" placeholder="${esc(location.origin)}"></label>
         <label>${T('At most messages an hour, per channel')}<input id="tgHour" type="number" min="1" max="600" value="${esc(res.notify.per_hour)}"></label></div></div>`);
     document.querySelectorAll('#ntSeg [data-v]').forEach(b => b.onclick = () => { state.ntTab = b.dataset.v;
       document.querySelectorAll('#ntSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
-      document.getElementById('ntTelegram').hidden = b.dataset.v !== 'telegram'; document.getElementById('ntEmail').hidden = b.dataset.v !== 'email'; });
+      document.getElementById('ntTelegram').hidden = b.dataset.v !== 'telegram'; document.getElementById('ntEmail').hidden = b.dataset.v !== 'email';
+      document.getElementById('ntWebhook').hidden = b.dataset.v !== 'webhook'; });
+    const whTls = () => { const u = document.getElementById('whUrl').value; document.getElementById('whVerify').disabled = /^http:/i.test(u); };
+    document.getElementById('whUrl').oninput = whTls; whTls();
+    const wsay = (m, bad) => { const e = document.getElementById('whSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
+    document.getElementById('whTest').onclick = async () => { wsay(T('Sending…'));
+      try { await apiPost('notify/test', {...collectNotify(), channel:'webhook'}); wsay(T('Sent — the webhook answered OK.')); } catch (e) { wsay(e.message, true); } };
     wireMailLine(document.getElementById('mlSrv'));
     const msay = (m, bad) => { const e = document.getElementById('mlSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
     document.getElementById('mlTest').onclick = async () => { msay(T('Sending…'));
@@ -2251,12 +2271,16 @@ function vEventsCfg(){
     const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
     return {kinds, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean)};
   };
-  const collectNotify = () => { const kinds = {}, email_kinds = {}, v = id => document.getElementById(id);
+  const collectNotify = () => { const kinds = {}, email_kinds = {}, webhook_kinds = {}, v = id => document.getElementById(id);
+    document.querySelectorAll('table.evk [data-w]').forEach(i => { webhook_kinds[i.dataset.w] = i.checked; });
     document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
     document.querySelectorAll('table.evk [data-m]').forEach(i => { email_kinds[i.dataset.m] = i.checked; });
     return {telegram:{on:v('tgOn').checked, token:v('tgTok').value.trim(), chat:v('tgChat').value.trim(), min_sev:v('tgSev').value, lang:v('tgLang').value},
       email:{on:v('mlOn').checked, to:v('mlTo').value, min_sev:v('mlSev').value, lang:v('mlLang').value},
-      kinds, email_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
+      webhook:{on:v('whOn').checked, url:v('whUrl').value.trim(), format:v('whFmt').value, secret:v('whSec').value, header:v('whHdr').value.trim(),
+        clear_secret:!!(v('whSecX') && v('whSecX').checked), clear_header:!!(v('whHdrX') && v('whHdrX').checked), verify:v('whVerify').checked,
+        min_sev:v('whSev').value, lang:v('whLang').value},
+      kinds, email_kinds, webhook_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
   // the parts: one at a time, remembered for the session
   const part = k => { state.evSub = k;
     document.querySelectorAll('#evSub [data-sub]').forEach(b => { const on = b.dataset.sub === k; b.setAttribute('aria-selected', String(on)); b.setAttribute('aria-pressed', String(on)); });
@@ -2530,7 +2554,7 @@ function editionBadge(){
 }
 // ===================== settings: one page, tabs on top =====================
 const SET_TABS = () => [['general', T('General'), ICO.grid], ['devices', T('Devices'), DEV_ICON], ['flowcfg', T('Flow configuration'), ICO.flow],
-  ...(isAdmin() ? [['users', T('Users'), USER_ICON], ['events', T('Events'), ICO.pulse], ['backups', T('Backups'), BK_ICON], ['reports', T('Reports'), REP_ICON]] : []), ['license', T('License'), ICO.shield]];
+  ...(isAdmin() ? [['users', T('Users'), USER_ICON], ['events', T('Events'), ICO.pulse], ['backups', T('Backups'), BK_ICON], ['reports', T('Reports'), REP_ICON], ['api', T('API'), API_ICON]] : []), ['license', T('License'), ICO.shield]];
 function vSettings(){
   const tabs = SET_TABS(); if (!tabs.some(t => t[0] === state.setTab)) state.setTab = 'general';
   document.getElementById('view').innerHTML = `<nav class="settabs glass" role="tablist" aria-label="${T('Settings')}">${tabs.map(([k, l, ic]) =>
@@ -2542,7 +2566,7 @@ function vSettings(){
   bar.addEventListener('keydown', e => { if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;   // arrow keys move between tabs
     const i = tabs.findIndex(t => t[0] === state.setTab), n = tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length][0];
     state.setTab = n; render(); setTimeout(() => { const b = document.querySelector(`.settabs [data-tab="${n}"]`); if (b) b.focus(); }); });
-  ({general:vGeneral, devices:vDevices, flowcfg:vFlowCfg, users:vUsers, events:vEventsCfg, backups:vBackups, reports:vReports, license:vLicense})[state.setTab]();
+  ({general:vGeneral, devices:vDevices, flowcfg:vFlowCfg, users:vUsers, events:vEventsCfg, backups:vBackups, reports:vReports, api:vApi, license:vLicense})[state.setTab]();
 }
 // (1.10.0) scheduled reports: a PDF of the last day / week / month e-mailed at its hour; Download and Send now any time
 const REP_ICON = 'M4 2h7l3 3v11H4zM11 2v3h3M6.5 9h5M6.5 12h5';
@@ -2673,6 +2697,65 @@ async function openPeriodReport(){
     const btn = e.target, old = btn.textContent; btn.disabled = true; btn.textContent = T('Sending…');
     try { const x = await apiPost('reports/send_once', b); say(true, '✓ ' + Tn(x.sent, 'sent to {n} recipient', 'sent to {n} recipients', {n:x.sent}) + ' · ' + x.period); }
     catch (x) { say(false, x.message); } finally { btn.disabled = false; btn.textContent = old; } };
+}
+// (1.11.0) API tokens for scripts, monitoring and integrations: created here, shown once, revoked here
+const API_ICON = 'M6 5L2 9l4 4M12 5l4 4-4 4M10 3L8 15';
+const TOKEN_SCOPES = () => ({read:[T('Read only'), T('what a viewer sees: every page’s data, events, devices')],
+  write:[T('Read and change'), T('also what an administrator changes — devices, names, networks, events, reports — except users, tokens, the license and deleting backups')]});
+function vApi(){
+  const v = document.getElementById('setBody'), seq = renderSeq;
+  const ex = `curl -k -H "Authorization: Bearer ftapi_…" \\\n  "${location.origin}/api/summary?range=24h&f=[]"`;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph(API_ICON, T('API tokens'), T('for scripts, monitoring and integrations · sent as Authorization: Bearer …'),
+    `<button class="btn primary" id="tkNew">${T('New token')}</button>`)}<div id="tkList" class="loading"></div><p class="err" id="tkErr" hidden></p></section>
+    <section class="glass panel s12">${ph('list', T('How to use'), T('the same JSON the pages use · every filter of the search box works'))}
+      ${codeBox(ex, 'tkEx')}
+      <div class="tw" style="margin-top:12px"><table class="compact"><tbody>${[['/api/summary?range=24h&f=[]', T('totals, against the period before')], ['/api/top?dim=int_ip&limit=10&range=24h&f=[]', T('busiest inside hosts (dim: ext_ip, service, country, asn, net…)')],
+        ['/api/series?range=24h&f=[]', T('traffic over time')], ['/api/alerts?range=24h&f=[]', T('security events')], ['/api/devices', T('devices and their export health')]].map(([u, d]) =>
+        `<tr><td class="mono" style="white-space:nowrap;font-size:12.5px">GET ${esc(u)}</td><td class="nat">${esc(d)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note" style="margin:10px 0 0">${T('Periods: range=1h|6h|24h|7d|30d, or from/to in unix seconds; filters: f=[{"k":"net","v":"Office"}].')} <a href="https://github.com/henzelis/flowtrack/blob/main/docs/api.md" target="_blank" rel="noopener">${T('All endpoints')} ↗</a></p></section></div>`;
+  let d = null;
+  const $ = id => document.getElementById(id);
+  const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
+  const draw = () => {
+    const el = $('tkList'); if (!el || seq !== renderSeq) return;
+    el.classList.remove('loading');
+    const now = Date.now() / 1000, sc = TOKEN_SCOPES();
+    el.innerHTML = d.tokens.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Name')}</th><th>${T('Access')}</th><th>${T('Token')}</th><th>${T('Created')}</th><th>${T('Last used')}</th><th>${T('Valid until')}</th><th></th></tr></thead><tbody>
+      ${d.tokens.map(t => { const ended = t.expires && t.expires < now;
+        return `<tr data-id="${esc(t.id)}"><td><b>${esc(t.name)}</b></td><td><span class="pill ${t.scope === 'write' ? 'warn' : ''}" title="${esc(sc[t.scope][1])}">${esc(sc[t.scope][0])}</span></td>
+        <td class="mono">${esc(t.hint)}</td><td>${when(t.created)}<div class="nat">${esc(t.by || '')}</div></td>
+        <td>${t.last_used ? `${when(t.last_used)}<div class="nat mono">${esc(t.last_ip)}</div>` : `<span class="nat">${T('never')}</span>`}</td>
+        <td>${!t.expires ? `<span class="nat">${T('no end date')}</span>` : ended ? `<span class="pill crit">${T('ended')}</span> <span class="nat">${when(t.expires)}</span>` : when(t.expires)}</td>
+        <td style="text-align:right"><button class="btn" data-a="del">${T('Revoke')}</button></td></tr>`; }).join('')}</tbody></table></div>`
+      : `<div class="empty">${T('No tokens yet. A token lets a script or a monitoring system (Zabbix, Grafana, your own) read FlowTrack without a password: press New token.')}</div>`;
+    el.querySelectorAll('[data-a="del"]').forEach(b => b.onclick = async () => { const t = d.tokens.find(x => x.id === b.closest('tr').dataset.id);
+      if (!confirm(T('Revoke the token {name}? Scripts that use it stop working at once.', {name:t.name}))) return;
+      try { d = await apiPost('tokens/delete', {id:t.id}); draw(); } catch (e) { formErr('tkErr', e.message); } });
+  };
+  const openNew = () => {
+    const sc = TOKEN_SCOPES();
+    const md = openModal(T('New token'), T('shown once — keep it like a password'), `<form class="form" id="tkForm" novalidate style="padding:4px 2px">
+      <label>${T('Name')}<input id="tkName" maxlength="48" placeholder="${T('e.g. Zabbix, Grafana, backup script')}"></label>
+      <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('Access')}</legend>${Object.entries(sc).map(([k, [l, dsc]]) =>
+        `<label class="chk" style="align-items:flex-start;margin-bottom:6px"><input type="radio" name="tkScope" value="${k}" ${k === 'read' ? 'checked' : ''}><span><b>${l}</b><br><span class="nat">${dsc}</span></span></label>`).join('')}</fieldset>
+      <label>${T('Valid')}<select id="tkDays">${[[0, T('no end date')], [30, T('30 days')], [90, T('90 days')], [365, T('1 year')]].map(([k, l]) => `<option value="${k}" ${k === 365 ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <p class="err" id="tkFErr" hidden></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Create the token')}</button><button class="btn" type="button" id="tkNo">${T('Cancel')}</button></div></form>`);
+    $('tkNo').onclick = md.close; $('tkName').focus();
+    $('tkForm').onsubmit = async e => { e.preventDefault(); formErr('tkFErr', '');
+      try { const r = await apiPost('tokens', {name:$('tkName').value.trim(), scope:document.querySelector('[name="tkScope"]:checked').value, days:Number($('tkDays').value)});
+        d = {tokens:r.tokens}; draw();
+        md.root.querySelector('.modal').lastElementChild.outerHTML = `<div class="form" style="padding:4px 2px">
+          <p class="note" style="margin:0;color:var(--warn)"><b>${T('Copy the token now: FlowTrack keeps only its fingerprint and cannot show it again.')}</b></p>
+          ${codeBox(r.token, 'tkTok', 'mono', 'margin:0;padding:10px 104px 10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap;word-break:break-all')}
+          ${codeBox(`curl -k -H "Authorization: Bearer ${r.token}" \\\n  "${location.origin}/api/summary?range=24h&f=[]"`, '', 'mono', 'margin:0;padding:10px 104px 10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap;word-break:break-all;font-size:12px')}
+          <div><button class="btn primary" type="button" id="tkDone">${T('Done')}</button></div></div>`;
+        $('tkDone').onclick = md.close; }
+      catch (x) { formErr('tkFErr', x.message); } };
+  };
+  $('tkNew').onclick = openNew;
+  (async () => { try { const r = await fetch('api/tokens'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; draw(); }
+    catch (e) { const el = $('tkList'); if (el) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } } })();
 }
 function vReports(){
   const v = document.getElementById('setBody'), seq = renderSeq;

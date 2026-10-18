@@ -2,6 +2,10 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.11**
+- **API tokens** (*Settings → API*) for scripts and monitoring — read only, or read and change — and **webhooks**
+  (FlowTrack JSON, Slack / Mattermost / Rocket.Chat, Discord; signed with HMAC-SHA256) next to Telegram and e-mail.
+
 **New in 1.10**
 - **Scheduled reports** (*Settings → Reports*): a PDF of the last day, week or month e-mailed at its hour — totals
   against the period before, traffic over time, the busiest hosts, outside networks, services, countries, named
