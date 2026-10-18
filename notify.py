@@ -107,8 +107,9 @@ def validate(body, old):
     if t['on'] and not (t['token'] and t['chat']):
         raise ValueError(tr('Enter the bot token and the chat ID to switch Telegram on.'))
     cfg['kinds'] = {str(k): bool(v) for k, v in (body.get('kinds') or {}).items()}
-    if 'email' in body:
-        cfg['email'] = _validate_email(body.get('email') or {}, old['email'])
+    if 'email' in body:      # (1.10.0) the server itself is set in Settings → General: what the form leaves out is kept
+        src = body.get('email') or {}
+        cfg['email'] = _validate_email(dict({k: old['email'][k] for k in SERVER_KEYS}, **src), old['email'])
         cfg['email_kinds'] = {str(k): bool(v) for k, v in (body.get('email_kinds') or {}).items()}
     else:                                         # a client that knows only Telegram keeps the e-mail settings
         cfg['email'], cfg['email_kinds'] = dict(old['email']), dict(old['email_kinds'])
@@ -157,7 +158,7 @@ def _validate_email(src, old):
     if known_lang(src.get('lang')):
         m['lang'] = src['lang']
     if m['on'] and not (m['host'] and m['sender'] and m['to']):
-        raise ValueError(tr('Enter the mail server, the sender and at least one recipient to switch e-mail on.'))
+        raise ValueError(tr('Set up the mail server in Settings → General, and enter at least one recipient, to switch e-mail on.'))
     return m
 
 
@@ -165,7 +166,7 @@ SERVER_KEYS = ('host', 'port', 'security', 'verify', 'user', 'password', 'sender
 
 
 def validate_server(src, cfg):
-    """(1.10.0) The mail server alone (Settings → Reports → Mail server: shared with the e-mail notifications), checked
+    """(1.10.0) The mail server alone (Settings → General → Mail server: for the notifications and the reports), checked
     over the stored settings; recipients, priorities and on/off of the notifications are kept."""
     old = cfg['email']
     m = _validate_email(dict(old, on=False, **{k: src[k] for k in SERVER_KEYS if k in src}), old)

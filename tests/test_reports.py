@@ -260,6 +260,17 @@ class Schedule(unittest.TestCase):
         with self.assertRaises(ValueError):
             notify.test_server(new, 'not mail', 'en')
 
+    def test_saving_the_notifications_keeps_the_mail_server(self):
+        cfg = notify.validate_server({'host': 'smtp.example.com', 'port': 465, 'security': 'ssl', 'sender': 'ft@example.com',
+                                      'user': 'ft', 'password': 'secret'}, notify.defaults())
+        new = notify.validate({'telegram': {}, 'email': {'on': True, 'to': 'noc@example.com', 'min_sev': 'crit'}}, cfg)
+        m = new['email']
+        self.assertEqual((m['host'], m['port'], m['security'], m['sender'], m['user'], m['password']),
+                         ('smtp.example.com', 465, 'ssl', 'ft@example.com', 'ft', 'secret'))
+        self.assertEqual((m['on'], m['to'], m['min_sev']), (True, ['noc@example.com'], 'crit'))
+        with self.assertRaises(ValueError):                 # e-mail on without a mail server: says where to set it up
+            notify.validate({'telegram': {}, 'email': {'on': True, 'to': 'noc@example.com'}}, notify.defaults())
+
     def test_no_mail_server(self):
         r = reports.validate({'name': 'D', 'every': 'day', 'sections': ['summary']})
         with mock.patch.object(notify, 'load', notify.defaults):

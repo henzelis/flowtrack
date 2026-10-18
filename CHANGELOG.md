@@ -13,9 +13,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   choose, 1–28 (for the month before it). A report can be narrowed by filters (`net:Office`, `device:…`) and to
   internet or inside traffic; *Download PDF* and *Send now* work at any time. The numbers come from the same queries as
   the pages. A report is never bare zeros: when FlowTrack has records of only a part of the period (it began collecting
-  then), or of none of it yet, the report shows what there is and says so in a note on top. The mail server is set up
-  and tested right there (*Settings → Reports → Mail server*, shared with the e-mail notifications); without it the
-  form and the list say that nothing is sent, and a report that cannot go out or failed shows in the bell. A server
+  then), or of none of it yet, the report shows what there is and says so in a note on top. The mail server (SMTP) has
+  its own place, *Settings → General → Mail server*, with a test letter to any address: the reports and the e-mail
+  notifications both send through it (Notifications → E-mail keeps only the recipients, priority and language).
+  Without it the form and the list say that nothing is sent, and a report that cannot go out or failed shows in the bell. A server
   that was off at the hour sends the report when it is back; a failed sending is tried again every 15 minutes.
 
 ## 1.9.5 — 2026-10-17

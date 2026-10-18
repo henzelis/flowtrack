@@ -1908,7 +1908,7 @@ STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', 
 
 AUTH = None
 POLLER = snmp.Poller()
-ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf'}
+ADMIN_GET = {'/api/users', '/api/events/config', '/api/notify', '/api/backups', '/api/reports', '/api/reports/pdf', '/api/mail'}
 COOKIE = 'ft_session'
 
 
@@ -1998,6 +1998,8 @@ class H(BaseHTTPRequestHandler):
                     return self.json(200, get_backups())
                 if u.path == '/api/reports':
                     return self.json(200, get_reports())
+                if u.path == '/api/mail':
+                    return self.json(200, get_mail())
                 if u.path == '/api/reports/pdf':
                     try:
                         name, pdf = get_report_pdf(parse_qs(u.query))
@@ -2111,8 +2113,8 @@ class H(BaseHTTPRequestHandler):
                 '/api/reports/save': lambda: post_report_save(body),
                 '/api/reports/delete': lambda: post_report_delete(body),
                 '/api/reports/send': lambda: post_report_send(body),
-                '/api/reports/mail': lambda: post_report_mail(body),
-                '/api/reports/mail/test': lambda: post_report_mail_test(body),
+                '/api/mail': lambda: post_mail(body),
+                '/api/mail/test': lambda: post_mail_test(body),
             }
             if u.path not in admin_routes:
                 return self.json(404, {'error': 'not found'})
@@ -2285,17 +2287,22 @@ def post_report_delete(body):
     return get_reports()
 
 
-def post_report_mail(body):
-    """The mail server (shared with the e-mail notifications) from Settings → Reports."""
+def get_mail():
+    """(1.10.0) The mail server of Settings → General (the password only as set or not)."""
+    cfg = notify.load()
+    return {'mail': notify.server_public(cfg), 'to': cfg['email']['to']}
+
+
+def post_mail(body):
     try:
         cfg = notify.validate_server(body, notify.load())
     except ValueError as e:
         raise BadRequest(str(e)) from None
     notify.save(cfg)
-    return get_reports()
+    return get_mail()
 
 
-def post_report_mail_test(body):
+def post_mail_test(body):
     """A test letter through the typed (not saved) mail server to the address given."""
     try:
         notify.test_server(notify.validate_server(body, notify.load()), str(body.get('to') or '').strip(), body.get('lang'))

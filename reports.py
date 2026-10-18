@@ -697,7 +697,7 @@ def mail_problem(r, cfg=None):
     """Why the report cannot go out by e-mail at all ('' = it can): no mail server, or nobody to send it to."""
     m = (cfg or notify.load())['email']
     if not (m['host'] and m['sender']):
-        return tr('No mail server: set it up in Settings → Reports → Mail server.')
+        return tr('No mail server: set it up in Settings → General → Mail server.')
     if not (r['to'] or m['to']):
         return tr('No recipients: enter them in the report.')
     return ''

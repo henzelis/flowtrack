@@ -2203,16 +2203,10 @@ function vEventsCfg(){
         <label>${T('Language of the messages')}${langSel('tgLang', tg.lang)}</label></div>
       <div><button class="btn" type="button" id="tgTest">${T('Send a test')}</button> <span class="note" id="tgSay"></span></div></div>
       <div class="form tgform" id="ntEmail" ${ntTab === 'email' ? '' : 'hidden'}>
-      <p class="note" style="margin:0">${T('Any mail server or service that takes SMTP: your own, Gmail or Microsoft 365 (with an app password), a relay of your provider. One letter per 10-minute check, to all recipients.')} ${T('The same mail server sends the reports (Settings → Reports).')}</p>
+      <p class="note" style="margin:0">${T('New events by e-mail: one letter per 10-minute check, to all recipients.')}</p>
       <label class="chk"><input type="checkbox" id="mlOn" ${ml.on ? 'checked' : ''}>${T('Send new events by e-mail')}</label>
-      <div class="two"><label>${T('Mail server (SMTP)')}<input id="mlHost" value="${esc(ml.host)}" placeholder="smtp.example.com" autocomplete="off"></label>
-        <div class="two"><label>${T('Port')}<input id="mlPort" type="number" min="1" max="65535" value="${esc(ml.port)}"></label>
-          <label>${T('Encryption')}<select id="mlSec">${[['starttls', 'STARTTLS'], ['ssl', 'SSL/TLS'], ['none', T('none')]].map(([v, l]) => `<option value="${v}" ${ml.security === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div></div>
-      <label class="chk"><input type="checkbox" id="mlVerify" ${ml.verify ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
-      <div class="two"><label>${T('Login (empty: without a login)')}<input id="mlUser" value="${esc(ml.user)}" autocomplete="off"></label>
-        <label>${T('Password')}<input id="mlPass" type="password" autocomplete="new-password" placeholder="${ml.password_set ? T('saved — leave empty to keep') : ''}"></label></div>
-      <div class="two"><label>${T('From')}<input id="mlFrom" value="${esc(ml.sender)}" placeholder="flowtrack@example.com"></label>
-        <label>${T('To (several: comma-separated)')}<input id="mlTo" value="${esc(ml.to.join(', '))}" placeholder="admin@example.com, noc@example.com"></label></div>
+      <div id="mlSrv">${mailLine(ml)}</div>
+      <label>${T('To (several: comma-separated)')}<input id="mlTo" value="${esc(ml.to.join(', '))}" placeholder="admin@example.com, noc@example.com"></label>
       <div class="two"><label>${T('Send from priority')}${sevSel('mlSev', ml.min_sev)}</label>
         <label>${T('Language of the messages')}${langSel('mlLang', ml.lang)}</label></div>
       <div><button class="btn" type="button" id="mlTest">${T('Send a test')}</button> <span class="note" id="mlSay"></span></div></div>
@@ -2221,8 +2215,7 @@ function vEventsCfg(){
     document.querySelectorAll('#ntSeg [data-v]').forEach(b => b.onclick = () => { state.ntTab = b.dataset.v;
       document.querySelectorAll('#ntSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
       document.getElementById('ntTelegram').hidden = b.dataset.v !== 'telegram'; document.getElementById('ntEmail').hidden = b.dataset.v !== 'email'; });
-    const mlTls = () => { document.getElementById('mlVerify').disabled = document.getElementById('mlSec').value === 'none'; };
-    document.getElementById('mlSec').onchange = mlTls; mlTls();
+    wireMailLine(document.getElementById('mlSrv'));
     const msay = (m, bad) => { const e = document.getElementById('mlSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
     document.getElementById('mlTest').onclick = async () => { msay(T('Sending…'));
       try { await apiPost('notify/test', {...collectNotify(), channel:'email'}); msay(T('Sent — check the mailbox (and the spam folder).')); } catch (e) { msay(e.message, true); } };
@@ -2262,8 +2255,7 @@ function vEventsCfg(){
     document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
     document.querySelectorAll('table.evk [data-m]').forEach(i => { email_kinds[i.dataset.m] = i.checked; });
     return {telegram:{on:v('tgOn').checked, token:v('tgTok').value.trim(), chat:v('tgChat').value.trim(), min_sev:v('tgSev').value, lang:v('tgLang').value},
-      email:{on:v('mlOn').checked, host:v('mlHost').value.trim(), port:Number(v('mlPort').value), security:v('mlSec').value, verify:v('mlVerify').checked,
-        user:v('mlUser').value.trim(), password:v('mlPass').value, sender:v('mlFrom').value.trim(), to:v('mlTo').value, min_sev:v('mlSev').value, lang:v('mlLang').value},
+      email:{on:v('mlOn').checked, to:v('mlTo').value, min_sev:v('mlSev').value, lang:v('mlLang').value},
       kinds, email_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
   // the parts: one at a time, remembered for the session
   const part = k => { state.evSub = k;
@@ -2593,26 +2585,29 @@ async function repDownload(q, btn){
     return '';
   } catch (e) { return e.message; } finally { btn.disabled = false; btn.textContent = old; }
 }
-function vReports(){
-  const v = document.getElementById('setBody'), seq = renderSeq;
-  v.innerHTML = `<div class="grid"><section class="glass panel s12" id="repMailBox">${ph('M2 4h14v10H2zM2 4l7 6 7-6', T('Mail server'), T('reports go out by e-mail (SMTP) · shared with the e-mail notifications'))}<div id="repMail" class="loading"></div></section>
-    <section class="glass panel s12">${ph(REP_ICON, T('Reports'), T('a PDF of the last day, week or month, e-mailed at its hour · the same numbers as the pages'),
-    `<button class="btn primary" id="repNew">${T('New report')}</button>`)}<div id="repList" class="loading"></div><p class="err" id="repErr" hidden></p></section></div>`;
-  let d = null, mailOpen = false;
+// (1.10.0) the mail server (SMTP) of Settings → General: the reports and the e-mail notifications send through it.
+// A summary when it is set up, the form when it is not (or on Change); a test letter goes to any address.
+const MAIL_ICON = 'M2 4h14v10H2zM2 4l7 6 7-6';
+const mailReady = m => !!(m && m.host && m.sender);
+// one line for the pages that send mail: where it goes through, or that it is not set up — with the way to General
+const mailLine = m => mailReady(m)
+  ? `<p class="note" style="margin:0 0 10px">${T('Mail goes through {server}', {server:`<span class="mono">${esc(m.host)}:${esc(m.port)}</span>`})} · <button class="lnk" data-go="mail">${T('Change in General')} →</button></p>`
+  : `<p class="note" style="margin:0 0 10px;padding:8px 12px;border-radius:10px;background:rgba(255,195,77,.10);border:1px solid rgba(255,195,77,.35);color:var(--warn)">${T('The mail server is not set up: nothing is sent by e-mail.')} <button class="lnk" data-go="mail">${T('Set up the mail server')} →</button></p>`;
+const wireMailLine = root => root.querySelectorAll('[data-go="mail"]').forEach(b => b.onclick = () => { state.setTab = 'general'; state.goMail = true; render(); });
+function mailPanel(el, d){
+  let open = false;
   const $ = id => document.getElementById(id);
-  const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
-  // ---- the mail server: a summary when it is set up, the form when it is not (or on Change)
-  const drawMail = () => {
-    const el = $('repMail'); if (!el || seq !== renderSeq) return;
+  const draw = () => {
+    if (!el.isConnected) return;
     el.classList.remove('loading');
     const m = d.mail, sec = {starttls:'STARTTLS', ssl:'SSL/TLS', none:T('none')};
-    if (m.ready && !mailOpen) {
+    if (m.ready && !open) {
       el.innerHTML = `<div class="about"><div><span>${T('Server')}</span><b class="mono">${esc(m.host)}:${esc(m.port)}</b><span class="nat">${m.security === 'none' ? T('no encryption') : esc(sec[m.security])}${m.user ? ' · ' + esc(m.user) : ''}</span></div>
         <div><span>${T('From')}</span><b class="mono">${esc(m.sender)}</b><button class="lnk" id="rmChange">${T('Change')}</button></div></div>`;
-      $('rmChange').onclick = () => { mailOpen = true; drawMail(); };
+      $('rmChange').onclick = () => { open = true; draw(); };
       return;
     }
-    el.innerHTML = `${m.ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px"><b>${T('Not set up yet: reports are not sent.')}</b> ${T('Enter the SMTP server you send mail through — your own, Gmail or Microsoft 365 (with an app password), or a relay of your provider. FlowTrack only sends: no POP3 or IMAP is needed.')}</p>`}
+    el.innerHTML = `${m.ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px"><b>${T('Not set up yet: nothing is sent by e-mail.')}</b> ${T('Enter the SMTP server you send mail through — your own, Gmail or Microsoft 365 (with an app password), or a relay of your provider. FlowTrack only sends: no POP3 or IMAP is needed.')}</p>`}
       <form class="form" id="rmForm" novalidate>
       <div class="two"><label>${T('Mail server (SMTP)')}<input id="rmHost" value="${esc(m.host)}" placeholder="smtp.example.com" autocomplete="off"></label>
         <div class="two"><label>${T('Port')}<input id="rmPort" type="number" min="1" max="65535" value="${esc(m.port)}"></label>
@@ -2621,23 +2616,33 @@ function vReports(){
       <div class="two"><label>${T('Login (empty: without a login)')}<input id="rmUser" value="${esc(m.user)}" autocomplete="off"></label>
         <label>${T('Password')}<input id="rmPass" type="password" autocomplete="new-password" placeholder="${m.password_set ? T('saved — leave empty to keep') : ''}"></label></div>
       <div class="two"><label>${T('From')}<input id="rmFrom" value="${esc(m.sender)}" placeholder="flowtrack@example.com"></label>
-        <label>${T('Send a test letter to')}<input id="rmTo" value="${esc((d.mail_to || [])[0] || '')}" placeholder="admin@example.com"></label></div>
+        <label>${T('Send a test letter to')}<input id="rmTo" value="${esc((d.to || [])[0] || '')}" placeholder="admin@example.com"></label></div>
       <p class="err" id="rmErr" hidden></p><p class="note" id="rmOk" hidden></p>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Save')}</button><button class="btn" type="button" id="rmTest">${T('Send a test')}</button>${m.ready ? `<button class="btn" type="button" id="rmNo">${T('Cancel')}</button>` : ''}</div></form>`;
     const tls = () => { $('rmVerify').disabled = $('rmSec').value === 'none'; }; $('rmSec').onchange = tls; tls();
     const body = () => ({host:$('rmHost').value.trim(), port:Number($('rmPort').value), security:$('rmSec').value, verify:$('rmVerify').checked,
       user:$('rmUser').value.trim(), password:$('rmPass').value, sender:$('rmFrom').value.trim()});
     const say = (ok, msg) => { formErr('rmErr', ok ? '' : msg); const n = $('rmOk'); n.textContent = ok ? msg : ''; n.hidden = !ok; };
-    if ($('rmNo')) $('rmNo').onclick = () => { mailOpen = false; drawMail(); };
+    if ($('rmNo')) $('rmNo').onclick = () => { open = false; draw(); };
     $('rmTest').onclick = async e => { const b = e.target, old = b.textContent; b.disabled = true; b.textContent = T('Sending…'); say(true, '');
-      try { await apiPost('reports/mail/test', Object.assign(body(), {to:$('rmTo').value.trim(), lang:LANG})); say(true, T('Sent — check the mailbox (and the spam folder).')); }
+      try { await apiPost('mail/test', Object.assign(body(), {to:$('rmTo').value.trim(), lang:LANG})); say(true, T('Sent — check the mailbox (and the spam folder).')); }
       catch (x) { say(false, x.message); } finally { b.disabled = false; b.textContent = old; } };
     $('rmForm').onsubmit = async e => { e.preventDefault(); say(true, '');
-      try { d = await apiPost('reports/mail', body()); mailOpen = false; drawMail(); draw(); } catch (x) { say(false, x.message); } };
+      try { d = await apiPost('mail', body()); open = false; draw(); } catch (x) { say(false, x.message); } };
   };
+  draw();
+}
+function vReports(){
+  const v = document.getElementById('setBody'), seq = renderSeq;
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph(REP_ICON, T('Reports'), T('a PDF of the last day, week or month, e-mailed at its hour · the same numbers as the pages'),
+    `<button class="btn primary" id="repNew">${T('New report')}</button>`)}<div id="repMail"></div><div id="repList" class="loading"></div><p class="err" id="repErr" hidden></p></section></div>`;
+  let d = null;
+  const $ = id => document.getElementById(id);
+  const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
   const draw = () => {
     const el = $('repList'); if (!el || seq !== renderSeq) return;
     el.classList.remove('loading');
+    $('repMail').innerHTML = mailLine(d.mail); wireMailLine($('repMail'));
     el.innerHTML = d.reports.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Report')}</th><th>${T('When')}</th><th>${T('Recipients')}</th><th>${T('Last sent')}</th><th>${T('Next')}</th><th></th></tr></thead><tbody>
       ${d.reports.map(r => { const s = d.status[r.id] || {}, to = r.to.length ? r.to : d.mail_to;
         const last = s.error && s.error_at > (s.sent || 0) ? `<span class="pill crit" title="${esc(s.error)}">${T('failed')}</span> <span class="nat" title="${esc(s.error)}">${esc(s.error.slice(0, 70))}</span>`
@@ -2667,7 +2672,7 @@ function vReports(){
     let tz = x.tz; if (!r) { try { const b = Intl.DateTimeFormat().resolvedOptions().timeZone, n = TZ_RENAMED[b] || b; if (d.timezones.includes(n)) tz = n; } catch (e) {} }
     if (!r) x.lang = LANG;
     const md = openModal(r ? T('Edit the report') : T('New report'), r ? esc(r.name) : T('sent by e-mail as a PDF'), `<form class="form" id="rpForm" novalidate style="padding:4px 2px">
-      ${d.mail_ready ? '' : `<p class="note" id="rpNoMail" style="margin:0;padding:8px 12px;border-radius:10px;background:rgba(255,195,77,.10);border:1px solid rgba(255,195,77,.35);color:var(--warn)">${T('The mail server is not set up: the report can be saved and downloaded, but it is not sent until you set up the mail server (Mail server, above the list).')}</p>`}
+      ${d.mail_ready ? '' : `<p class="note" id="rpNoMail" style="margin:0;padding:8px 12px;border-radius:10px;background:rgba(255,195,77,.10);border:1px solid rgba(255,195,77,.35);color:var(--warn)">${T('The mail server is not set up: the report can be saved and downloaded, but it is not sent until you set up the mail server in Settings → General.')}</p>`}
       <label>${T('Name')}<input id="rpName" maxlength="80" value="${esc(x.name)}" placeholder="${T('e.g. Weekly traffic report')}"></label>
       <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
         <label>${T('How often')}<select id="rpEvery">${REP_EVERY().map(([k, l]) => `<option value="${k}" ${x.every === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -2703,7 +2708,7 @@ function vReports(){
     $('rpName').focus();
   };
   $('repNew').onclick = () => d && openReport(null);
-  (async () => { try { const r = await fetch('api/reports'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; drawMail(); draw(); }
+  (async () => { try { const r = await fetch('api/reports'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; draw(); }
     catch (e) { const el = $('repList'); if (el) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } } })();
 }
 function vGeneral(){
@@ -2717,7 +2722,12 @@ function vGeneral(){
         <div><span>${T('Edition')}</span><b>${ed.status === 'active' ? 'Pro' : 'Community'}</b><button class="lnk" id="toLic">${T('License')} →</button></div>
         <div><span>${T('Source code')}</span><a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">github.com/henzelis/flowtrack</a></div>
         <div><span>${T('Account')}</span><b class="mono">${esc(ME.name)}</b><button class="lnk" id="myPass">${T('Change my password')}</button></div>
-      </div></section></div>`;
+      </div></section>
+    ${isAdmin() ? `<section class="glass panel s12" id="mailBox">${ph(MAIL_ICON, T('Mail server'), T('e-mail (SMTP) for the reports and the e-mail notifications'))}<div id="mailBody" class="loading"></div></section>` : ''}</div>`;
+  if (isAdmin()) (async () => { const el = document.getElementById('mailBody');
+    try { const r = await fetch('api/mail'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); mailPanel(el, j);
+      if (state.goMail) { state.goMail = false; document.getElementById('mailBox').scrollIntoView({block:'start', behavior:'smooth'}); const h = document.getElementById('rmHost'); if (h) h.focus({preventScroll:true}); } }
+    catch (e) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } })();
   document.getElementById('langSel').onchange = e => { if (e.target.value !== LANG) setLang(e.target.value); };
   document.getElementById('toLic').onclick = () => { state.setTab = 'license'; render(); };
   document.getElementById('myPass').onclick = openPassword;
