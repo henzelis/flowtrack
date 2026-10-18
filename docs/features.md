@@ -5,6 +5,8 @@
 **New in 1.12**
 - **Sign-in through Active Directory / LDAP**: the sign-in page offers «Local account» or your directory; roles from
   groups (nested in AD), LDAPS / STARTTLS, a *Check* that shows the user's groups and role before you switch it on.
+- **Interface load**: peak / 95th percentile / average of every interface against its capacity (port speed or your
+  own figures, in and out), and the event *Link near capacity*.
 
 **New in 1.11**
 - **API tokens** (*Settings → API*) for scripts and monitoring — read only, or read and change — and **webhooks**

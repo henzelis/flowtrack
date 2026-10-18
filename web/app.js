@@ -1077,6 +1077,32 @@ function pathDevice(){
   const df = state.filters.find(f => f.k === 'device' && !f.neg);
   return df ? df.v : state.pathDev || (META.devices[0] || {}).ip;
 }
+// (1.12.0) the load of each interface of the device: average / 95th percentile / peak in and out, as Mbit/s and as a
+// share of the capacity (own figures or the port's speed), with the busiest 5 minutes over the period as a small chart
+const loadColor = pct => pct == null ? 'var(--ink3)' : pct >= 90 ? 'var(--crit)' : pct >= 70 ? 'var(--warn)' : 'var(--ok)';
+async function ifLoadPanel(ip, seq){
+  const put = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };     // the box stops "loading"
+  let d;
+  try { d = await api('ifload', {device:ip}); } catch (e) { put('pLoad', `<p class="err">${esc(e.message)}</p>`); return; }
+  if (seq !== renderSeq) return;
+  if (!d.interfaces.length) { put('pLoad', `<div class="empty">${T('No interface traffic in this period')}</div>`); return; }
+  const bar = (pct, rate) => `<div class="ldbar" title="${esc(fmtR(rate))}${pct == null ? '' : ' · ' + pct + '%'}"><i style="width:${Math.min(100, pct || 0)}%;background:${loadColor(pct)}"></i></div>`;
+  const cell = (x, cap) => `<td class="ld"><div class="ldtop"><b class="mono" style="color:${loadColor(x.peak_pct)}">${x.peak_pct == null ? '—' : x.peak_pct + '%'}</b><span class="nat mono">${fmtR(x.peak)}</span></div>
+    ${bar(x.peak_pct, x.peak)}<div class="nat mono ldsub">${T('avg')} ${fmtR(x.avg)}${x.avg_pct == null ? '' : ` (${x.avg_pct}%)`} · p95 ${fmtR(x.p95)}${x.p95_pct == null ? '' : ` (${x.p95_pct}%)`}</div></td>`;
+  const spark = i => { const w = 220, h = 34, top = Math.max(i.cap_in * 1e6, i.cap_out * 1e6, ...i.series.map(r => Math.max(r[1], r[2])), 1);
+    const line = (k, color) => `<polyline points="${i.series.map((r, n) => `${(n / Math.max(1, i.series.length - 1) * w).toFixed(1)},${(h - 2 - r[k] / top * (h - 4)).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="1.3" vector-effect="non-scaling-stroke"/>`;
+    const capY = c => (h - 2 - c * 1e6 / top * (h - 4)).toFixed(1);
+    return `<svg class="ldspark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${i.cap_in ? `<line x1="0" x2="${w}" y1="${capY(i.cap_in)}" y2="${capY(i.cap_in)}" stroke="var(--ink3)" stroke-dasharray="3 3" stroke-width="1" vector-effect="non-scaling-stroke"/>` : ''}${line(1, '#27D3F5')}${line(2, '#FF9F43')}</svg>`; };
+  const capTxt = i => !i.cap_in && !i.cap_out ? `<span class="nat" title="${T('Unknown: set it in Settings → Devices → Interfaces')}">${T('unknown')}</span>`
+    : `<span class="mono">${i.cap_in === i.cap_out ? fmtR(i.cap_in * 1e6) : `${fmtR(i.cap_in * 1e6)} ↓ / ${fmtR(i.cap_out * 1e6)} ↑`}</span><div class="nat">${i.cap_own ? T('your figures') : T('port speed')}</div>`;
+  put('pLoad', `<div class="tw"><table class="compact ldtable"><thead><tr><th>${T('Interface')}</th><th>${T('Capacity')}</th><th>${T('In (peak)')}</th><th>${T('Out (peak)')}</th><th>${T('Over the period')} <span class="nat" style="font-weight:500"><span style="color:#27D3F5">— ${T('in')}</span> <span style="color:#FF9F43">— ${T('out')}</span></span></th></tr></thead><tbody>
+    ${d.interfaces.map(i => `<tr><td><b>${esc(i.name)}</b> ${i.role === 'wan' ? '<span class="pill warn">WAN</span>' : ''}<div class="nat mono">${T('index {idx}', {idx:i.index})}</div></td><td>${capTxt(i)}</td>
+      ${cell(i.in, i.cap_in)}${cell(i.out, i.cap_out)}<td>${spark(i)}</td></tr>`).join('')}</tbody></table></div>
+    <p class="note">${T('In = traffic entering the device through the interface, out = leaving through it; every traffic type, whatever the selector at the top. 5-minute averages: a burst of seconds is smoothed. The capacity is the port speed unless you set your own (e.g. your ISP contract) in Settings → Devices → Interfaces.')}
+    ${isAdmin() ? ` <button class="lnk" id="ldCaps">${T('Set capacities')} →</button>` : ''}</p>`);
+  const b = document.getElementById('ldCaps');
+  if (b) b.onclick = () => { state.view = 'settings'; state.setTab = 'devices'; state.ifDev = ip; render(); };
+}
 function vPaths(){
   const v = document.getElementById('view'), live = !!state.pathsLive && !isCustom();
   v.innerHTML = `<div class="grid">
@@ -1090,7 +1116,8 @@ function vPaths(){
       <section class="glass panel">${ph('search', T('Path'), T('the selected input → output'))}<div id="pInsp"></div></section>
     </div>
     <section class="glass panel s7">${ph('conv', T('Paths'), T('input → output interface · click to filter'))}<div id="pTable" class="loading"></div></section>
-    <section class="glass panel s5">${ph('ip', T('Interfaces'), T('traffic entering and leaving each interface'))}<div id="pIfs" class="loading"></div></section></div>`;
+    <section class="glass panel s5">${ph('ip', T('Interfaces'), T('traffic entering and leaving each interface'))}<div id="pIfs" class="loading"></div></section>
+    <section class="glass panel s12">${ph('pulse', T('Interface load'), T('all traffic through each interface against its capacity · 5-minute averages · the fullest first'))}<div id="pLoad" class="loading"></div></section></div>`;
   wireSeg('pMetricSeg', m => { if (m === state.metric) return; state.metric = m; render(); });
   wireSeg('pColorSeg', m => { if (m === (state.ringColor || 'dir')) return; state.ringColor = m; render(); });
   wireSeg('pScaleSeg', m => { if (m === state.scale) return; state.scale = m; render(); });
@@ -1111,7 +1138,8 @@ function vPaths(){
       state.filters = state.filters.filter(f => !['in_if', 'out_if', 'iface'].includes(f.k));
       if (df) { state.filters = state.filters.filter(f => f.k !== 'device'); putFilter({k:'device', v:ds.value, neg:false}); }
       render(); };
-    if (!dev) { fill('cPaths', `<div class="empty">${T('No device has sent data yet')}</div>`); return; }
+    if (!dev) { fill('cPaths', `<div class="empty">${T('No device has sent data yet')}</div>`); const pl = fill('pLoad', ''); if (pl) pl.classList.remove('loading'); return; }
+    ifLoadPanel(ip, seq);
     const ifs = new Map(dev.interfaces.map(i => [i.index, i]));
     const extra = df ? [] : [{k:'device', v:ip}];
     const load = () => api('paths', {t:state.traffic, metric:state.metric, live:live ? 1 : 0, win:120}, extra);
@@ -2103,6 +2131,8 @@ const EV_KINDS = () => ({
   inside_scan:[T('Inside host scans the internet'), T('a host of ours calls many addresses on one port, or many ports of one address, mostly without answer — a sign of malware'),
     {hosts:T('addresses'), hosts_busy:T('on web / DNS / NTP'), ports:T('ports')}],
   lateral_scan:[T('Scan inside the network'), T('a host calls many hosts or ports of the local network without answer'), {hosts:T('hosts'), ports:T('ports')}],
+  link_load:[T('Link near capacity'), T('an interface stays above this share of its capacity — your figures in Settings → Devices → Interfaces, else its speed — in every 5 minutes of the span, incoming or outgoing'),
+    {pct:T('% of capacity'), span:T('minutes')}],
   malware_contact:[T('Contact with malware infrastructure'), T('a host of ours opens a connection to a botnet controller or a malware host (abuse.ch lists)'), {}],
   listed_contact:[T('Contact with a listed address'), T('a host of ours opens a connection to an address on another enabled reputation list'), {}],
   listed_inbound:[T('Listed addresses calling us'), T('one summary a day: how many listed addresses called our services, by list'), {}],
@@ -3405,7 +3435,11 @@ function ifaceTable(x, edit){
     const addrs = edit ? `<input class="ifaddr" data-idx="${i.index}" value="${esc(i.addrs.join(', '))}" placeholder="${esc((i.snmp_addrs || []).join(', ') || T('IP or IP/mask, comma-separated'))}" aria-label="${T('Interface {idx} IP addresses', {idx: i.index})}">${i.seen_addrs.length ? `<div class="nat ifseen">${T('in the data')}: ${i.seen_addrs.map(esc).join(', ')}</div>` : ''}`
                        : addrHtml(i);
     const unseen = i.unseen ? ` <span class="pill warn" title="${T('The index is in the settings but did not appear in the data for 24 h — it may be wrong')}">${T('not seen in 24 h')}</span>` : '';
-    return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td>${counted ? `<td class="ifcnt">${ifCounters(i.counters)}</td>` : ''}</tr>`;
+    // (1.12.0) capacity: the port speed, or own figures in / out (an ISP contract)
+    const capv = v => v ? (v >= 1000 && v % 1000 === 0 ? `${v / 1000} G` : `${v} M`) : '';
+    const cap = edit ? `<span class="ifcap"><input class="ifcapin" data-idx="${i.index}" type="number" min="0" step="any" value="${i.cap_own ? i.cap_in : ''}" placeholder="${i.cap_auto || '—'}" aria-label="${T('Interface {idx} capacity in, Mbit/s', {idx: i.index})}"><span>↓</span><input class="ifcapout" data-idx="${i.index}" type="number" min="0" step="any" value="${i.cap_own ? i.cap_out : ''}" placeholder="${i.cap_auto || '—'}" aria-label="${T('Interface {idx} capacity out, Mbit/s', {idx: i.index})}"><span>↑</span></span>`
+      : !i.cap_in && !i.cap_out ? '<span class="nat">—</span>' : `<span class="mono">${i.cap_in === i.cap_out ? capv(i.cap_in) : `${capv(i.cap_in)} ↓ ${capv(i.cap_out)} ↑`}</span>${i.cap_own ? ` <span class="tag" title="${T('your figures')}">${T('own')}</span>` : ''}`;
+    return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="nowrap">${cap}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td>${counted ? `<td class="ifcnt">${ifCounters(i.counters)}</td>` : ''}</tr>`;
   }).join('');
   const sn = x.snmp || {}, when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
   const snmpLine = !sn.enabled ? '' : `<div class="ifsnmp">${sn.polled ? (sn.ok ? `<span class="pill ok">SNMP</span> <span class="nat">${esc(sn.sys && sn.sys.name || '')}${sn.sys && sn.sys.name ? ' · ' : ''}${T('{ifs} interfaces, {addrs} addresses · polled {when}', {ifs: sn.interfaces, addrs: sn.addresses, when: when(sn.polled)})}</span>`
@@ -3414,7 +3448,7 @@ function ifaceTable(x, edit){
   const btns = !admin || !x.interfaces.length ? '' : edit ? `<span class="nat ifmsg"></span><button class="btn ifcancel">${T('Cancel')}</button><button class="btn primary ifsave" disabled>${T('Save')}</button>`
                                                            : `<span class="nat ifmsg"></span><button class="btn ifedit">${T('Edit')}</button>`;
   return `<div class="ifdev${edit ? ' editing' : ''}" data-dev="${esc(x.ip)}"><div class="ifdev-h"><h4 class="mono">${esc(x.name)} <span class="nat">${esc(x.ip)}${x.vendor ? ' · ' + esc(x.vendor) : ''}</span></h4>${btns}</div>${snmpLine}
-    ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">${T('Index')}</th><th>${T('Name')}</th><th>${T('IP addresses')}</th><th>${T('Role')}</th><th class="num">${T('Traffic, 24 h')}</th><th class="num" title="${T('Share of traffic with outside addresses')}">${T('Ext.')}</th>${counted ? `<th title="${T('From the interface counters the device sends with sFlow')}">${T('Load (sFlow counters)')}</th>` : ''}</tr></thead><tbody>${rows}</tbody></table></div>
+    ${x.interfaces.length ? `<div class="tw"><table class="compact"><thead><tr><th class="num">${T('Index')}</th><th>${T('Name')}</th><th>${T('IP addresses')}</th><th>${T('Role')}</th><th title="${T('Mbit/s: the port speed, or your own figures in ↓ / out ↑ (e.g. your ISP contract) — empty keeps the port speed')}">${T('Capacity, Mbit/s')}</th><th class="num">${T('Traffic, 24 h')}</th><th class="num" title="${T('Share of traffic with outside addresses')}">${T('Ext.')}</th>${counted ? `<th title="${T('From the interface counters the device sends with sFlow')}">${T('Load (sFlow counters)')}</th>` : ''}</tr></thead><tbody>${rows}</tbody></table></div>
     <p class="note">${T('Bold: addresses entered by hand; plain: read over SNMP; grey (when neither is known): what the flows of the last 24 h show — the NAT address traffic leaves to the internet with (this is how a WAN usually looks) and the networks that send traffic into the interface. Names and addresses entered by hand take priority over SNMP.')}</p>`
       : `<div class="empty">${T('The collector has not seen interfaces of this device yet (24 h)')}</div>`}</div>`;
 }
@@ -3434,7 +3468,8 @@ function wireIfaces(box, x, devices){
   save.onclick = async () => {
     const roles = [...card.querySelectorAll('.ifrole')], val = (cls, idx) => card.querySelector(`.${cls}[data-idx="${idx}"]`).value.trim();
     if (roles.filter(r => r.value === 'local').length > 1) { say(T('Only one interface can have the role «The device itself»'), 'var(--crit)'); return; }
-    const interfaces = roles.map(r => ({index:+r.dataset.idx, role:r.value, name:val('ifname', r.dataset.idx), addrs:val('ifaddr', r.dataset.idx).split(/[\s,;]+/).filter(Boolean)}));
+    const interfaces = roles.map(r => ({index:+r.dataset.idx, role:r.value, name:val('ifname', r.dataset.idx), addrs:val('ifaddr', r.dataset.idx).split(/[\s,;]+/).filter(Boolean),
+      cap_in:val('ifcapin', r.dataset.idx), cap_out:val('ifcapout', r.dataset.idx)}));
     save.disabled = true; say(T('Saving…'));
     try {
       await apiPost('devices/interfaces', {ip:x.ip, interfaces});

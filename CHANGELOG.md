@@ -15,6 +15,14 @@ in Settings → General, at the bottom of every page, in the collector log and b
   finds for a user — DN, groups, the resulting role, whether the password is right — before you switch it on. At least
   one local administrator always remains: the way in when the directory is unreachable.
 
+- **Interface load** (*Through device → Interface load*): for each interface of the device, the peak, the 95th
+  percentile and the average in and out over the period — in Mbit/s and as a share of its capacity — with the busiest
+  5 minutes as a small chart; the fullest first. The capacity is the port speed (SNMP or sFlow) unless you set your own
+  in *Settings → Devices → Interfaces*, separately in and out (an ISP contract of 300 / 50 on a 1 Gbit/s port);
+  virtual interfaces (VLANs, tunnels, Wi-Fi) get a share once you give them one.
+- **New event "Link near capacity"**: an interface above 85 % of its capacity (adjustable) in every 5 minutes of
+  15 minutes (adjustable), in or out — in the bell and on every notification channel.
+
 ## 1.11.1 — 2026-10-18
 
 - **Filter hints in the report forms**: the *Filters* field of a report and of *Report for a period* now has the guide

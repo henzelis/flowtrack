@@ -1039,7 +1039,17 @@ def iface(c, idx, nbytes, ext, seen=(), sn=None):
             'role': role, 'wan': role == 'wan', 'bytes': nbytes, 'ext_share': round(ext / nbytes, 3) if nbytes else 0,
             'addrs': c.get('if_addrs', {}).get(str(idx), []), 'seen_addrs': list(seen),
             'snmp_name': si.get('name', ''), 'snmp_alias': si.get('alias', ''), 'snmp_up': si.get('oper') == 1 if si else None,
-            'snmp_speed': si.get('speed') or 0, 'snmp_addrs': (sn or {}).get('addrs', {}).get(str(idx), [])}
+            'snmp_speed': si.get('speed') or 0, 'snmp_addrs': (sn or {}).get('addrs', {}).get(str(idx), []),
+            **if_capacity(c, idx, si.get('speed') or 0)}
+
+
+def if_capacity(c, idx, auto_mbps):
+    """(1.12.0) What an interface can carry, Mbit/s in and out: the operator's own figures (an ISP contract of 300 / 50
+    on a 1 Gbit/s port) or the port's speed (SNMP ifHighSpeed, else the sFlow counters' ifSpeed); 0 = unknown."""
+    own = (c.get('if_caps') or {}).get(str(idx))
+    if own:
+        return {'cap_in': own[0], 'cap_out': own[1], 'cap_own': True, 'cap_auto': auto_mbps}
+    return {'cap_in': auto_mbps, 'cap_out': auto_mbps, 'cap_own': False, 'cap_auto': auto_mbps}
 
 
 def interfaces_of(c, rows, seen_addrs, sn=None, cnt=None):
@@ -1050,6 +1060,9 @@ def interfaces_of(c, rows, seen_addrs, sn=None, cnt=None):
     out += [iface(c, idx, 0, 0, (), sn) for idx in sorted(set(cnt) - {i['index'] for i in out})]
     for i in out:
         i['counters'] = cnt.get(i['index'])
+        sp = int((i['counters'] or {}).get('speed') or 0) // 1_000_000     # sFlow ifSpeed (bit/s) when SNMP knows none
+        if sp and not i['cap_auto']:
+            i.update(cap_auto=sp, **({} if i['cap_own'] else {'cap_in': sp, 'cap_out': sp}))
     seen = {i['index'] for i in out}
     configured = set(c.get('wan_ifs', [])) | {int(k) for key in ('if_names', 'if_addrs') for k in c.get(key, {}) if str(k).isdigit()}
     if c.get('local_if') is not None:
@@ -1225,6 +1238,57 @@ def api_devices(q):
                                                 sdata.get(s['exporter']) if sset.get(s['exporter'], {}).get('enabled') else None,
                                                 cnt.get(s['exporter'], {}))})
     return {'devices': out, 'collector': collector_health(), 'listen': listen_info(), 'snmp_tools': snmp.available()}
+
+
+def api_ifload(q):
+    """(1.12.0) The load of each interface of a device: bit/s entering it (as the input interface) and leaving it (as
+    the output one) per 5 minutes — all the traffic through the device, whatever the traffic selector and the filters —
+    with the average, the 95th percentile and the peak against its capacity. Buckets without records count as 0."""
+    try:
+        dev = str(ipaddress.ip_address(q1(q, 'device', '').strip()))
+    except ValueError:
+        raise BadRequest(tr('Invalid device IP address'))
+    qq = {k: q[k] for k in ('range', 'from', 'to') if k in q}
+    qq.update(f=[json.dumps([{'k': 'device', 'v': dev}])], t=['all'])
+    where, p, rng, step = scope(qq)
+    p['_step'] = 300
+    rows = ch(f"""SELECT toUnixTimestamp(toStartOfInterval(ts, INTERVAL 300 SECOND)) AS t, in_if, out_if, sum(bytes) AS b
+        FROM {src(p, ['in_if', 'out_if'], bucketed=True)} GROUP BY t, in_if, out_if""", p, fmt='JSON')
+    t0 = p['_t0'] // 300 * 300
+    n = max(1, (p['t1'] - t0 + 299) // 300)
+    acc = {}
+    for r in rows:
+        k = (int(r['t']) - t0) // 300
+        if not 0 <= k < n:
+            continue
+        for idx, d in ((int(r['in_if']), 0), (int(r['out_if']), 1)):
+            if idx:
+                acc.setdefault(idx, [[0] * n, [0] * n])[d][k] += int(r['b'])
+    c = exporters_cfg(raw=True).get(dev, {})
+    sset, sdata = snmp.load_settings(), snmp.load_data()
+    sn = sdata.get(dev) if sset.get(dev, {}).get('enabled') else None
+    cnt = sflow_counters().get(dev, {})
+    chunk = max(1, -(-n // 300))           # the chart: at most 300 points (a day stays at 5 minutes), each the busiest 5 minutes in it
+    out = []
+    for idx in sorted(set(acc) | {int(k) for k in (c.get('if_caps') or {})}):
+        info = iface(c, idx, 0, 0, (), sn)
+        sp = int((cnt.get(idx) or {}).get('speed') or 0) // 1_000_000
+        if sp and not info['cap_auto']:
+            info.update(cap_auto=sp, **({} if info['cap_own'] else {'cap_in': sp, 'cap_out': sp}))
+        series = acc.get(idx, [[0] * n, [0] * n])
+        d = {}
+        for name, b, cap in (('in', series[0], info['cap_in']), ('out', series[1], info['cap_out'])):
+            bps = [x * 8 / 300 for x in b]
+            srt = sorted(bps)
+            st = {'avg': sum(bps) / n, 'p95': srt[min(n - 1, int(0.95 * n))], 'peak': srt[-1], 'bytes': sum(b)}
+            st.update({f'{k}_pct': round(100 * st[k] / (cap * 1e6), 1) if cap else None for k in ('avg', 'p95', 'peak')})
+            d[name] = st
+        pts = [[t0 + i * 300, max(series[0][i:i + chunk]) * 8 / 300, max(series[1][i:i + chunk]) * 8 / 300] for i in range(0, n, chunk)]
+        out.append({'index': idx, 'name': info['name'], 'role': info['role'], 'cap_in': info['cap_in'], 'cap_out': info['cap_out'],
+                    'cap_own': info['cap_own'], 'cap_auto': info['cap_auto'], 'in': d['in'], 'out': d['out'], 'series': pts})
+    # the fullest first (by peak share of capacity), then the busiest of those without a known capacity
+    out.sort(key=lambda i: (-max(i['in']['peak_pct'] or -1, i['out']['peak_pct'] or -1), -(i['in']['bytes'] + i['out']['bytes'])))
+    return {'device': dev, 'from': t0, 'to': p['t1'], 'step': 300, 'chart_step': 300 * chunk, 'interfaces': out}
 
 
 def api_host(q):
@@ -1804,7 +1868,7 @@ def post_device_interfaces(body, user):
     items = body.get('interfaces')
     if not isinstance(items, list) or len(items) > 1024:
         raise BadRequest(tr('A list of interfaces is expected'))
-    names, addrs, wan, local = {}, {}, [], None
+    names, addrs, wan, local, caps = {}, {}, [], None, {}
     for it in items:
         try:
             idx = int(it.get('index'))
@@ -1829,6 +1893,16 @@ def post_device_interfaces(body, user):
             raise BadRequest(tr('Interface {idx}: invalid address ({error})', idx=idx, error=e))
         if ok:
             addrs[str(idx)] = ok
+        # (1.12.0) own capacity, Mbit/s in / out (empty: the port's speed); one figure given = both directions
+        cin, cout = it.get('cap_in'), it.get('cap_out')
+        if cin not in (None, '') or cout not in (None, ''):
+            try:
+                cin = float(cin if cin not in (None, '') else cout)
+                cout = float(cout if cout not in (None, '') else cin)
+                assert 0 < cin <= 1e6 and 0 < cout <= 1e6
+            except (TypeError, ValueError, AssertionError):
+                raise BadRequest(tr('Interface {idx}: capacity is Mbit/s, more than 0', idx=idx)) from None
+            caps[str(idx)] = [round(cin, 3), round(cout, 3)]
         role = it.get('role', 'lan')
         if role == 'wan':
             wan.append(idx)
@@ -1840,7 +1914,7 @@ def post_device_interfaces(body, user):
             raise BadRequest(tr('Role: lan, wan or local'))
     merged = exporters_cfg(raw=True).get(ip, {})
     entry = load_ui_exporter(ip)
-    entry.update({'if_names': names, 'if_addrs': addrs, 'wan_ifs': sorted(set(wan)), 'local_if': local})
+    entry.update({'if_names': names, 'if_addrs': addrs, 'wan_ifs': sorted(set(wan)), 'local_if': local, 'if_caps': caps})
     entry.setdefault('name', merged.get('name', ip))
     save_ui_exporter(ip, entry)
     NAMES.reload()
@@ -1907,7 +1981,7 @@ class Cache:
 CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/networks': api_networks, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
-          '/api/alerts': api_alerts}
+          '/api/alerts': api_alerts, '/api/ifload': api_ifload}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
 

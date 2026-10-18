@@ -61,6 +61,8 @@ KINDS = {
     'ddos':         {'on': True, 'sev': 'crit', 'factor': 10, 'min_sessions': 2000, 'min_mbps': 200, 'refl_mbps': 20, 'minutes': 3},
     'inside_scan':  {'on': True, 'sev': 'crit', 'hosts': 50, 'hosts_busy': 200, 'ports': 10},
     'lateral_scan': {'on': True, 'sev': 'crit', 'hosts': 10, 'ports': 10},
+    # (1.12.0) an interface above pct % of its capacity (own figures, else its speed) in every 5 minutes of `span` minutes
+    'link_load':    {'on': True, 'sev': 'warn', 'pct': 85, 'span': 15},
     # IP reputation (reputation.py)
     'malware_contact': {'on': True, 'sev': 'crit'},
     'listed_contact': {'on': True, 'sev': 'warn'},
@@ -74,9 +76,10 @@ NAMES = {'port_scan': N_('Port scan'), 'brute_force': N_('Password guessing'), '
          'heavy_client': N_('Aggressive client'), 'ddos': N_('DDoS / flood'), 'inside_scan': N_('Inside host scans the internet'),
          'lateral_scan': N_('Scan inside the network'), 'sustained_upload': N_('Sustained upload'), 'burst': N_('Traffic burst'),
          'new_country': N_('New destination'), 'malware_contact': N_('Contact with malware infrastructure'),
-         'listed_contact': N_('Contact with a listed address'), 'listed_inbound': N_('Listed addresses calling us')}
+         'listed_contact': N_('Contact with a listed address'), 'listed_inbound': N_('Listed addresses calling us'),
+         'link_load': N_('Link near capacity')}
 LIMITS = {'ports': (2, 65535), 'services': (2, 100), 'hosts': (2, 100000), 'sessions': (2, 10 ** 7), 'factor': (2, 1000),
-          'min_sessions': (1, 10 ** 8), 'min_mbps': (1, 10 ** 6), 'refl_mbps': (1, 10 ** 6), 'minutes': (1, 10),
+          'min_sessions': (1, 10 ** 8), 'min_mbps': (1, 10 ** 6), 'refl_mbps': (1, 10 ** 6), 'minutes': (1, 10), 'pct': (10, 100), 'span': (5, 60),
           'hosts_busy': (2, 100000)}
 GAPS = {'probes': 86400, 'listed_inbound': 86400}    # an event goes on while its activity comes back within this gap (default 1 hour)
 GAP = 3600
@@ -500,6 +503,8 @@ def rules(cfg, base, t0, t1, rep=None):
         hits += lateral(K['lateral_scan'], p)
     if K['ddos']['on']:
         hits += ddos(K['ddos'], base, p)
+    if K['link_load']['on']:
+        hits += link_load(K['link_load'], t1)
     if rep is not None and rep.size:
         for h in hits:                # an attacker on a list says so in its event
             if h['kind'] in ('port_scan', 'brute_force', 'heavy_client'):
@@ -620,6 +625,57 @@ def ddos(k, base, p):
                              info={'how': 'reflection', 'bps': float(top['bps']), 'srcs': int(top['srcs']), 'minutes': len(ms),
                                    'baseline': round(base['refl'].get(ex, 0)),
                                    'ports': top['plist']}))
+    return hits
+
+
+def capacities():
+    """exporter -> ifIndex -> (name, Mbit/s in, Mbit/s out) of the interfaces whose capacity is known: the operator's
+    own figures (Settings → Devices → Interfaces), else the speed SNMP reads (ifHighSpeed)."""
+    import snmp
+    from common import load_exporters
+    exp, sset, sdata = load_exporters(), snmp.load_settings(), snmp.load_data()
+    out = {}
+    for ip, c in exp.items():
+        sn = (sdata.get(ip) or {}).get('ifs') or {} if sset.get(ip, {}).get('enabled') else {}
+        names, caps = c.get('if_names') or {}, {}
+        for k, i in sn.items():
+            if str(k).isdigit() and i.get('speed'):
+                caps[int(k)] = (names.get(str(k)) or i.get('name') or f'if {k}', float(i['speed']), float(i['speed']))
+        for k, v in (c.get('if_caps') or {}).items():
+            if str(k).isdigit():
+                caps[int(k)] = (names.get(str(k)) or (sn.get(str(k)) or {}).get('name') or f'if {k}', float(v[0]), float(v[1]))
+        if caps:
+            out[ip] = (c.get('name') or ip, caps)
+    return out
+
+
+def link_load(k, t1):
+    """(1.12.0) Interfaces that stayed above k['pct'] % of their capacity, in or out, in every 5 minutes of the last
+    k['span'] minutes (the 5-minute interface totals: a short burst within them does not count)."""
+    caps = capacities()
+    if not caps:
+        return []
+    n, end = k['span'] // 5, t1 // 300 * 300
+    rows = ch("""SELECT exporter, toUnixTimestamp(ts) AS t, in_if, out_if, sum(bytes) AS b FROM agg_iface
+        WHERE ts >= toDateTime({a:UInt32}) AND ts < toDateTime({b:UInt32}) AND exporter IN {ex:Array(String)}
+        GROUP BY exporter, t, in_if, out_if""", {'a': end - n * 300, 'b': end, 'ex': list(caps)}, fmt='JSON', timeout=60)
+    acc = {}
+    for r in rows:
+        for idx, d in ((int(r['in_if']), 'in'), (int(r['out_if']), 'out')):
+            if idx in caps[r['exporter']][1]:
+                b = acc.setdefault((r['exporter'], idx, d), {})
+                b[int(r['t'])] = b.get(int(r['t']), 0) + int(r['b'])
+    hits = []
+    for (ex, idx, d), b in acc.items():
+        name, cin, cout = caps[ex][1][idx]
+        cap = (cin if d == 'in' else cout) * 1e6
+        pcts = [b.get(end - (i + 1) * 300, 0) * 8 / 300 / cap * 100 for i in range(n)]
+        if cap and min(pcts) >= k['pct']:
+            peak = max(pcts)
+            hits.append({'kind': 'link_load', 'key': f'{ex}/{idx}/{d}', 'exporter': ex, 'src': '', 'dst': '', 'port': idx, 'proto': 0,
+                         'value': round(peak, 1), 'info': {'device': caps[ex][0], 'if': idx, 'name': name, 'dir': d, 'pct': round(peak, 1),
+                                                           'min_pct': round(min(pcts), 1), 'mbps': round(peak * cap / 100 / 1e6, 1),
+                                                           'cap': cap / 1e6, 'minutes': k['span'], 'over': k['pct']}})
     return hits
 
 
@@ -891,6 +947,13 @@ def _describe(r):
         return (tr('Aggressive client'),
                 tr('{who}: {sessions} sessions to {svc}, up to {peak} in 10 min.', **many) if int(r['hits']) > 1
                 else tr('{who}: {sessions} sessions to {svc} in 10 min.', **many))
+    if kind == 'link_load':
+        kw = dict(device=i.get('device', r.get('exporter', '')), name=i.get('name', ''), mbps=f"{i.get('mbps', 0):g}", cap=f"{i.get('cap', 0):g}",
+                  pct=f"{i.get('pct', 0):g}", over=i.get('over', 85), minutes=i.get('minutes', 15))
+        return (tr('Link near capacity: {name}', name=kw['name']),
+                tr('{device} · {name}: incoming traffic up to {mbps} of {cap} Mbit/s ({pct}%), above {over}% for {minutes} min.', **kw)
+                if i.get('dir') == 'in' else
+                tr('{device} · {name}: outgoing traffic up to {mbps} of {cap} Mbit/s ({pct}%), above {over}% for {minutes} min.', **kw))
     if kind == 'ddos':
         how = i.get('how')
         kw = dict(srcs=f"{i.get('srcs', 0):,}", minutes=i.get('minutes', 0), mbps=_mbps(i.get('bps', 0)), base_mbps=_mbps(i.get('baseline', 0)))
