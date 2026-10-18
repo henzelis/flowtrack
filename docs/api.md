@@ -11,6 +11,7 @@ JSON over HTTP — with the session cookie of the UI, or with an **API token** (
 |---|---|
 | `GET /api/summary` | totals for the period and the previous one |
 | `GET /api/series?by=` | time series, optionally split by `service`, `int_ip`, … |
+| `GET /api/ifload?device=` | load of each interface of a device: 5-minute in / out bit rates, average / p95 / peak and shares of the capacity |
 | `GET /api/top?dim=` | top-N by `int_ip`, `ext_ip`, `conv`, `service`, `l7`, `country`, `city`, `asn`, `ext_port`, `exporter` |
 | `GET /api/river` | top inside × top outside links (live 2-minute window or whole period) |
 | `GET /api/flows`, `GET /api/live?since=` | raw records; records newer than a timestamp |
@@ -48,7 +49,7 @@ Answers: `401` unknown or ended token, `403` not allowed for this token.
 ## Webhooks
 
 *Settings → Events → Notifications → Webhook*: new events go out as an HTTP `POST` with a JSON body, with the same
-priority threshold, kinds and hourly limit as Telegram and e-mail. Formats: **FlowTrack JSON** (below), **Slack /
+priority threshold, kinds and hourly limit as Telegram and e-mail (the SIEM channel below has no hourly limit). Formats: **FlowTrack JSON** (below), **Slack /
 Mattermost / Rocket.Chat** (`{"text": …}`) and **Discord** (`{"content": …}`) — for those, paste their incoming
 webhook address. An optional extra header (`Authorization: Bearer …`, `X-Api-Key: …`) is sent with each request.
 

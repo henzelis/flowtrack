@@ -37,9 +37,14 @@ your own server, installs with one command and is ready in minutes.
 <td width="33%" valign="top"><b>See the path, not just the flows</b><br>How traffic crosses your devices, interface by interface — and which link really has a problem.</td>
 </tr>
 <tr>
-<td valign="top"><b>Security built in</b><br>Port scans, password guessing, floods, contact with known malicious addresses — with alerts to Telegram and e-mail.</td>
+<td valign="top"><b>Security built in</b><br>Port scans, password guessing, floods, contact with known malicious addresses, links running full — with alerts to Telegram, e-mail, webhooks and your SIEM.</td>
 <td valign="top"><b>Made for the wall</b><br>Live maps, a 3D globe and animated traffic views that run full screen on a NOC display — smooth, light on the CPU.</td>
 <td valign="top"><b>Yours</b><br>Self-hosted, no cloud, no telemetry. Every feature is free; a license only raises the limits.</td>
+</tr>
+<tr>
+<td valign="top"><b>Reports that arrive</b><br>A PDF for the management or the duty engineer — daily, weekly or monthly by e-mail, or for exactly the incident on your screen.</td>
+<td valign="top"><b>Fits your company</b><br>Sign in with Active Directory or LDAP; roles from your groups; local accounts stay as a way in.</td>
+<td valign="top"><b>Connects to your tools</b><br>API tokens for scripts and monitoring, webhooks for chats and your own systems, syslog (CEF / JSON) for the SIEM.</td>
 </tr>
 </table>
 
@@ -85,6 +90,12 @@ Input interface → device → output interface, the hosts behind each, and what
 
 <p align="center"><img src="docs/media/en/through-device.webp" alt="Through device page" width="100%"></p>
 
+**Interface load** — how full every link is: the peak, the 95th percentile and the average in and out against its
+capacity (the port speed, or your own figures such as an ISP contract of 300 / 50), and an alert when a link stays
+near its limit.
+
+<p align="center"><img src="docs/media/en/interface-load.webp" alt="Interface load: peak, 95th percentile and average against the capacity" width="100%"></p>
+
 ### Top hosts and your own networks
 
 Name your networks once (*172.16.0.0/24 → Office*) and see the traffic, trend and main services of each — or of every
@@ -123,6 +134,29 @@ A PDF for the management or the duty engineer: totals against the period before,
 outside networks, services, countries, your networks, security events and the devices. Daily, weekly or monthly on
 the day and hour you choose, in English or Ukrainian — or, after an attack or an outage, for exactly the period and
 filters on your screen, with one click.
+
+<table>
+<tr>
+<td width="58%"><img src="docs/media/en/reports.webp" alt="Settings → Reports: scheduled reports"></td>
+<td width="42%"><img src="docs/media/en/report-pdf.webp" alt="A report as PDF"></td>
+</tr>
+</table>
+
+### Fits into your company
+
+**Sign in with Active Directory or LDAP**: the sign-in page asks how to sign in — your directory or a local account —
+and the role comes from the user's groups (nested ones too); LDAPS / STARTTLS, a check that shows what FlowTrack finds
+for a user before you switch it on. **API tokens** let scripts and monitoring (Zabbix, Grafana, your own) read
+FlowTrack — or change it, with a token that may — without a password. **Webhooks** send new events to Slack,
+Mattermost, Rocket.Chat, Discord or your own system (signed with HMAC), and **syslog** in CEF or JSON feeds Splunk,
+QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog or Wazuh.
+
+<table>
+<tr>
+<td width="28%" valign="top"><img src="docs/media/en/sign-in.webp" alt="Sign-in with the directory offered"></td>
+<td width="72%" valign="top"><img src="docs/media/en/api-tokens.webp" alt="Settings → API: tokens and examples"></td>
+</tr>
+</table>
 
 ## Works with your equipment
 

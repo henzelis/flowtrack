@@ -28,10 +28,13 @@ device*, admins only; the collector picks changes up within a minute):
     "name": "fw-main", "vendor": "Fortinet", "model": "FortiGate 100F",
     "wan_ifs": [3], "local_if": 0, "public_ips": ["198.51.100.10"],
     "city": "Amsterdam", "country": "NL", "lat": 52.37, "lon": 4.9,
-    "if_names": {"3": "wan1", "0": "local"}, "sampling": "1:1"
+    "if_names": {"3": "wan1", "0": "local"}, "if_caps": {"3": [300, 50]}, "sampling": "1:1"
   }
 }
 ```
 
 `wan_ifs` are the exporter's interface indexes (`INPUT_SNMP`/`OUTPUT_SNMP`); `public_ips` mark traffic
 the device itself originates; coordinates place the site on the map.
+`if_caps` (1.12) is an interface's capacity in Mbit/s, in and out — e.g. an ISP contract of 300 / 50 on a faster port;
+without it the port speed read over SNMP (or sent in sFlow counters) is used for the interface load and the
+*Link near capacity* event.

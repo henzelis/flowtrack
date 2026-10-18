@@ -350,6 +350,11 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 .login label{display:grid;gap:5px;font-size:12px;color:var(--ink2);font-weight:700}
 .login input{border:1px solid var(--edge);border-radius:10px;padding:10px 12px;background:rgba(0,0,0,.3);font-size:14px;color:var(--ink);outline:none}
 .login input:focus{border-color:var(--blue-hi)}
+/* (1.12.1) the way of signing in, styled as the fields above it */
+.login select{appearance:none;-webkit-appearance:none;border:1px solid var(--edge);border-radius:10px;padding:10px 36px 10px 12px;font:600 14px var(--f-body);color:var(--ink);outline:none;cursor:pointer;
+  background:rgba(0,0,0,.3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23A9B7D9' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 12px center}
+.login select:focus{border-color:var(--blue-hi)}
+.login select option{background:#0c1838;color:var(--ink)}
 .user-wrap{position:relative;display:flex;align-items:center;gap:10px}
 button.user{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:4px 8px 4px 4px;border-radius:12px}
 button.user:hover{background:rgba(47,123,255,.12)}

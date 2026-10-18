@@ -18,10 +18,12 @@
 ## Roadmap
 
 **Next — scale and reach**
+- Distributed collectors and several sites in one interface; high availability
 - CI (GitHub Actions) running the test suite on every push
 - Recommended server sizes for each range of records/s, measured on real hardware
 
 **Features**
-- Host names from DHCP leases (FortiGate API); SNMP interface counters cross-checked with the flows
+- Host names from DHCP leases (FortiGate API); SNMP interface counters cross-checked with the flows (exact link load,
+  bursts shorter than 5 minutes)
 - FortiGate application names from `APPLICATION_TAG` (already stored with every record, not shown yet)
 - DSCP / traffic class: breakdown and colouring by QoS marking

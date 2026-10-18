@@ -3,11 +3,14 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.12.1 — 2026-10-18
 
 - **Delete the mail server** (*Settings → General → Mail server*): asked for in a window of its own that says what
   stops — scheduled reports are not sent, e-mail notifications are switched off (their recipients are kept);
   Telegram, webhooks and the SIEM go on.
+- The «Sign in with» choice of the sign-in page looks like the fields above it (it was a plain grey list).
+- README (EN / UK) and docs for 1.10–1.12: reports, interface load, sign-in through the directory, API tokens,
+  webhooks and the SIEM, with new pictures from the demo.
 
 ## 1.12.0 — 2026-10-18
 

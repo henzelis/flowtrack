@@ -92,7 +92,10 @@
 - *Flows*: top-10 inside × top-10 outside exchange (ribbon width = bytes, packets or flows; colour =
   direction), inspector for the selected host or conversation, protocols, raw flow records with NAT,
   ASN and interfaces.
-- *Through device*: one exporter as a box — input interface → output interface, hosts behind each interface.
+- *Through device*: one exporter as a box — input interface → output interface, hosts behind each interface; below
+  it *Interface load*: every interface's peak, 95th percentile and average in and out over the period against its
+  capacity (the port speed from SNMP / sFlow, or your own figures in and out — Settings → Devices → Interfaces), from
+  the 5-minute totals, with a small chart; the fullest first.
 - *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
   included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
   missing, and the hops of any source → destination path across the devices, with NAT and gaps.
@@ -101,17 +104,29 @@
   aggressive web clients, DDoS (floods of a service, inbound volume, UDP reflection — against the network's own
   usual peak), inside hosts that scan the internet or the LAN, contact with addresses on IP reputation lists
   (botnet controllers, malware hosts, criminal netblocks, attackers — eight free public lists plus your own); plus
-  sustained upload, bursts, new countries and export health. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
+  sustained upload, bursts, new countries, export health, links near their capacity, and scheduled reports that could
+  not be sent. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
   goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
-  ignored and a connection excluded in one direction (Settings → Events → Exceptions). New events can go to Telegram through your own bot and by e-mail through any SMTP server (STARTTLS, SSL/TLS) —
-  once each, by priority and kind, per channel.
-- *Settings* — tabs for language and version, devices (exporters and interfaces), flow configuration (your own names
-  of ports and hosts, the roles of your services), users, events, backups, and the edition / license.
+  ignored and a connection excluded in one direction (Settings → Events → Exceptions). New events can go to Telegram
+  through your own bot, by e-mail (the mail server of Settings → General), to a webhook (FlowTrack JSON, Slack /
+  Mattermost / Rocket.Chat, Discord; HMAC-signed) and to a SIEM as syslog (RFC 5424, CEF or JSON, over UDP / TCP /
+  TLS) — once each, by priority and kind, per channel; the SIEM gets every event, without the hourly limit.
+- *Reports*: a PDF of the last day, week (on the weekday you choose) or month (on the day you choose), e-mailed at its
+  hour to its own recipients, in English or Ukrainian, in any time zone, optionally narrowed by filters — totals
+  against the period before, traffic over time, busiest hosts, outside networks, services, countries, named
+  networks, events and devices; a period not fully collected is shown with a note, never as zeros. *Report for a
+  period* (the report button in the top bar) makes the same PDF of exactly the period and filters on screen.
+- *Settings* — tabs for language, version and the mail server, devices (exporters, interfaces and their capacity),
+  flow configuration (your own names of ports and hosts, the roles of your services), users and sign-in through the
+  directory, events and notifications, backups, reports, API tokens, and the edition / license.
 - Any period within the kept flow details (30 days in Community, see [Editions](editions.md)): a preset, *Custom period…* (from / to, to the minute) or
   drag across a traffic chart to zoom in — every page follows, and the link keeps the period, so an
   incident view can be bookmarked or shared.
 - Every value is a click-to-filter; filters can also be typed: `ip:10.0.0.5 service:Telegram -country:US port:443`.
-- Login with two roles: **admin** (users, devices) and **viewer** (read-only).
+- Two roles: **admin** (everything) and **viewer** (read-only). Users are local, or — when it is set up — sign in
+  through Active Directory / LDAP: the sign-in page asks how, the role comes from the user's groups (nested ones in
+  AD), LDAPS / STARTTLS; at least one local administrator always remains. **API tokens** (read only, or read and
+  change) let scripts and monitoring use the API without a password, see [API](api.md#api-tokens).
 - English and Ukrainian, chosen per browser in Settings → General; the browser language picks the default. More
   languages are one file each, see [Translations](translations.md).
