@@ -14,6 +14,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   own systems, or messages to Slack, Mattermost, Rocket.Chat or Discord — with the same priority, kinds and hourly
   limit as the other channels, an optional HMAC-SHA256 signature (`X-FlowTrack-Signature`) and an extra header,
   retries for an hour, and *Send a test*.
+- **SIEM / syslog export** (*Settings → Events → Notifications → Syslog / SIEM*): every new event as its own RFC 5424
+  syslog message over UDP, TCP or TLS, in **CEF** (ArcSight, QRadar, Splunk, Microsoft Sentinel) or **JSON** (Elastic,
+  Graylog, Splunk, Wazuh) — source, target, port, protocol, device, first / last seen, country, organisation, ASN and
+  the rule's details; facility local0–local7, its own priority threshold and kinds, no hourly limit, *Send a test*.
 
 ## 1.10.0 — 2026-10-18
 

@@ -1,6 +1,7 @@
 """1.11.0: API tokens (scopes, what a token can never do, wrong tokens counted with failed logins, end dates) through
-the real HTTP handler, and webhooks (FlowTrack JSON / Slack / Discord, HMAC signature, extra header, errors) against a
-local receiver. Run: python -m unittest discover -s tests"""
+the real HTTP handler, webhooks (FlowTrack JSON / Slack / Discord, HMAC signature, extra header, errors) against a
+local receiver, and the SIEM channel (RFC 5424 + CEF / JSON over UDP, TCP and TLS, no hourly limit).
+Run: python -m unittest discover -s tests"""
 import hashlib
 import hmac
 import http.server
@@ -205,6 +206,160 @@ class Webhooks(unittest.TestCase):
 
 
 import unittest.mock  # noqa: E402
+import datetime  # noqa: E402
+import socket  # noqa: E402
+import socketserver  # noqa: E402
+import ssl  # noqa: E402
+
+ROW = {'kind': 'port_scan', 'key': '203.0.113.5', 'first_seen': '2026-10-18 15:00:00', 'last_seen': '2026-10-18 15:10:00', 'hits': 2,
+       'exporter': '192.0.2.1', 'src': '203.0.113.5', 'dst': '198.51.100.1', 'port': 22, 'proto': 6, 'value': 9,
+       'info': json.dumps({'country': 'NL', 'org': 'Ex|ample=1', 'asn': 64500, 'ports': list(range(80))})}
+EV = [{'kind': 'port_scan', 'sev': 'warn', 'title': 'Port scan', 'text': 'tried a=b\nports', 'row': ROW}]
+
+
+def self_signed(dirname):
+    """A throwaway certificate for 127.0.0.1 (the `cryptography` the installer puts in the venv)."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    import ipaddress
+    k = ec.generate_private_key(ec.SECP256R1())
+    n = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'siem.test')])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    c = (x509.CertificateBuilder().subject_name(n).issuer_name(n).public_key(k.public_key()).serial_number(1)
+         .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=1))
+         .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), False).sign(k, hashes.SHA256()))
+    cert, key = os.path.join(dirname, 'c.pem'), os.path.join(dirname, 'k.pem')
+    with open(cert, 'wb') as f:
+        f.write(c.public_bytes(serialization.Encoding.PEM))
+    with open(key, 'wb') as f:
+        f.write(k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    return cert, key
+
+
+class Siem(unittest.TestCase):
+    got = []
+
+    @classmethod
+    def setUpClass(cls):
+        class Udp(socketserver.BaseRequestHandler):
+            def handle(self):
+                Siem.got.append(('udp', self.request[0]))
+
+        class Tcp(socketserver.StreamRequestHandler):
+            def handle(self):
+                for line in self.rfile:
+                    Siem.got.append(('tcp', line.rstrip(b'\n')))
+
+        cls.udp = socketserver.ThreadingUDPServer(('127.0.0.1', 0), Udp)
+        cls.tcp = socketserver.ThreadingTCPServer(('127.0.0.1', 0), Tcp)
+        cert, key = self_signed(TMP)
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+
+        class TlsServer(socketserver.ThreadingTCPServer):
+            def get_request(self):
+                s, a = self.socket.accept()
+                try:
+                    return ctx.wrap_socket(s, server_side=True), a
+                except (ssl.SSLError, OSError):
+                    s.close()
+                    raise OSError('handshake refused')
+        cls.tls = TlsServer(('127.0.0.1', 0), Tcp)
+        for srv in (cls.udp, cls.tcp, cls.tls):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        for srv in (cls.udp, cls.tcp, cls.tls):
+            srv.shutdown()
+
+    def setUp(self):
+        Siem.got.clear()
+
+    def m(self, **kw):
+        return notify._validate_siem(dict({'on': True, 'host': '127.0.0.1'}, **kw))
+
+    def wait(self, n=1):
+        for _ in range(50):
+            if len(Siem.got) >= n:
+                return
+            time.sleep(0.05)
+
+    def test_cef_over_udp(self):
+        m = self.m(port=self.udp.server_address[1], transport='udp', facility=17)
+        notify.siem_send(m, notify.siem_lines(m, EV))
+        self.wait()
+        line = Siem.got[0][1].decode()
+        self.assertTrue(line.startswith('<140>1 '), line)                 # local1 (17) * 8 + warning (4)
+        self.assertIn(' FlowTrack - port_scan - CEF:0|FlowTrack|FlowTrack|', line)
+        self.assertIn('|port_scan|Port scan|6|', line)
+        for part in ('src=203.0.113.5', 'dst=198.51.100.1', 'dpt=22', 'proto=TCP', 'dvc=192.0.2.1', 'cnt=2', 'cs1=NL',
+                     'cs2=Ex|ample\\=1', 'cn1=64500', 'msg=tried a\\=b\\nports', 'start=1792335600000', 'end=1792336200000'):
+            self.assertIn(part, line)
+
+    def test_cef_without_country_has_no_empty_labels(self):
+        m = self.m(port=self.udp.server_address[1])
+        line = notify.siem_lines(m, [{'kind': 'test', 'sev': 'info', 'title': 'FlowTrack', 'text': 'hello'}])[0].decode()
+        self.assertNotIn('Label', line)
+        self.assertIn('msg=hello', line)
+
+    def test_rows_as_the_detector_hands_them(self):
+        # detect.py pushes its rows with info already parsed and the times as unix seconds (found on stage: a test with
+        # rows read back from the table, info as JSON text, had hidden that country / org / ASN were lost)
+        row = dict(ROW, info=json.loads(ROW['info']), first_seen=1792335600, last_seen=1792336200)
+        rec = notify.siem_record({'kind': 'port_scan', 'sev': 'warn', 'row': row})
+        self.assertEqual((rec['country'], rec['org'], rec['asn'], rec['first_seen']), ('NL', 'Ex|ample=1', 64500, '2026-10-18T15:00:00+00:00'))
+        line = notify.siem_lines(self.m(), [dict(EV[0], row=row)])[0].decode()
+        self.assertIn('cs1=NL', line)
+        self.assertIn('start=1792335600000', line)
+        body = notify.webhook_body({'format': 'json'}, [dict(EV[0], row=row)], 0, '')
+        self.assertEqual(body['events'][0]['details']['country'], 'NL')
+
+    def test_json_over_tcp(self):
+        m = self.m(port=self.tcp.server_address[1], transport='tcp', format='json')
+        notify.siem_send(m, notify.siem_lines(m, EV + [dict(EV[0], sev='crit')]))
+        self.wait(2)
+        self.assertEqual(len(Siem.got), 2)                                  # one message per line
+        head, body = Siem.got[0][1].decode().split(' - port_scan - ', 1)
+        d = json.loads(body)
+        self.assertEqual((d['src'], d['proto'], d['country'], d['asn'], d['severity']), ('203.0.113.5', 'TCP', 'NL', 64500, 'warn'))
+        self.assertEqual(len(d['details']['ports']), 50)                    # long lists cut
+        self.assertEqual(d['first_seen'], '2026-10-18T15:00:00+00:00')
+        self.assertTrue(Siem.got[1][1].startswith(b'<130>1 '))             # crit -> syslog 2
+
+    def test_tls_verifies_the_certificate(self):
+        m = self.m(port=self.tls.server_address[1], transport='tls')
+        with self.assertRaises(notify.SiemError) as e:
+            notify.siem_send(m, notify.siem_lines(m, EV))
+        self.assertIn('not trusted', str(e.exception))
+        m['verify'] = False
+        notify.siem_send(m, notify.siem_lines(m, EV))
+        self.wait()
+        self.assertTrue(Siem.got and Siem.got[0][1].startswith(b'<132>1 '))
+
+    def test_closed_port_and_settings(self):
+        with self.assertRaises(notify.SiemError):
+            notify.siem_send(self.m(port=9, transport='tcp'), [b'x'])
+        for bad in ({'host': 'bad host!'}, {'port': 0}, {'facility': 8}, {'host': ''}):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                notify._validate_siem(dict({'on': True, 'host': '127.0.0.1'}, **bad))
+        with self.assertRaises(ValueError):
+            notify.test_siem(notify.defaults())
+
+    def test_no_hourly_limit(self):
+        c = notify.defaults()
+        c['siem'] = self.m(port=self.udp.server_address[1])
+        c['per_hour'] = 1
+        with unittest.mock.patch.object(notify, 'load', lambda: c):
+            n = notify.Notifier(log=lambda *a: None)
+            ev = [{'kind': 'port_scan', 'row': ROW}] * 3
+            kinds = {'port_scan': {'sev': 'warn'}}
+            with unittest.mock.patch.object(notify, 'render', lambda e, lang: dict(e, title='Port scan', text='x')):
+                self.assertEqual(n.push(ev, kinds, time.time()) + n.push(ev, kinds, time.time()), 6)
+                self.wait(6)
+        self.assertEqual(len(Siem.got), 6)
 
 if __name__ == '__main__':
     unittest.main()

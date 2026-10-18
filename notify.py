@@ -1,5 +1,6 @@
 """Notifications: new events go to Telegram through the user's own bot (1.6.2), by e-mail over SMTP (1.6.4) and to a
-webhook (1.11.0: JSON, Slack / Mattermost / Rocket.Chat or Discord, signed with HMAC-SHA256 when a secret is set).
+webhook (1.11.0: JSON, Slack / Mattermost / Rocket.Chat or Discord, signed with HMAC-SHA256 when a secret is set) and
+to a SIEM as syslog (1.11.0: RFC 5424 over UDP / TCP / TLS, CEF or JSON; every event its own message, no hourly limit).
 
 Only an event's first appearance is sent — an activity that goes on extends its event quietly; looking back over the
 past at the first start sends nothing. What goes out: the kinds ticked for it, at or above a minimum priority, at most
@@ -9,6 +10,7 @@ server never holds up the detections or the other channel.
 
 The bot token, the SMTP password and the webhook's secret and extra header are secrets: kept in STATE_DIR/notify.json (0600, the service user only), never
 sent to the browser and never written to the log."""
+import datetime
 import functools
 import hashlib
 import hmac
@@ -36,8 +38,12 @@ CHAT_RE = re.compile(r'^(-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31})$')
 MAIL_RE = re.compile(r'^[^@\s<>"(),;:\\]{1,64}@[A-Za-z0-9.-]{1,253}$')
 HOST_RE = re.compile(r'^([A-Za-z0-9_-]{1,63}\.)*[A-Za-z0-9_-]{1,63}$|^[0-9a-fA-F:]{2,39}$')
 SECURITY = ('starttls', 'ssl', 'none')
-CHANNELS = ('telegram', 'email', 'webhook')
-KINDS = {'telegram': 'kinds', 'email': 'email_kinds', 'webhook': 'webhook_kinds'}      # per channel: which kinds go out (absent = yes)
+CHANNELS = ('telegram', 'email', 'webhook', 'siem')
+KINDS = {'telegram': 'kinds', 'email': 'email_kinds', 'webhook': 'webhook_kinds', 'siem': 'siem_kinds'}      # per channel: which kinds go out (absent = yes)
+SIEM_TRANSPORTS = ('udp', 'tcp', 'tls')
+SIEM_FORMATS = ('cef', 'json')
+SIEM_SEV = {'info': (6, 3), 'warn': (4, 6), 'crit': (2, 9)}      # -> (syslog severity, CEF severity 0–10)
+PROTO = {1: 'ICMP', 6: 'TCP', 17: 'UDP', 47: 'GRE', 50: 'ESP', 58: 'ICMPv6', 132: 'SCTP'}
 FORMATS = ('json', 'slack', 'discord')
 HEADER_RE = re.compile(r'^([A-Za-z0-9-]{1,64}):\s*([^\r\n]{1,1000})$')
 SEV_COLOR = {'crit': '#e5484d', 'warn': '#f5a524', 'info': '#3e8ed0'}
@@ -54,7 +60,9 @@ def defaults():
             'email': {'on': False, 'host': '', 'port': 587, 'security': 'starttls', 'verify': True, 'user': '', 'password': '',
                       'sender': '', 'to': [], 'min_sev': 'warn', 'lang': 'uk'},
             'webhook': {'on': False, 'url': '', 'format': 'json', 'secret': '', 'header': '', 'verify': True, 'min_sev': 'warn', 'lang': 'uk'},
-            'kinds': {}, 'email_kinds': {}, 'webhook_kinds': {}, 'link': '', 'per_hour': 20}
+            'siem': {'on': False, 'host': '', 'port': 514, 'transport': 'udp', 'format': 'cef', 'facility': 16, 'verify': True,
+                     'min_sev': 'info', 'lang': 'en'},
+            'kinds': {}, 'email_kinds': {}, 'webhook_kinds': {}, 'siem_kinds': {}, 'link': '', 'per_hour': 20}
 
 
 def load():
@@ -87,8 +95,8 @@ def public(cfg):
     m = dict(cfg['email'], password='', password_set=bool(cfg['email']['password']))
     w = cfg['webhook']
     w = dict(w, secret='', secret_set=bool(w['secret']), header=w['header'].split(':', 1)[0] if w['header'] else '', header_set=bool(w['header']))
-    return {'telegram': t, 'email': m, 'webhook': w, 'kinds': cfg['kinds'], 'email_kinds': cfg['email_kinds'],
-            'webhook_kinds': cfg['webhook_kinds'], 'link': cfg['link'], 'per_hour': cfg['per_hour']}
+    return {'telegram': t, 'email': m, 'webhook': w, 'siem': dict(cfg['siem']), 'kinds': cfg['kinds'], 'email_kinds': cfg['email_kinds'],
+            'webhook_kinds': cfg['webhook_kinds'], 'siem_kinds': cfg['siem_kinds'], 'link': cfg['link'], 'per_hour': cfg['per_hour']}
 
 
 def validate(body, old):
@@ -126,6 +134,11 @@ def validate(body, old):
         cfg['webhook_kinds'] = {str(k): bool(v) for k, v in (body.get('webhook_kinds') or {}).items()}
     else:
         cfg['webhook'], cfg['webhook_kinds'] = dict(old['webhook']), dict(old['webhook_kinds'])
+    if 'siem' in body:
+        cfg['siem'] = _validate_siem(body.get('siem') or {})
+        cfg['siem_kinds'] = {str(k): bool(v) for k, v in (body.get('siem_kinds') or {}).items()}
+    else:
+        cfg['siem'], cfg['siem_kinds'] = dict(old['siem']), dict(old['siem_kinds'])
     try:
         cfg['per_hour'] = max(1, min(600, int(body.get('per_hour', 20))))
     except (TypeError, ValueError):
@@ -238,6 +251,164 @@ def _validate_webhook(src, old):
     return w
 
 
+def _validate_siem(src):
+    """(1.11.0) The syslog / SIEM receiver from the UI."""
+    m = defaults()['siem']
+    m['on'] = bool(src.get('on'))
+    host = str(src.get('host') or '').strip()
+    if host and not HOST_RE.match(host):
+        raise ValueError(tr('The SIEM / syslog server is a host name or an IP address, e.g. siem.example.com.'))
+    m['host'] = host
+    try:
+        m['port'] = 514 if src.get('port') in (None, '') else int(src['port'])      # an empty field: the syslog port
+        assert 1 <= m['port'] <= 65535
+    except (TypeError, ValueError, AssertionError):
+        raise ValueError(tr('The port is a number 1–65535.')) from None
+    if src.get('transport') in SIEM_TRANSPORTS:
+        m['transport'] = src['transport']
+    if src.get('format') in SIEM_FORMATS:
+        m['format'] = src['format']
+    try:
+        m['facility'] = int(src.get('facility', 16))
+        assert 16 <= m['facility'] <= 23          # local0 … local7
+    except (TypeError, ValueError, AssertionError):
+        raise ValueError(tr('The facility is local0 … local7.')) from None
+    m['verify'] = bool(src.get('verify', True))
+    if src.get('min_sev') in SEVERITIES:
+        m['min_sev'] = src['min_sev']
+    if known_lang(src.get('lang')):
+        m['lang'] = src['lang']
+    if m['on'] and not m['host']:
+        raise ValueError(tr('Enter the SIEM / syslog server to switch it on.'))
+    return m
+
+
+class SiemError(Exception):
+    pass
+
+
+def _utc(t):
+    """'2026-10-18 15:30:00' (ClickHouse, UTC) or unix seconds -> aware datetime."""
+    if isinstance(t, (int, float)):
+        return datetime.datetime.fromtimestamp(t, datetime.timezone.utc)
+    try:
+        return datetime.datetime.strptime(str(t)[:19], '%Y-%m-%d %H:%M:%S').replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def _trim(v, n=50):
+    """The event's own details (info JSON) for a SIEM: scalars as they are, long lists and maps cut to n items."""
+    if isinstance(v, list):
+        return [_trim(x, n) for x in v[:n]]
+    if isinstance(v, dict):
+        return {str(k): _trim(x, n) for k, x in list(v.items())[:n]}
+    return v
+
+
+def siem_record(e):
+    """One event's fields for a SIEM: kind, severity, title, text and what the stored row says."""
+    r = e.get('row') or {}
+    info = r.get('info') or {}
+    if isinstance(info, str):             # the detector hands its rows with info parsed; a row read back has the JSON
+        try:
+            info = json.loads(info)
+        except ValueError:
+            info = {}
+    info = info if isinstance(info, dict) else {}
+    rec = {'kind': e.get('kind', ''), 'severity': e.get('sev', 'info'), 'title': e.get('title', ''), 'text': e.get('text', ''),
+           'src': r.get('src') or e.get('src') or '', 'dst': r.get('dst') or e.get('dst') or '', 'port': int(r.get('port') or e.get('port') or 0),
+           'proto': PROTO.get(int(r.get('proto') or 0), str(r.get('proto') or '')) if r.get('proto') else '',
+           'device': r.get('exporter') or e.get('device') or '', 'hits': int(r.get('hits') or 0), 'value': r.get('value'),
+           'first_seen': _utc(r['first_seen']).isoformat() if r.get('first_seen') and _utc(r['first_seen']) else '',
+           'last_seen': _utc(r['last_seen']).isoformat() if r.get('last_seen') and _utc(r['last_seen']) else '',
+           'key': r.get('key', ''), 'country': info.get('country', ''), 'org': info.get('org', ''), 'asn': info.get('asn') or 0}
+    rec['details'] = _trim({k: v for k, v in info.items() if k not in ('country', 'org', 'asn')})
+    return rec
+
+
+def _cef_h(v):
+    return str(v).replace('\\', '\\\\').replace('|', '\\|').replace('\n', ' ').replace('\r', ' ')
+
+
+def _cef_v(v):
+    return str(v).replace('\\', '\\\\').replace('=', '\\=').replace('\r', '').replace('\n', '\\n')
+
+
+def siem_lines(m, events, now=None):
+    """RFC 5424 syslog messages (bytes), one per event, with a CEF or a JSON body."""
+    now = now or time.time()
+    host = re.sub(r'[^!-~]', '', socket.gethostname())[:255] or '-'
+    ts = datetime.datetime.fromtimestamp(now, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%fZ')[:-4] + 'Z'
+    out = []
+    for e in events:
+        rec = siem_record(e)
+        sys_sev, cef_sev = SIEM_SEV.get(rec['severity'], (6, 3))
+        msgid = re.sub(r'[^!-~]', '', rec['kind'])[:32] or '-'
+        if m['format'] == 'json':
+            body = json.dumps(dict({'@timestamp': ts, 'source': 'FlowTrack', 'version': VERSION, 'host': host}, **rec), ensure_ascii=False)
+        else:
+            ext = {'rt': int(now * 1000), 'msg': rec['text'], 'src': rec['src'], 'dst': rec['dst'], 'dpt': rec['port'] or '', 'proto': rec['proto'],
+                   'dvc': rec['device'], 'cnt': rec['hits'] or '', 'cs1Label': 'country', 'cs1': rec['country'], 'cs2Label': 'org', 'cs2': rec['org'],
+                   'cn1Label': 'asn', 'cn1': rec['asn'] or '', 'cs3Label': 'key', 'cs3': rec['key']}
+            for k, col in (('start', 'first_seen'), ('end', 'last_seen')):
+                if rec[col]:
+                    ext[k] = int(datetime.datetime.fromisoformat(rec[col]).timestamp() * 1000)
+            for lab in ('cs1', 'cs2', 'cn1', 'cs3'):          # a label only with its value
+                if ext.get(lab) in ('', None, 0):
+                    ext.pop(lab, None)
+                    ext.pop(lab + 'Label', None)
+            body = (f"CEF:0|FlowTrack|FlowTrack|{_cef_h(VERSION)}|{_cef_h(rec['kind'])}|{_cef_h(rec['title'])}|{cef_sev}|"
+                    + ' '.join(f'{k}={_cef_v(v)}' for k, v in ext.items() if v not in ('', None)))
+        line = f"<{m['facility'] * 8 + sys_sev}>1 {ts} {host} FlowTrack - {msgid} - ".encode() + body.encode()
+        out.append(line[:8000] if m['transport'] == 'udp' else line)      # a UDP datagram stays within what receivers take
+    return out
+
+
+def siem_send(m, lines, timeout=10):
+    """UDP: one datagram per message; TCP / TLS: one connection, messages ended by a newline (RFC 6587 non-transparent
+    framing, which rsyslog, syslog-ng, Graylog, Splunk and the SIEM agents read). SiemError for people."""
+    where = f"{m['host']}:{m['port']}"
+    try:
+        if m['transport'] == 'udp':
+            fam = socket.getaddrinfo(m['host'], m['port'], type=socket.SOCK_DGRAM)[0]
+            with socket.socket(fam[0], socket.SOCK_DGRAM) as s:
+                for x in lines:
+                    s.sendto(x, fam[4])
+            return
+        with socket.create_connection((m['host'], m['port']), timeout=timeout) as raw:
+            s = raw
+            if m['transport'] == 'tls':
+                ctx = ssl.create_default_context() if m['verify'] else ssl._create_unverified_context()
+                s = ctx.wrap_socket(raw, server_hostname=m['host'])
+            s.sendall(b''.join(x + b'\n' for x in lines))
+            if s is not raw:
+                s.close()
+    except ssl.SSLCertVerificationError as e:
+        raise SiemError(tr('The certificate of {where} is not trusted ({error}). Untick "Verify the certificate" only for your own server.',
+                           where=where, error=e.verify_message or e.reason)) from None
+    except ssl.SSLError as e:
+        raise SiemError(tr('TLS with {where} failed ({error}).', where=where, error=e.reason or e)) from None
+    except (socket.timeout, TimeoutError):
+        raise SiemError(tr('No answer from {where}.', where=where)) from None
+    except OSError as e:
+        raise SiemError(tr('No connection to {where} ({error}).', where=where, error=e.strerror or e)) from None
+
+
+def test_siem(cfg):
+    m = cfg['siem']
+    if not m['host']:
+        raise ValueError(tr('Enter the SIEM / syslog server first.'))
+    ui = get_lang()
+    set_lang(m['lang'])
+    lines = siem_lines(m, [{'kind': 'test', 'sev': 'info', 'title': 'FlowTrack', 'text': tr('Test message: events reach this SIEM / syslog server.')}])
+    set_lang(ui)
+    try:
+        siem_send(m, lines)
+    except SiemError as e:
+        raise ValueError(str(e)) from None
+
+
 class WebhookError(Exception):
     pass
 
@@ -248,7 +419,8 @@ def webhook_body(w, events, more, link):
         keep = lambda r: {k: v for k, v in (r or {}).items() if isinstance(v, (str, int, float, bool)) and k not in ('addrs', 'ports')}   # noqa: E731
         return {'source': 'FlowTrack', 'version': VERSION, 'link': link or '', 'more': more,
                 'events': [{'kind': e.get('kind', ''), 'severity': e.get('sev', 'info'), 'title': e.get('title', ''), 'text': e.get('text', ''),
-                            'details': keep(e.get('row')) or keep({k: e[k] for k in ('src', 'dst', 'port', 'ip', 'device', 'when') if k in e})}
+                            'details': dict(keep(e.get('row')) or keep({k: e[k] for k in ('src', 'dst', 'port', 'ip', 'device', 'when') if k in e}),
+                                            **{k: v for k, v in siem_record(e).items() if k in ('country', 'org', 'asn', 'details') and v})}
                            for e in events]}
     bold = (lambda t: f'*{t}*') if w['format'] == 'slack' else (lambda t: f'**{t}**')
     lines = [f"{ICON.get(e.get('sev'), '•')} {bold(e.get('title', '')[:200])}\n{e.get('text', '')[:1500]}" for e in events]
@@ -522,6 +694,8 @@ def _ready(cfg, ch):
     c = cfg[ch]
     if ch == 'webhook':
         return bool(c['on'] and c['url'])
+    if ch == 'siem':
+        return bool(c['on'] and c['host'])
     if ch == 'email':      # (1.10.0) the server of Settings → General with the notification recipients
         return bool(c['on'] and c['host'] and c['sender'] and c['to'])
     return bool(c['on'] and c['token'] and c['chat'])
@@ -556,6 +730,13 @@ class Notifier:
                 pick.append(dict(e, sev=sev))
         if not pick:
             return 0
+        if ch == 'siem':                  # (1.11.0) a SIEM wants every event: no hourly limit, one message each
+            try:
+                self.q[ch].put_nowait((pick[:500], 0, dict(c, link=cfg['link']), time.time()))
+            except queue.Full:
+                self.log('WARN notifications (siem): the queue is full, events not sent')
+                return 0
+            return len(pick[:500])
         self.sent[ch] = [x for x in self.sent[ch] if x > now - 3600]
         room = cfg['per_hour'] - len(self.sent[ch])
         if room <= 0:
@@ -573,7 +754,12 @@ class Notifier:
 
     def _send(self, ch, events, more, c):
         texts = [render(e, c['lang']) for e in events]
-        if ch == 'webhook':
+        if ch == 'siem':
+            set_lang(c['lang'])
+            lines = siem_lines(c, texts)
+            set_lang('en')
+            siem_send(c, lines)
+        elif ch == 'webhook':
             set_lang(c['lang'])
             body = webhook_body(c, texts, more, c['link'])
             set_lang('en')                        # errors go to the log, in English
@@ -593,7 +779,7 @@ class Notifier:
                 try:
                     self._send(ch, events, more, c)
                     break
-                except (TelegramError, MailError, WebhookError) as e:
+                except (TelegramError, MailError, WebhookError, SiemError) as e:
                     set_lang('en')
                     why = _explain(e) if ch == 'telegram' else str(e)
                     self.log(f'WARN {ch}: {why}' + (' — trying again' if attempt < 4 else ' — not sent'))

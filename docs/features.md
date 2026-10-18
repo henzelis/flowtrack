@@ -5,6 +5,8 @@
 **New in 1.11**
 - **API tokens** (*Settings → API*) for scripts and monitoring — read only, or read and change — and **webhooks**
   (FlowTrack JSON, Slack / Mattermost / Rocket.Chat, Discord; signed with HMAC-SHA256) next to Telegram and e-mail.
+- **SIEM / syslog export**: every event as RFC 5424 syslog over UDP / TCP / TLS, in CEF or JSON, for Splunk, QRadar,
+  ArcSight, Sentinel, Elastic, Graylog, Wazuh.
 
 **New in 1.10**
 - **Scheduled reports** (*Settings → Reports*): a PDF of the last day, week or month e-mailed at its hour — totals

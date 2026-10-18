@@ -73,3 +73,22 @@ def valid(secret, headers, body):
 
 A failed delivery (no answer, not 2xx) is tried again for up to an hour; *Send a test* shows the receiver's answer.
 
+## SIEM / syslog
+
+*Settings → Events → Notifications → Syslog / SIEM*: every new event as its own **RFC 5424** syslog message — no hourly
+limit, the priority threshold and kinds of its own. Transport **UDP** (514), **TCP** or **TLS** (6514, certificate
+checked unless you untick it; messages end with a newline), facility `local0`…`local7` (syslog severity: info 6,
+warn 4, crit 2). Two bodies:
+
+**CEF** (ArcSight, QRadar, Splunk, Microsoft Sentinel):
+
+```
+<132>1 2026-10-18T15:43:03.85Z flowtrack-host FlowTrack - port_scan - CEF:0|FlowTrack|FlowTrack|1.11.0|port_scan|Port scan|6|rt=1792338183853 msg=203.0.113.5 (NL, Example) tried 9 ports of ours… src=203.0.113.5 dst=198.51.100.1 dpt=22 proto=TCP dvc=192.0.2.1 cnt=2 cs1Label=country cs1=NL cs2Label=org cs2=Example cn1Label=asn cn1=64500 cs3Label=key cs3=203.0.113.5 start=1792335600000 end=1792336200000
+```
+
+**JSON** (Elastic, Graylog, Splunk, Wazuh) — the same header, then one JSON object: `@timestamp`, `source`,
+`version`, `host`, `kind`, `severity`, `title`, `text`, `src`, `dst`, `port`, `proto`, `device`, `hits`, `value`,
+`first_seen`, `last_seen` (ISO 8601, UTC), `key`, `country`, `org`, `asn` and `details` (the rule's own data — ports,
+targets, sources — lists cut to 50 items). CEF severity: info 3, warn 6, crit 9. *Send a test* sends one message; over
+UDP check that it arrived (UDP has no answer).
+

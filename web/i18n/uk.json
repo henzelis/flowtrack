@@ -1574,5 +1574,21 @@
  "the same JSON the pages use · every filter of the search box works": "той самий JSON, що й на сторінках · працюють усі фільтри пошуку",
  "totals, against the period before": "підсумки порівняно з попереднім періодом",
  "traffic over time": "трафік у часі",
- "what a viewer sees: every page’s data, events, devices": "те, що бачить глядач: дані всіх сторінок, події, пристрої"
+ "what a viewer sees: every page’s data, events, devices": "те, що бачить глядач: дані всіх сторінок, події, пристрої",
+ "CEF — ArcSight, QRadar, Splunk, Sentinel": "CEF — ArcSight, QRadar, Splunk, Sentinel",
+ "Enter the SIEM / syslog server first.": "Спершу вкажіть сервер SIEM / syslog.",
+ "Enter the SIEM / syslog server to switch it on.": "Щоб увімкнути, вкажіть сервер SIEM / syslog.",
+ "Every new event as its own syslog message (RFC 5424) to your SIEM or log server — Splunk, QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog, Wazuh, rsyslog. The hourly limit does not apply.": "Кожна нова подія — окремим повідомленням syslog (RFC 5424) у вашу SIEM чи сервер журналів: Splunk, QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog, Wazuh, rsyslog. Ліміт на годину тут не діє.",
+ "Facility": "Facility",
+ "JSON — Elastic, Graylog, Splunk, Wazuh": "JSON — Elastic, Graylog, Splunk, Wazuh",
+ "Send new events to the SIEM": "Надсилати нові події в SIEM",
+ "Send this kind to the SIEM": "Надсилати цей тип у SIEM",
+ "Sent over UDP — check that it arrived in the SIEM (UDP has no answer).": "Надіслано по UDP — перевірте, що повідомлення з’явилося в SIEM (UDP не дає відповіді).",
+ "Sent — the server took it.": "Надіслано — сервер прийняв.",
+ "TLS with {where} failed ({error}).": "TLS із {where} не вдався ({error}).",
+ "Test message: events reach this SIEM / syslog server.": "Тестове повідомлення: події доходять до цього сервера SIEM / syslog.",
+ "The SIEM / syslog server is a host name or an IP address, e.g. siem.example.com.": "Сервер SIEM / syslog — ім’я хоста або IP-адреса, напр. siem.example.com.",
+ "The facility is local0 … local7.": "Facility — local0 … local7.",
+ "The port is a number 1–65535.": "Порт — число 1–65535.",
+ "Transport": "Транспорт"
 }

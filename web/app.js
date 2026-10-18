@@ -2180,19 +2180,20 @@ function vEventsCfg(){
   const show = res => {
     const cfg = res.config, kinds = EV_KINDS(), sevs = SEV();
     const box = (id, html) => { const el = document.getElementById(id); el.classList.remove('loading'); el.innerHTML = html; };
-    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On')}</th><th>${T('Event')}</th><th>${T('Priority')}</th><th title="${T('Send this kind to Telegram')}">Telegram</th><th title="${T('Send this kind by e-mail')}">E-mail</th><th title="${T('Send this kind to the webhook')}">${T('Webhook')}</th><th>${T('Triggers at')}</th></tr></thead><tbody>
+    box('evkBox', `<div class="tw form"><table class="evk"><thead><tr><th>${T('On')}</th><th>${T('Event')}</th><th>${T('Priority')}</th><th title="${T('Send this kind to Telegram')}">Telegram</th><th title="${T('Send this kind by e-mail')}">E-mail</th><th title="${T('Send this kind to the webhook')}">${T('Webhook')}</th><th title="${T('Send this kind to the SIEM')}">SIEM</th><th>${T('Triggers at')}</th></tr></thead><tbody>
       ${Object.entries(kinds).map(([k, [name, desc, thr]]) => { const c = cfg.kinds[k] || {};
         return `<tr data-k="${k}"><td><label class="chk"><input type="checkbox" data-x="on" ${c.on ? 'checked' : ''} aria-label="${esc(name)}"></label></td><td class="wrap"><b>${name}</b><p class="note">${desc}</p></td>
         <td><select data-x="sev">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${c.sev === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select></td>
         <td><label class="chk"><input type="checkbox" data-n="${k}" ${res.notify.kinds[k] !== false ? 'checked' : ''} aria-label="Telegram: ${esc(name)}"></label></td>
         <td><label class="chk"><input type="checkbox" data-m="${k}" ${res.notify.email_kinds[k] !== false ? 'checked' : ''} aria-label="E-mail: ${esc(name)}"></label></td>
         <td><label class="chk"><input type="checkbox" data-w="${k}" ${(res.notify.webhook_kinds || {})[k] !== false ? 'checked' : ''} aria-label="${T('Webhook')}: ${esc(name)}"></label></td>
+        <td><label class="chk"><input type="checkbox" data-s="${k}" ${(res.notify.siem_kinds || {})[k] !== false ? 'checked' : ''} aria-label="SIEM: ${esc(name)}"></label></td>
         <td class="thr"><div>${Object.entries(thr).map(([t, l]) => `<label><input type="number" min="1" data-x="${t}" value="${esc(c[t])}">${l}</label>`).join('') || '<span class="note">—</span>'}</div></td></tr>`; }).join('')}</tbody></table></div>`);
-    const tg = res.notify.telegram, ml = res.notify.email, wh = res.notify.webhook || {}, sevSel = (id, v) => `<select id="${id}">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${v === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select>`;
+    const tg = res.notify.telegram, ml = res.notify.email, wh = res.notify.webhook || {}, sm = res.notify.siem || {}, sevSel = (id, v) => `<select id="${id}">${['info', 'warn', 'crit'].map(s => `<option value="${s}" ${v === s ? 'selected' : ''}>${sevs[s]}</option>`).join('')}</select>`;
     const langSel = (id, v) => `<select id="${id}">${langs().map(([c, l]) => `<option value="${c}" lang="${c}" ${v === c ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
     const on = ch => res.notify[ch].on ? ` <span class="pill ok">${T('on')}</span>` : '';
     const ntTab = state.ntTab || 'telegram';
-    box('evtBox', `<div class="seg ntseg" id="ntSeg" role="tablist">${[['telegram', 'Telegram'], ['email', 'E-mail'], ['webhook', T('Webhook')]].map(([v, l]) =>
+    box('evtBox', `<div class="seg ntseg" id="ntSeg" role="tablist">${[['telegram', 'Telegram'], ['email', 'E-mail'], ['webhook', T('Webhook')], ['siem', 'Syslog / SIEM']].map(([v, l]) =>
         `<button type="button" role="tab" data-v="${v}" aria-pressed="${v === ntTab}" aria-selected="${v === ntTab}">${l}${on(v)}</button>`).join('')}</div>
       <div class="form tgform" id="ntTelegram" ${ntTab === 'telegram' ? '' : 'hidden'}>
       <p class="note" style="margin:0">${T('1) In Telegram open <b>@BotFather</b>, send /newbot and copy the token. 2) Write any message to your new bot (or add it to a group). 3) Paste the token, press <b>Find chat</b>, pick the chat, Save, and Send a test.')}</p>
@@ -2224,12 +2225,31 @@ function vEventsCfg(){
         <label>${T('Language of the messages')}${langSel('whLang', wh.lang)}</label></div>
       <details class="note"><summary>${T('How to check the signature')}</summary><p style="margin:6px 0 0">${T('With a secret every request carries X-FlowTrack-Timestamp and X-FlowTrack-Signature: sha256=HMAC-SHA256(secret, timestamp + "." + body). Compute it over the raw body and compare; refuse timestamps older than 5 minutes.')}</p></details>
       <div><button class="btn" type="button" id="whTest">${T('Send a test')}</button> <span class="note" id="whSay"></span></div></div>
+      <div class="form tgform" id="ntSiem" ${ntTab === 'siem' ? '' : 'hidden'}>
+      <p class="note" style="margin:0">${T('Every new event as its own syslog message (RFC 5424) to your SIEM or log server — Splunk, QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog, Wazuh, rsyslog. The hourly limit does not apply.')}</p>
+      <label class="chk"><input type="checkbox" id="smOn" ${sm.on ? 'checked' : ''}>${T('Send new events to the SIEM')}</label>
+      <div class="two"><label>${T('Server')}<input id="smHost" value="${esc(sm.host || '')}" placeholder="siem.example.com" autocomplete="off"></label>
+        <div class="two"><label>${T('Port')}<input id="smPort" type="number" min="1" max="65535" value="${esc(sm.port || 514)}"></label>
+          <label>${T('Transport')}<select id="smTr">${[['udp', 'UDP'], ['tcp', 'TCP'], ['tls', 'TLS']].map(([v, l]) => `<option value="${v}" ${sm.transport === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div></div>
+      <div class="two"><label>${T('Format')}<select id="smFmt">${[['cef', T('CEF — ArcSight, QRadar, Splunk, Sentinel')], ['json', T('JSON — Elastic, Graylog, Splunk, Wazuh')]].map(([v, l]) => `<option value="${v}" ${sm.format === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label>${T('Facility')}<select id="smFac">${[...Array(8)].map((_, i) => `<option value="${16 + i}" ${+sm.facility === 16 + i ? 'selected' : ''}>local${i}</option>`).join('')}</select></label></div>
+      <label class="chk"><input type="checkbox" id="smVerify" ${sm.verify !== false ? 'checked' : ''}>${T('Verify the certificate of the server')}</label>
+      <div class="two"><label>${T('Send from priority')}${sevSel('smSev', sm.min_sev || 'info')}</label>
+        <label>${T('Language of the messages')}${langSel('smLang', sm.lang || 'en')}</label></div>
+      <div><button class="btn" type="button" id="smTest">${T('Send a test')}</button> <span class="note" id="smSay"></span></div></div>
       <div class="form tgform ntshared"><div class="two"><label>${T('FlowTrack address for the link in messages (optional)')}<input id="tgLink" value="${esc(res.notify.link)}" placeholder="${esc(location.origin)}"></label>
         <label>${T('At most messages an hour, per channel')}<input id="tgHour" type="number" min="1" max="600" value="${esc(res.notify.per_hour)}"></label></div></div>`);
     document.querySelectorAll('#ntSeg [data-v]').forEach(b => b.onclick = () => { state.ntTab = b.dataset.v;
       document.querySelectorAll('#ntSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
       document.getElementById('ntTelegram').hidden = b.dataset.v !== 'telegram'; document.getElementById('ntEmail').hidden = b.dataset.v !== 'email';
-      document.getElementById('ntWebhook').hidden = b.dataset.v !== 'webhook'; });
+      document.getElementById('ntWebhook').hidden = b.dataset.v !== 'webhook'; document.getElementById('ntSiem').hidden = b.dataset.v !== 'siem'; });
+    const smTls = () => { document.getElementById('smVerify').disabled = document.getElementById('smTr').value !== 'tls';
+      const p = document.getElementById('smPort'); if (['514', '6514'].includes(p.value)) p.value = document.getElementById('smTr').value === 'tls' ? '6514' : '514'; };
+    document.getElementById('smTr').onchange = smTls; document.getElementById('smVerify').disabled = document.getElementById('smTr').value !== 'tls';
+    const ssay = (m, bad) => { const e = document.getElementById('smSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
+    document.getElementById('smTest').onclick = async () => { ssay(T('Sending…'));
+      try { await apiPost('notify/test', {...collectNotify(), channel:'siem'}); ssay(document.getElementById('smTr').value === 'udp' ? T('Sent over UDP — check that it arrived in the SIEM (UDP has no answer).') : T('Sent — the server took it.')); }
+      catch (e) { ssay(e.message, true); } };
     const whTls = () => { const u = document.getElementById('whUrl').value; document.getElementById('whVerify').disabled = /^http:/i.test(u); };
     document.getElementById('whUrl').oninput = whTls; whTls();
     const wsay = (m, bad) => { const e = document.getElementById('whSay'); e.textContent = m; e.style.color = bad ? 'var(--crit)' : 'var(--ok)'; };
@@ -2271,7 +2291,8 @@ function vEventsCfg(){
     const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
     return {kinds, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean)};
   };
-  const collectNotify = () => { const kinds = {}, email_kinds = {}, webhook_kinds = {}, v = id => document.getElementById(id);
+  const collectNotify = () => { const kinds = {}, email_kinds = {}, webhook_kinds = {}, siem_kinds = {}, v = id => document.getElementById(id);
+    document.querySelectorAll('table.evk [data-s]').forEach(i => { siem_kinds[i.dataset.s] = i.checked; });
     document.querySelectorAll('table.evk [data-w]').forEach(i => { webhook_kinds[i.dataset.w] = i.checked; });
     document.querySelectorAll('table.evk [data-n]').forEach(i => { kinds[i.dataset.n] = i.checked; });
     document.querySelectorAll('table.evk [data-m]').forEach(i => { email_kinds[i.dataset.m] = i.checked; });
@@ -2280,7 +2301,9 @@ function vEventsCfg(){
       webhook:{on:v('whOn').checked, url:v('whUrl').value.trim(), format:v('whFmt').value, secret:v('whSec').value, header:v('whHdr').value.trim(),
         clear_secret:!!(v('whSecX') && v('whSecX').checked), clear_header:!!(v('whHdrX') && v('whHdrX').checked), verify:v('whVerify').checked,
         min_sev:v('whSev').value, lang:v('whLang').value},
-      kinds, email_kinds, webhook_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
+      siem:{on:v('smOn').checked, host:v('smHost').value.trim(), port:Number(v('smPort').value), transport:v('smTr').value, format:v('smFmt').value,
+        facility:Number(v('smFac').value), verify:v('smVerify').checked, min_sev:v('smSev').value, lang:v('smLang').value},
+      kinds, email_kinds, webhook_kinds, siem_kinds, link:v('tgLink').value.trim(), per_hour:Number(v('tgHour').value)}; };
   // the parts: one at a time, remembered for the session
   const part = k => { state.evSub = k;
     document.querySelectorAll('#evSub [data-sub]').forEach(b => { const on = b.dataset.sub === k; b.setAttribute('aria-selected', String(on)); b.setAttribute('aria-pressed', String(on)); });

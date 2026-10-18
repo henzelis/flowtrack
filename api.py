@@ -1556,6 +1556,8 @@ def _notify_form(body):
         form['email'] = dict(body.get('email') or {}, on=False)
     if 'webhook' in body:
         form['webhook'] = dict(body.get('webhook') or {}, on=False)
+    if 'siem' in body:
+        form['siem'] = dict(body.get('siem') or {}, on=False)
     try:
         return notify.validate(form, notify.load())
     except ValueError as e:
@@ -1566,7 +1568,7 @@ def post_notify_test(body):
     """A test message on one channel: 'telegram' (default), 'email' or 'webhook' (1.11.0)."""
     cfg = _notify_form(body)
     try:
-        {'email': notify.test_mail, 'webhook': notify.test_webhook}.get(body.get('channel'), notify.test)(cfg)
+        {'email': notify.test_mail, 'webhook': notify.test_webhook, 'siem': notify.test_siem}.get(body.get('channel'), notify.test)(cfg)
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return {'ok': True}
