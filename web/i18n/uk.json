@@ -1590,5 +1590,7 @@
  "The SIEM / syslog server is a host name or an IP address, e.g. siem.example.com.": "Сервер SIEM / syslog — ім’я хоста або IP-адреса, напр. siem.example.com.",
  "The facility is local0 … local7.": "Facility — local0 … local7.",
  "The port is a number 1–65535.": "Порт — число 1–65535.",
- "Transport": "Транспорт"
+ "Transport": "Транспорт",
+ "words separated by spaces · <b>-</b>key:value leaves out · two values of one key: either of them · <b>↑ ↓</b> and <b>Tab</b> take a suggestion": "слова через пробіл · <b>-</b>ключ:значення виключає · два значення одного ключа: будь-яке з них · <b>↑ ↓</b> і <b>Tab</b> беруть підказку",
+ "— as in the search box; empty: all traffic": "— як у полі пошуку; порожньо: увесь трафік"
 }

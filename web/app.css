@@ -642,4 +642,8 @@ details.lhints p{margin:4px 0 0;line-height:1.45}
   border:0;color:var(--ink);font:inherit;padding:0 20px 0 0;margin:0;cursor:pointer;max-width:100%}
 .gcard select:focus-visible{outline:2px solid var(--blue);outline-offset:3px;border-radius:4px}
 .gcard select option{background:var(--bg2);color:var(--ink);font-size:14px}
+/* (1.11.1) the filter guide under a form field (reports): in the flow of the form, so a scrolling window never cuts it */
+.qguide.inline{position:static;width:auto;max-height:min(46vh,380px);margin-top:6px;padding:8px}
+.qguide.inline .qgrid{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.qguide.inline .qerr code{font:600 12px var(--f-mono)}
 

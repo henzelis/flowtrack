@@ -2620,7 +2620,9 @@ function repNext(r){
 const TZ_RENAMED = {'Europe/Kiev':'Europe/Kyiv', 'Europe/Uzhgorod':'Europe/Kyiv', 'Europe/Zaporozhye':'Europe/Kyiv', 'Asia/Calcutta':'Asia/Kolkata',
   'Asia/Saigon':'Asia/Ho_Chi_Minh', 'Asia/Katmandu':'Asia/Kathmandu', 'Asia/Rangoon':'Asia/Yangon', 'Atlantic/Faeroe':'Atlantic/Faroe',
   'America/Buenos_Aires':'America/Argentina/Buenos_Aires', 'Pacific/Truk':'Pacific/Chuuk', 'Etc/UTC':'UTC'};
-const repFilters = f => (f || []).map(x => (x.neg ? '-' : '') + x.k + ':' + x.v).join(' ');
+// filters back as the words of the box: a device by its name, a named network with _ for its spaces (1.11.1)
+const repFilters = f => (f || []).map(x => (x.neg ? '-' : '') + x.k + ':' + (x.k === 'device' ? ((META.devices || []).find(d => d.ip === x.v) || {}).name || x.v
+  : x.k === 'net' ? netTyped(x.v) : x.v)).join(' ');
 async function repDownload(q, btn, path = 'reports/pdf'){
   const old = btn.textContent; btn.disabled = true; btn.textContent = T('Making the PDF…');
   try {
@@ -2693,8 +2695,8 @@ async function openPeriodReport(){
     <p class="note" id="opLen" style="margin:0"></p>
     <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
       <label>${T('Traffic')}<select id="opT">${REP_TRAFFIC().map(([k, l]) => `<option value="${k}" ${state.traffic === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>${T('Filters')}<input id="opF" class="mono" value="${esc(repFilters(state.filters))}" placeholder="net:Office ip:10.0.0.5"></label>
       <label>${T('Language')}<select id="opLang">${langs().map(([k, l]) => `<option value="${k}" ${LANG === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
+    <div><label for="opF">${T('Filters')} <span class="nat">${T('— as in the search box; empty: all traffic')}</span></label><input id="opF" class="mono" value="${esc(repFilters(state.filters))}" placeholder="net:Office ip:10.0.0.5 -service:Telegram"></div>
     <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('What the report holds')}</legend>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px">${Object.entries(secs).map(([k, l]) =>
         `<label class="chk"><input type="checkbox" data-sec="${k}" checked>${l}</label>`).join('')}</div></fieldset>
@@ -2706,6 +2708,7 @@ async function openPeriodReport(){
   const len = () => { const [a, b] = span(), m = Math.round((b - a) / 60);
     $('opLen').textContent = !(b > a) ? T('The end must be after the start.') : m < 120 ? T('{n} min', {n:m}) : m < 2880 ? T('{n} h', {n:Math.round(m / 6) / 10}) : T('{n} d', {n:Math.round(m / 144) / 10}); };
   $('opFrom').oninput = len; $('opTo').oninput = len; len();
+  filterGuide($('opF'));
   const body = () => { const f = [];
     for (const t of $('opF').value.trim().split(/\s+/).filter(Boolean)) { const p = qParse(t); if (p.err) throw new Error(p.err); if (!p.f) throw new Error(T('Not a filter: {v}', {v:t})); f.push(p.f); }
     const [a, b] = span(); if (!(b > a)) throw new Error(T('The end must be after the start.'));
@@ -2831,9 +2834,8 @@ function vReports(){
       <p class="note" id="rpWhen" style="margin:0"></p>
       <label>${T('Time zone')}<select id="rpTz">${d.timezones.map(z => `<option ${z === tz ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
       <label>${T('Recipients')}<textarea id="rpTo" rows="2" placeholder="${esc(d.mail_to.length ? T('empty: those of the notifications ({to})', {to:d.mail_to.join(', ')}) : 'noc@example.com, boss@example.com')}">${esc(x.to.join(', '))}</textarea></label>
-      <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
-        <label>${T('Traffic')}<select id="rpT">${REP_TRAFFIC().map(([k, l]) => `<option value="${k}" ${x.t === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-        <label>${T('Filters')}<input id="rpF" class="mono" value="${esc(repFilters(x.f))}" placeholder="net:Office -service:Windows Update"></label></div>
+      <label>${T('Traffic')}<select id="rpT">${REP_TRAFFIC().map(([k, l]) => `<option value="${k}" ${x.t === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <div><label for="rpF">${T('Filters')} <span class="nat">${T('— as in the search box; empty: all traffic')}</span></label><input id="rpF" class="mono" value="${esc(repFilters(x.f))}" placeholder="net:Office device:fw-main -service:Telegram"></div>
       <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('What the report holds')}</legend>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px">${Object.entries(secs).map(([k, l]) =>
           `<label class="chk"><input type="checkbox" data-sec="${k}" ${x.sections.includes(k) ? 'checked' : ''}>${l}</label>`).join('')}</div></fieldset>
@@ -2844,6 +2846,7 @@ function vReports(){
     const hint = () => { const s = sched(); $('rpWdayL').hidden = s.every !== 'week'; $('rpMdayL').hidden = s.every !== 'month';
       $('rpWhen').textContent = repWhen(s) + ' · ' + repNext(s); };
     ['rpEvery', 'rpWday', 'rpMday'].forEach(id => $(id).onchange = hint); $('rpAt').oninput = hint; hint();
+    filterGuide($('rpF'));
     const form = () => { const f = [];
       for (const t of $('rpF').value.trim().split(/\s+/).filter(Boolean)) { const p = qParse(t); if (p.err) throw new Error(p.err); if (!p.f) throw new Error(T('Not a filter: {v}', {v:t})); f.push(p.f); }
       return Object.assign(sched(), {id:r ? r.id : '', name:$('rpName').value.trim(), lang:$('rpLang').value, tz:$('rpTz').value, to:$('rpTo').value, t:$('rpT').value, f,
@@ -3886,18 +3889,61 @@ function qSuggest(word){
   }
   return out;
 }
+// the guide's HTML for a list of suggestions (null: every key with an example); fills `items` with what can be taken
+function guideHtml(list, items, tips){
+  if (list === null) return `<div class="qgrid">${QHELP().map(([g, rows]) => `<div><h5>${g}</h5>${rows.map(([k, d, ex]) => { items.push({text:`${k}:`, key:true});
+    return `<button type="button" class="qrow" data-qi="${items.length - 1}" role="option"><code>${k}:</code><span>${d}<small>${esc(ex)}</small></span></button>`; }).join('')}</div>`).join('')}</div>
+    <p class="qtips">${tips}</p>`;
+  return list.map(it => { if (it.err) return `<div class="qerr" role="alert">${esc(it.err)}</div>`;
+    items.push(it); return `<button type="button" class="qrow${it.hint ? ' hint' : ''}" data-qi="${items.length - 1}" role="option"><code>${esc(it.label)}</code><span>${esc(it.note || '')}</span></button>`; }).join('');
+}
 function qGuide(){
   if (document.activeElement !== q) { qBox.hidden = true; return; }
   const word = qWord(), list = qSuggest(word);
-  qItems = []; let html = '';
-  if (list === null) {                                  // the whole guide
-    html = `<div class="qgrid">${QHELP().map(([g, rows]) => `<div><h5>${g}</h5>${rows.map(([k, d, ex]) => { qItems.push({text:`${k}:`, key:true});
-      return `<button type="button" class="qrow" data-qi="${qItems.length - 1}" role="option"><code>${k}:</code><span>${d}<small>${esc(ex)}</small></span></button>`; }).join('')}</div>`).join('')}</div>
-      <p class="qtips">${T('<b>-</b>key:value leaves out · two values of one key: either of them · <b>Enter</b> applies · <b>Backspace</b> in an empty box removes the last filter · <b>/</b> opens the search')}</p>`;
-  } else if (!list.length) { qBox.hidden = true; return; }
-  else html = list.map(it => { if (it.err) return `<div class="qerr" role="alert">${esc(it.err)}</div>`;
-    qItems.push(it); return `<button type="button" class="qrow${it.hint ? ' hint' : ''}" data-qi="${qItems.length - 1}" role="option"><code>${esc(it.label)}</code><span>${esc(it.note || '')}</span></button>`; }).join('');
-  qBox.innerHTML = html; qBox.hidden = false; qSel = Math.min(qSel, qItems.length - 1); qMark();
+  qItems = [];
+  if (list && !list.length) { qBox.hidden = true; return; }
+  qBox.innerHTML = guideHtml(list, qItems, T('<b>-</b>key:value leaves out · two values of one key: either of them · <b>Enter</b> applies · <b>Backspace</b> in an empty box removes the last filter · <b>/</b> opens the search'));
+  qBox.hidden = false; qSel = Math.min(qSel, qItems.length - 1); qMark();
+}
+// (1.11.1) the same guide for the filter fields of forms (reports): a suggestion completes the word — nothing is
+// applied — and a space follows a complete filter, so the next one can be typed; every word's error shows at once
+function filterGuide(input){
+  const box = document.createElement('div'), items = [];
+  let sel = -1;
+  box.className = 'qguide inline'; box.hidden = true; box.setAttribute('role', 'listbox');
+  input.insertAdjacentElement('afterend', box);
+  input.setAttribute('aria-autocomplete', 'list'); input.setAttribute('autocomplete', 'off'); input.spellcheck = false;
+  const word = () => (input.value.slice(0, input.selectionStart ?? input.value.length).match(/(\S*)$/) || ['', ''])[1];
+  const mark = () => box.querySelectorAll('[data-qi]').forEach(b => { const on = +b.dataset.qi === sel; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); if (on) b.scrollIntoView({block:'nearest'}); });
+  const show = () => {
+    if (document.activeElement !== input) { box.hidden = true; return; }
+    const w = word(), list = qSuggest(w);
+    // the words before this one: what is wrong with them, so the form is not refused later without a reason
+    const errs = input.value.trim().split(/\s+/).filter(t => t && t !== w).map(t => [t, qParse(t).err]).filter(([, e]) => e);
+    items.length = 0;
+    const html = errs.map(([t, e]) => `<div class="qerr" role="alert"><code>${esc(t)}</code> — ${esc(e)}</div>`).join('') + (list && !list.length ? '' :
+      guideHtml(list, items, T('words separated by spaces · <b>-</b>key:value leaves out · two values of one key: either of them · <b>↑ ↓</b> and <b>Tab</b> take a suggestion')));
+    box.innerHTML = html; box.hidden = !html; sel = Math.min(sel, items.length - 1); mark();
+  };
+  const take = it => {
+    if (!it || it.hint) return;
+    const at = input.selectionStart ?? input.value.length, before = input.value.slice(0, at).replace(/(\S*)$/, it.text), after = input.value.slice(at).replace(/^\S*/, '');
+    const add = it.key ? '' : (after.startsWith(' ') ? '' : ' ');
+    input.value = before + add + after; const c = (before + add).length; input.setSelectionRange(c, c);
+    sel = -1; input.focus(); show(); input.dispatchEvent(new Event('change'));
+  };
+  box.addEventListener('mousedown', e => e.preventDefault());
+  box.addEventListener('click', e => { const b = e.target.closest('[data-qi]'); if (b) take(items[+b.dataset.qi]); });
+  input.addEventListener('focus', () => { sel = -1; show(); });
+  input.addEventListener('click', show);
+  input.addEventListener('input', () => { sel = -1; show(); });
+  input.addEventListener('blur', () => { box.hidden = true; });
+  input.addEventListener('keydown', e => {
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !box.hidden && items.length) { e.preventDefault();
+      sel = (sel + (e.key === 'ArrowDown' ? 1 : items.length - 1 + (sel < 0 ? 1 : 0))) % items.length; mark(); }
+    else if ((e.key === 'Tab' && word() || e.key === 'Enter' && sel >= 0) && !box.hidden && items.length) { e.preventDefault(); take(items[Math.max(0, sel)]); }
+    else if (e.key === 'Escape' && !box.hidden) { e.stopPropagation(); box.hidden = true; }      // the guide closes, not the window
+  });
 }
 function qMark(){ qBox.querySelectorAll('[data-qi]').forEach(b => { const on = +b.dataset.qi === qSel; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); if (on) b.scrollIntoView({block:'nearest'}); }); }
 function qTake(it){

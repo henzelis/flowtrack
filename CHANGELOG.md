@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Filter hints in the report forms**: the *Filters* field of a report and of *Report for a period* now has the guide
+  of the search box — every key with an example on focus, suggestions while typing (device names, named networks,
+  directions, protocols), ↑ ↓ / Tab / Enter to take one (it completes the word, nothing is applied until you save),
+  and what is wrong with a value right away, also for words typed earlier. Saved filters show devices by their name.
+
 ## 1.11.0 — 2026-10-18
 
 - **API tokens** (*Settings → API*): scripts and monitoring systems read FlowTrack — and, with a *Read and change*
