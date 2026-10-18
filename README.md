@@ -114,7 +114,8 @@ can be shared.
 Port scans, password guessing on SSH / RDP / management ports, floods and DDoS against your usual peak, inside hosts
 that scan, contact with addresses on eight public reputation lists (plus your own), sustained uploads, new countries
 and exporter health. FlowTrack works out who opened each connection and which of your services are public, so busy
-web sites stay quiet. New events go to Telegram (your own bot) and e-mail.
+web sites stay quiet. New events go to Telegram (your own bot), e-mail, webhooks (Slack, Mattermost, Discord or your
+own system) and your SIEM as syslog (CEF or JSON).
 
 ### Reports — by e-mail, on schedule or for any period
 
@@ -172,7 +173,7 @@ Details: [docs/editions.md](docs/editions.md).
 | [Backups and restore](docs/backups.md) | schedule, S3 / SFTP / FTP copies, encryption, restore on a new server |
 | [Configuration](docs/configuration.md) | `/etc/flowtrack/env` |
 | [Security](docs/security.md) | passwords, sessions, HTTPS, what runs where |
-| [API](docs/api.md) | JSON endpoints and filters |
+| [API](docs/api.md) | JSON endpoints, filters, API tokens, webhooks, SIEM / syslog |
 | [Performance](docs/performance.md) | measured receiving and page speeds |
 | [Editions and licensing](docs/editions.md) | limits, activating a license key, moving it to another server |
 | [Translations](docs/translations.md) | adding a language: one file |

@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.11.0 — 2026-10-18
 
 - **API tokens** (*Settings → API*): scripts and monitoring systems read FlowTrack — and, with a *Read and change*
   token, change what an administrator changes — through `Authorization: Bearer ftapi_…`, without a password. Shown
