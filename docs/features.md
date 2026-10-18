@@ -8,6 +8,9 @@
   networks, security events and devices; English or Ukrainian, any time zone, on the weekday / day of the month you
   choose, narrowed by filters if you like; a period not fully collected yet is shown with a note, never as zeros.
   *Download PDF* and *Send now* any time.
+- **Report for a period**: the report button in the top bar turns the period and filters on screen (an incident
+  zoomed into) into the same PDF at once, or any *from – to*; administrators can e-mail it.
+- *Settings → General → Mail server*: one SMTP server, tested from there, for the reports and the e-mail notifications.
 
 **New in 1.8 – 1.9**
 - *Path analysis* comes alive: five map views — **Classic**, **Lines**, **Stars**, **Metro** and **River** — with the

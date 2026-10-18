@@ -147,6 +147,19 @@ def validate(body, old=None):
     return r
 
 
+def once(body, t0, t1, now=None):
+    """(1.10.0) A report of any period, made now (an attack, an outage): the settings of a report without the schedule.
+    -> the report (every = 'custom'); ValueError for people."""
+    now = now or time.time()
+    if not (isinstance(t0, int) and isinstance(t1, int)) or t1 - t0 < 300:
+        raise ValueError(tr('The period of the report must be at least 5 minutes long.'))
+    if t0 > now - 60:
+        raise ValueError(tr('The period of the report must start in the past.'))
+    r = validate(dict(body, every='day', on=False, name=body.get('name') or tr('Report for a period')))
+    r.update(every='custom', id='', created=0)
+    return r
+
+
 def upsert(body):
     """Saves a new or a changed report; a new one starts with the next period (Send now covers the last one)."""
     with _lock:
@@ -403,7 +416,8 @@ def render(r, data, t0, t1, version='', now=None):
     total_b = s['bytes']
     peak = max(((x[1] + x[2] + x[3]) * 8 / step for x in rows), default=0)
     avg = total_b * 8 / max(t1 - t0, 1)
-    if 'summary' in sec:
+    empty = cov.get('kind') in ('before', 'none')       # nothing at all: the note says it, no rows of zeros
+    if 'summary' in sec and not empty:
         tiles = [(tr('Traffic'), fmt_b(total_b), delta(total_b, s['p_bytes']) if s.get('has_prev') else ''),
                  (tr('Downloaded'), fmt_b(s['down']), ''), (tr('Uploaded'), fmt_b(s['up']), ''),
                  (tr('Flows'), fmt_n(s['flows']), delta(s['flows'], s['p_flows']) if s.get('has_prev') else ''),
@@ -416,7 +430,7 @@ def render(r, data, t0, t1, version='', now=None):
         for i, (k, v, dl) in enumerate(tiles):
             cells.append([Paragraph(f'<font color="{INK2}" size="7.4">{esc(k.upper())}</font>', P),
                           Paragraph(f'<font name="FT-Black" size="14" color="{accent.get(i, INK)}">{esc(v)}</font>', st('v', leading=18)),
-                          Paragraph(f'<font color="{INK2}" size="7.4">{esc(dl + " " + tr("vs the period before") if dl else " ")}</font>', P)])
+                          Paragraph(f'<font color="{INK2}" size="7.4">{esc(dl or " ")}</font>', P)])
         grid = [cells[:4], cells[4:]]
         tw = W / 4
         t = Table(grid, colWidths=[tw] * 4, rowHeights=19 * mm)
@@ -424,8 +438,12 @@ def render(r, data, t0, t1, version='', now=None):
                                ('LINEAFTER', (0, 0), (-2, -1), 3, colors.white), ('LINEBELOW', (0, 0), (-1, 0), 3, colors.white),
                                ('TOPPADDING', (0, 0), (-1, -1), 6), ('LEFTPADDING', (0, 0), (-1, -1), 7)]))
         story.append(t)
+        if any(x[2] for x in tiles):
+            story.append(Spacer(0, 1.2 * mm))
+            story.append(Paragraph(esc(tr('↑ ↓ against the period of the same length just before.')), st('cmp', textColor=C(INK3), fontSize=7)))
+
     # ---- traffic over time
-    if 'chart' in sec and rows:
+    if 'chart' in sec and rows and not empty:
         cw, chh, lm, bm = W, 58 * mm, 15 * mm, 7 * mm
         d = Drawing(cw, chh + bm + 9)
         pw, ph = cw - lm - 2, chh
@@ -445,7 +463,7 @@ def render(r, data, t0, t1, version='', now=None):
             v += tick
         marks, span = [], t1 - t0
         if span <= 2 * 86400:               # clock marks every 3 (6) hours, also for a part of a day
-            every = 3 if span <= 86400 + 3600 else 6
+            every = 1 if span <= 6 * 3600 else 2 if span <= 12 * 3600 else 3 if span <= 86400 + 3600 else 6
             t = t0 - t0 % 3600
             while t <= t1:
                 h = datetime.datetime.fromtimestamp(t, tz)
@@ -608,7 +626,7 @@ def render(r, data, t0, t1, version='', now=None):
         c.setFont('FT', 8)
         c.setFillColor(C('#A9B7D9'))
         c.drawRightString(A4[0] - 16 * mm, A4[1] - 11 * mm, {'day': tr('Daily report'), 'week': tr('Weekly report'),
-                                                             'month': tr('Monthly report')}[r['every']])
+                                                             'month': tr('Monthly report'), 'custom': tr('Report for a period')}[r['every']])
         c.drawRightString(A4[0] - 16 * mm, A4[1] - 27 * mm, r['tz'])
         c.restoreState()
         later(c, doc)
@@ -638,6 +656,8 @@ def cover(r, data, t0, t1, now):
     shows what there is instead, up to one period long); silent (the devices sent nothing then); none (never)."""
     s = data['summary']
     first = int(s.get('oldest') or 0)
+    if r['every'] == 'custom' and not s['bytes'] and first >= t1 - 60:
+        return {'kind': 'before', 't0': t0, 't1': t1, 'first': first}      # a chosen period (an incident): never another instead
     if s['bytes']:
         return {'kind': 'part', 't0': first, 't1': t1} if first > t0 + 3600 else {'kind': 'full', 't0': t0, 't1': t1}
     if not first:
@@ -656,7 +676,7 @@ def cover_note(r, cov, p0, p1):
     if k == 'full':
         return None
     tz = ZoneInfo(r['tz'])
-    start = datetime.datetime.fromtimestamp(cov['t0'], tz).strftime('%Y-%m-%d %H:%M')
+    start = datetime.datetime.fromtimestamp(cov.get('first', cov['t0']), tz).strftime('%Y-%m-%d %H:%M')
     have = period_label(r, cov['t0'], cov['t1'])
     if k == 'part':
         return (tr('Not the whole period: records from {start}', start=start),
@@ -666,6 +686,9 @@ def cover_note(r, cov, p0, p1):
         return (tr('No records of {period} yet: the report shows {have}', period=period_label(r, p0, p1), have=have),
                 tr('FlowTrack has been collecting since {start}, after this period ended. So that the report is not empty, it shows '
                    'everything collected so far; the next one will cover its whole period.', start=start))
+    if k == 'before':
+        return (tr('No records of {period}', period=period_label(r, p0, p1)),
+                tr('FlowTrack has records only from {start}, after this period (or older records are no longer kept).', start=start))
     if k == 'silent':
         return (tr('No records in this period'),
                 tr('FlowTrack was running, but the devices sent it nothing then. Check them in Settings → Devices.'))
@@ -690,7 +713,8 @@ def make(r, t0, t1, call, version=''):
 
 def file_name(r, t0):
     slug = re.sub(r'[^A-Za-z0-9]+', '-', r['name']).strip('-').lower()[:40] or 'report'
-    return f"flowtrack-{slug}-{datetime.datetime.fromtimestamp(t0, ZoneInfo(r['tz'])).strftime('%Y-%m-%d')}.pdf"
+    when = datetime.datetime.fromtimestamp(t0, ZoneInfo(r['tz'])).strftime('%Y-%m-%d_%H%M' if r['every'] == 'custom' else '%Y-%m-%d')
+    return f"flowtrack-{slug}-{when}.pdf"
 
 
 def mail_problem(r, cfg=None):

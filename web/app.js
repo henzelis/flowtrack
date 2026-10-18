@@ -2574,10 +2574,10 @@ const TZ_RENAMED = {'Europe/Kiev':'Europe/Kyiv', 'Europe/Uzhgorod':'Europe/Kyiv'
   'Asia/Saigon':'Asia/Ho_Chi_Minh', 'Asia/Katmandu':'Asia/Kathmandu', 'Asia/Rangoon':'Asia/Yangon', 'Atlantic/Faeroe':'Atlantic/Faroe',
   'America/Buenos_Aires':'America/Argentina/Buenos_Aires', 'Pacific/Truk':'Pacific/Chuuk', 'Etc/UTC':'UTC'};
 const repFilters = f => (f || []).map(x => (x.neg ? '-' : '') + x.k + ':' + x.v).join(' ');
-async function repDownload(q, btn){
+async function repDownload(q, btn, path = 'reports/pdf'){
   const old = btn.textContent; btn.disabled = true; btn.textContent = T('Making the PDF…');
   try {
-    const r = await fetch('api/reports/pdf?' + new URLSearchParams(q));
+    const r = await fetch(`api/${path}?` + new URLSearchParams(q));
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.status); }
     const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'flowtrack-report.pdf';
     const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; document.body.appendChild(a); a.click();
@@ -2632,10 +2632,52 @@ function mailPanel(el, d){
   };
   draw();
 }
+// (1.10.0) a report of any period, made now — an attack or an outage the engineer has zoomed into: the period and the
+// filters of the page come along; Download PDF for anyone, Send by e-mail for administrators
+const dtLocal = t => { const d = new Date(t * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+async function openPeriodReport(){
+  const now = Math.floor(Date.now() / 1000), t1 = isCustom() ? Math.min(state.to, now) : now, t0 = isCustom() ? state.from : now - rangeSecs();
+  let mail = null; if (isAdmin()) { try { mail = (await (await fetch('api/mail')).json()).mail; } catch (e) {} }
+  let tz = 'UTC'; try { const b = Intl.DateTimeFormat().resolvedOptions().timeZone; tz = TZ_RENAMED[b] || b; } catch (e) {}
+  const secs = REP_SECTIONS();
+  const md = openModal(T('Report for a period'), T('a PDF of any period, made now — e.g. an attack or an outage'), `<form class="form" id="opForm" novalidate style="padding:4px 2px">
+    <label>${T('Name')}<input id="opName" maxlength="80" value="${esc(T('Report for a period'))}"></label>
+    <div class="two"><label>${T('From')}<input id="opFrom" type="datetime-local" value="${dtLocal(t0)}"></label><label>${T('To')}<input id="opTo" type="datetime-local" value="${dtLocal(t1)}"></label></div>
+    <p class="note" id="opLen" style="margin:0"></p>
+    <div class="cols" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px">
+      <label>${T('Traffic')}<select id="opT">${REP_TRAFFIC().map(([k, l]) => `<option value="${k}" ${state.traffic === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label>${T('Filters')}<input id="opF" class="mono" value="${esc(repFilters(state.filters))}" placeholder="net:Office ip:10.0.0.5"></label>
+      <label>${T('Language')}<select id="opLang">${langs().map(([k, l]) => `<option value="${k}" ${LANG === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
+    <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('What the report holds')}</legend>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px">${Object.entries(secs).map(([k, l]) =>
+        `<label class="chk"><input type="checkbox" data-sec="${k}" checked>${l}</label>`).join('')}</div></fieldset>
+    ${isAdmin() ? `<label>${T('Send by e-mail to (optional)')}<textarea id="opTo2" rows="2" ${mailReady(mail) ? '' : 'disabled'} placeholder="${mailReady(mail) ? 'noc@example.com, boss@example.com' : esc(T('The mail server is not set up: nothing is sent by e-mail.'))}"></textarea></label>` : ''}
+    <p class="err" id="opErr" hidden></p><p class="note" id="opOk" hidden></p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Download PDF')}</button>${isAdmin() ? `<button class="btn" type="button" id="opSend" ${mailReady(mail) ? '' : 'disabled'}>${T('Send')}</button>` : ''}<button class="btn" type="button" id="opNo">${T('Cancel')}</button></div></form>`, true);
+  const $ = id => document.getElementById(id);
+  const span = () => { const a = new Date($('opFrom').value).getTime() / 1000, b = new Date($('opTo').value).getTime() / 1000; return [Math.round(a), Math.round(b)]; };
+  const len = () => { const [a, b] = span(), m = Math.round((b - a) / 60);
+    $('opLen').textContent = !(b > a) ? T('The end must be after the start.') : m < 120 ? T('{n} min', {n:m}) : m < 2880 ? T('{n} h', {n:Math.round(m / 6) / 10}) : T('{n} d', {n:Math.round(m / 144) / 10}); };
+  $('opFrom').oninput = len; $('opTo').oninput = len; len();
+  const body = () => { const f = [];
+    for (const t of $('opF').value.trim().split(/\s+/).filter(Boolean)) { const p = qParse(t); if (p.err) throw new Error(p.err); if (!p.f) throw new Error(T('Not a filter: {v}', {v:t})); f.push(p.f); }
+    const [a, b] = span(); if (!(b > a)) throw new Error(T('The end must be after the start.'));
+    return {from:a, to:b, form:{name:$('opName').value.trim(), t:$('opT').value, f, lang:$('opLang').value, tz, to:$('opTo2') ? $('opTo2').value : '',
+      sections:[...document.querySelectorAll('#opForm [data-sec]:checked')].map(c => c.dataset.sec)}}; };
+  const say = (ok, msg) => { formErr('opErr', ok ? '' : msg); const n = $('opOk'); n.textContent = ok ? msg : ''; n.hidden = !ok; };
+  $('opNo').onclick = md.close;
+  $('opForm').onsubmit = async e => { e.preventDefault(); say(true, ''); let b; try { b = body(); } catch (x) { return say(false, x.message); }
+    const err = await repDownload({from:b.from, to:b.to, form:JSON.stringify(b.form)}, e.submitter || $('opForm').querySelector('button[type=submit]'), 'report/pdf');
+    if (err) say(false, err); };
+  if ($('opSend')) $('opSend').onclick = async e => { say(true, ''); let b; try { b = body(); } catch (x) { return say(false, x.message); }
+    const btn = e.target, old = btn.textContent; btn.disabled = true; btn.textContent = T('Sending…');
+    try { const x = await apiPost('reports/send_once', b); say(true, '✓ ' + Tn(x.sent, 'sent to {n} recipient', 'sent to {n} recipients', {n:x.sent}) + ' · ' + x.period); }
+    catch (x) { say(false, x.message); } finally { btn.disabled = false; btn.textContent = old; } };
+}
 function vReports(){
   const v = document.getElementById('setBody'), seq = renderSeq;
   v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph(REP_ICON, T('Reports'), T('a PDF of the last day, week or month, e-mailed at its hour · the same numbers as the pages'),
-    `<button class="btn primary" id="repNew">${T('New report')}</button>`)}<div id="repMail"></div><div id="repList" class="loading"></div><p class="err" id="repErr" hidden></p></section></div>`;
+    `<button class="btn" id="repOnce">${T('Report for a period')}</button> <button class="btn primary" id="repNew">${T('New report')}</button>`)}<div id="repMail"></div><div id="repList" class="loading"></div><p class="err" id="repErr" hidden></p></section></div>`;
   let d = null;
   const $ = id => document.getElementById(id);
   const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
@@ -2708,6 +2750,7 @@ function vReports(){
     $('rpName').focus();
   };
   $('repNew').onclick = () => d && openReport(null);
+  $('repOnce').onclick = openPeriodReport;
   (async () => { try { const r = await fetch('api/reports'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); d = j; draw(); }
     catch (e) { const el = $('repList'); if (el) { el.classList.remove('loading'); el.innerHTML = `<p class="err">${esc(e.message)}</p>`; } } })();
 }
@@ -3773,6 +3816,7 @@ q.addEventListener('keydown', e => {
 });
 document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement !== q && !/input|textarea|select/i.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); } });
 document.getElementById('bell').onclick = () => { state.view = 'threats'; render(); };
+document.getElementById('repBtn').onclick = openPeriodReport;      // (1.10.0) a PDF of the period and filters on screen
 
 // sidebar health: real collector ingest rate
 const ingHist = [];

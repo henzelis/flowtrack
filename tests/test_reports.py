@@ -143,6 +143,27 @@ class Cover(unittest.TestCase):
         common.set_lang('en')
 
 
+class Once(unittest.TestCase):
+    """A report of any period (an incident): checked, never replaced by another period."""
+    def test_checks_and_cover(self):
+        now = ts(2026, 10, 18, 17)
+        r = reports.once({'tz': 'Europe/Kyiv', 'sections': ['summary'], 'f': [{'k': 'device', 'v': '192.0.2.1'}]}, ts(2026, 10, 17, 2, 10), ts(2026, 10, 17, 3, 40), now)
+        self.assertEqual((r['every'], r['on'], r['id']), ('custom', False, ''))
+        common.set_lang('en')
+        self.assertEqual(r['name'], 'Report for a period')
+        self.assertEqual(reports.period_label(r, ts(2026, 10, 17, 2, 10), ts(2026, 10, 17, 3, 40)), '2026-10-17 02:10 — 2026-10-17 03:40')
+        self.assertEqual(reports.file_name(r, ts(2026, 10, 17, 2, 10)), 'flowtrack-report-for-a-period-2026-10-17_0210.pdf')
+        for t0, t1 in ((now - 100, now), (now + 10, now + 900), (ts(2026, 10, 17), ts(2026, 10, 17, 0, 4))):
+            with self.subTest((t0, t1)), self.assertRaises(ValueError):
+                reports.once({'sections': ['summary']}, t0, t1, now)
+        c = reports.cover(r, {'summary': {'bytes': 0, 'oldest': ts(2026, 10, 18)}}, ts(2026, 10, 17, 2, 10), ts(2026, 10, 17, 3, 40), now)
+        self.assertEqual(c['kind'], 'before')                    # no other period shown instead of the incident
+        self.assertIn('2026-10-18 00:00', reports.cover_note(r, c, ts(2026, 10, 17, 2, 10), ts(2026, 10, 17, 3, 40))[1])
+        pdf, data = reports.make(r, ts(2026, 10, 17, 2, 10), ts(2026, 10, 17, 3, 40), fake_call())
+        self.assertTrue(pdf.startswith(b'%PDF'))
+        self.assertEqual(data['cover']['kind'], 'full')
+
+
 class Settings(unittest.TestCase):
     def test_checks(self):
         ok = {'name': 'Weekly', 'every': 'week', 'tz': 'Europe/Kyiv', 'sections': ['summary', 'nonsense']}

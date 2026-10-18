@@ -5,6 +5,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+- **Report for a period**: the report button in the top bar makes a PDF of exactly the period and filters on screen —
+  an attack or an outage you zoomed into — or of any *from – to* you type (also in Settings → Reports). Anyone can
+  download it; administrators can also e-mail it to the addresses they enter. A period without records says so instead
+  of showing another one.
 - **Scheduled reports** (Settings → Reports). A PDF of the last day, week (Monday to Sunday) or calendar month goes by
   e-mail at its hour, through the mail server of the notifications, to the report's own recipients: totals against
   the period before, traffic over time, the busiest inside hosts, outside networks, services, countries, your named

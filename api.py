@@ -1987,6 +1987,13 @@ class H(BaseHTTPRequestHandler):
                 return self.json(200, edition_info(admin=AUTH.users[user]['role'] == 'admin'))
             if u.path == '/api/progress':      # not a page query itself: it neither cancels nor counts in what it reports
                 return self.json(200, page_progress(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page')))
+            if u.path == '/api/report/pdf':        # (1.10.0) a report of any period: any user, it shows what the pages show
+                try:
+                    name, pdf = get_report_once_pdf(parse_qs(u.query))
+                except BadRequest as e:
+                    return self.json(400, {'error': str(e)})
+                self._disposition = f'attachment; filename="{name}"'
+                return self.send(200, pdf, 'application/pdf')
             if u.path in ADMIN_GET:
                 if AUTH.users[user]['role'] != 'admin':
                     return self.json(403, {'error': tr('Administrator rights required')})
@@ -2113,6 +2120,7 @@ class H(BaseHTTPRequestHandler):
                 '/api/reports/save': lambda: post_report_save(body),
                 '/api/reports/delete': lambda: post_report_delete(body),
                 '/api/reports/send': lambda: post_report_send(body),
+                '/api/reports/send_once': lambda: post_report_send_once(body),
                 '/api/mail': lambda: post_mail(body),
                 '/api/mail/test': lambda: post_mail_test(body),
             }
@@ -2269,6 +2277,48 @@ def get_report_pdf(q):
     except CHError as e:
         raise BadRequest(ch_error_answer(e)[1]) from None
     return reports.file_name(r, t0), pdf
+
+
+def _report_once(body):
+    """(report, t0, t1) of a report of any period: body {form: the report's settings, from, to}."""
+    try:
+        t0, t1 = int(body.get('from')), int(body.get('to'))
+    except (TypeError, ValueError):
+        raise BadRequest(tr('The period of the report must be at least 5 minutes long.')) from None
+    t1 = min(t1, int(time.time()))
+    if t1 <= int(time.time()) - (view_days() + 1) * 86400:
+        raise BadRequest(tr('This period is older than the records FlowTrack keeps.'))
+    try:
+        return reports.once(body.get('form') or {}, t0, t1), t0, t1
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+
+
+def get_report_once_pdf(q):
+    try:
+        body = {'form': json.loads(q1(q, 'form', '{}')), 'from': q1(q, 'from', ''), 'to': q1(q, 'to', '')}
+    except ValueError:
+        raise BadRequest('bad form') from None
+    r, t0, t1 = _report_once(body)
+    try:
+        pdf, _ = reports.make(r, t0, t1, report_call, VERSION)
+    except CHError as e:
+        raise BadRequest(ch_error_answer(e)[1]) from None
+    return reports.file_name(r, t0), pdf
+
+
+def post_report_send_once(body):
+    """A report of any period by e-mail now, to the addresses given (administrators)."""
+    r, t0, t1 = _report_once(body)
+    if not r['to']:
+        raise BadRequest(tr('Enter at least one recipient.'))
+    try:
+        n, label = reports.send(r, t0, t1, report_call, VERSION)
+    except ValueError as e:
+        raise BadRequest(str(e)) from None
+    except CHError as e:
+        raise BadRequest(ch_error_answer(e)[1]) from None
+    return {'ok': True, 'sent': n, 'period': label}
 
 
 def post_report_save(body):
