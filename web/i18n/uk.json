@@ -1684,5 +1684,7 @@
  "{device} · {name}: incoming traffic up to {mbps} of {cap} Mbit/s ({pct}%), above {over}% for {minutes} min.": "{device} · {name}: вхідний трафік до {mbps} з {cap} Мбіт/с ({pct}%), понад {over}% протягом {minutes} хв.",
  "{device} · {name}: outgoing traffic up to {mbps} of {cap} Mbit/s ({pct}%), above {over}% for {minutes} min.": "{device} · {name}: вихідний трафік до {mbps} з {cap} Мбіт/с ({pct}%), понад {over}% протягом {minutes} хв.",
  "in": "вхід",
- "out": "вихід"
+ "out": "вихід",
+ "Gmail did not accept the login or the password. Gmail needs an app password: turn on 2-Step Verification in your Google account, create an app password (Security → App passwords) and enter it here instead of your usual password.": "Gmail не прийняв логін або пароль. Gmail потребує пароль застосунку: увімкніть двоетапну перевірку в акаунті Google, створіть пароль застосунку (Безпека → Паролі застосунків) і введіть його тут замість звичайного пароля.",
+ "Microsoft 365 did not accept the login or the password: use an app password, and check that SMTP AUTH is allowed for this mailbox.": "Microsoft 365 не прийняв логін або пароль: використайте пароль застосунку і перевірте, що для цієї скриньки дозволено SMTP AUTH."
 }

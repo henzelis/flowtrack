@@ -20,6 +20,11 @@ in Settings → General, at the bottom of every page, in the collector log and b
   5 minutes as a small chart; the fullest first. The capacity is the port speed (SNMP or sFlow) unless you set your own
   in *Settings → Devices → Interfaces*, separately in and out (an ISP contract of 300 / 50 on a 1 Gbit/s port);
   virtual interfaces (VLANs, tunnels, Wi-Fi) get a share once you give them one.
+- **Fixed: a refused mail login showed as a broken connection.** With a wrong password (or Gmail's usual password
+  instead of an app password) the mail test said the server closed the connection and to check the encryption and the
+  port: Python tried a second login method after the refusal and Gmail drops the line after the first. FlowTrack now
+  makes one attempt and says the login or the password was not accepted — for Gmail with how to create an app
+  password, for Microsoft 365 with the SMTP AUTH hint.
 - **New event "Link near capacity"**: an interface above 85 % of its capacity (adjustable) in every 5 minutes of
   15 minutes (adjustable), in or out — in the bell and on every notification channel.
 

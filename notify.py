@@ -573,6 +573,34 @@ def ehlo_name():
     return socket.getfqdn()
 
 
+class _LoginDropped(Exception):
+    pass
+
+
+def _login(s, user, password):
+    """One sign-in attempt (1.12.0). smtplib's login() tries the next mechanism after a refusal, and Gmail drops the line
+    after the first one — so a wrong password showed as "the server closed the connection, check the encryption"."""
+    mechs = (s.esmtp_features.get('auth') or '').upper().split()
+    mech = next((x for x in ('PLAIN', 'LOGIN') if x in mechs), None)
+    try:
+        if not mech:
+            s.login(user, password)
+            return
+        s.user, s.password = user, password
+        s.auth(mech, getattr(s, 'auth_' + mech.lower()), initial_response_ok=True)
+    except smtplib.SMTPServerDisconnected:
+        raise _LoginDropped() from None
+
+
+def _auth_refused(m):
+    h = m['host'].lower()
+    if h.endswith('gmail.com') or h.endswith('googlemail.com'):
+        return tr('Gmail did not accept the login or the password. Gmail needs an app password: turn on 2-Step Verification in your Google account, create an app password (Security → App passwords) and enter it here instead of your usual password.')
+    if 'office365' in h or 'outlook' in h:
+        return tr('Microsoft 365 did not accept the login or the password: use an app password, and check that SMTP AUTH is allowed for this mailbox.')
+    return tr('The mail server did not accept the login or the password (some services need an app password).')
+
+
 def smtp_send(m, msg, timeout=20):
     """Sends one message through the configured server; errors are explained for people (never with the password)."""
     ctx = ssl.create_default_context() if m['verify'] else ssl._create_unverified_context()
@@ -590,12 +618,14 @@ def smtp_send(m, msg, timeout=20):
             if m['user']:
                 if not s.has_extn('auth'):
                     raise MailError(tr('The mail server does not ask for a login here: leave the login empty, or turn on encryption.'))
-                s.login(m['user'], m['password'])
+                _login(s, m['user'], m['password'])
             s.send_message(msg)
     except MailError:
         raise
     except smtplib.SMTPAuthenticationError:
-        raise MailError(tr('The mail server did not accept the login or the password (some services need an app password).')) from None
+        raise MailError(_auth_refused(m)) from None
+    except _LoginDropped:
+        raise MailError(_auth_refused(m)) from None
     except smtplib.SMTPRecipientsRefused as e:
         raise MailError(tr('The mail server refused the recipients: {to}.', to=', '.join(e.recipients))) from None
     except smtplib.SMTPSenderRefused:

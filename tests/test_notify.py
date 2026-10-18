@@ -220,3 +220,42 @@ class Email(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GmailLikeLogin(unittest.TestCase):
+    """1.12.0: a server that refuses a login and then drops the line (as Gmail does) — smtplib's login() tried a second
+    mechanism and failed with "connection closed"; the reason shown must be the login, not the encryption."""
+    def test_refused_login_is_named(self):
+        import socket
+        import threading
+        srv = socket.socket()
+        srv.bind(('127.0.0.1', 0))
+        srv.listen(1)
+        tries = []
+
+        def serve():
+            c, _ = srv.accept()
+            f = c.makefile('rwb')
+            f.write(b'220 fake ESMTP\r\n'); f.flush()
+            for line in f:
+                cmd = line.decode().strip().upper()
+                if cmd.startswith('EHLO'):
+                    f.write(b'250-fake\r\n250 AUTH LOGIN PLAIN\r\n')
+                elif cmd.startswith('AUTH'):
+                    tries.append(cmd.split()[1])
+                    f.write(b'535 5.7.8 Username and Password not accepted\r\n'); f.flush()
+                    c.close()
+                    return
+                f.flush()
+        threading.Thread(target=serve, daemon=True).start()
+        import common
+        common.set_lang('en')
+        m = dict(N.defaults()['email'], host='127.0.0.1', port=srv.getsockname()[1], security='none', user='u', password='p',
+                 sender='a@example.com', to=['b@example.com'])
+        msg = N._mail(m, 'subject', 'text', '<p>text</p>')
+        with self.assertRaises(N.MailError) as e:
+            N.smtp_send(m, msg, timeout=5)
+        self.assertIn('did not accept the login or the password', str(e.exception))
+        self.assertEqual(tries, ['PLAIN'])                       # one attempt only
+        self.assertIn('app password', N._auth_refused(dict(m, host='smtp.gmail.com')))
+        srv.close()
