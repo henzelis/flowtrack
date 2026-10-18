@@ -2756,16 +2756,14 @@ function vReports(){
 }
 function vGeneral(){
   const ed = META.edition || {};
-  document.getElementById('setBody').innerHTML = `<div class="grid top">
-    <section class="glass panel s6">${ph('globe', T('Language'), T('of this browser · other users keep their own'))}
-      <label class="sel glass">${icon(ICO.globe, 16)}<select id="langSel" aria-label="${T('Language')}">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${LANG === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></section>
-    <section class="glass panel s6">${ph('list', T('About'), T('version and edition'))}
-      <div class="about">
-        <div><span>${T('Version')}</span><b class="mono">FlowTrack ${esc(META.version || '—')}</b></div>
-        <div><span>${T('Edition')}</span><b>${ed.status === 'active' ? 'Pro' : 'Community'}</b><button class="lnk" id="toLic">${T('License')} →</button></div>
-        <div><span>${T('Source code')}</span><a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">github.com/henzelis/flowtrack</a></div>
-        <div><span>${T('Account')}</span><b class="mono">${esc(ME.name)}</b><button class="lnk" id="myPass">${T('Change my password')}</button></div>
-      </div></section>
+  // (1.10.0) one even row of four cards (as on Backups), the mail server under it: no panel shorter than its neighbour
+  const card = (ic, k, v, sub) => `<section class="glass panel kcard gcard s3"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v">${v}</span><span class="nat">${sub}</span></section>`;
+  document.getElementById('setBody').innerHTML = `<div class="grid">
+    ${card('list', T('Version'), `FlowTrack ${esc(META.version || '—')}`, `<a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
+    ${card('shield', T('Edition'), ed.status === 'active' ? 'Pro' : 'Community', `<button class="lnk" id="toLic">${T('License')} →</button>`)}
+    ${card('globe', T('Language'), `<select id="langSel" aria-label="${T('Language')}">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${LANG === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
+      T('only in this browser'))}
+    ${card(USER_ICON, T('Account'), esc(ME.name), `${ME.role === 'admin' ? T('Administrator') : T('Viewer')} · <button class="lnk" id="myPass">${T('Change my password')}</button>`)}
     ${isAdmin() ? `<section class="glass panel s12" id="mailBox">${ph(MAIL_ICON, T('Mail server'), T('e-mail (SMTP) for the reports and the e-mail notifications'))}<div id="mailBody" class="loading"></div></section>` : ''}</div>`;
   if (isAdmin()) (async () => { const el = document.getElementById('mailBody');
     try { const r = await fetch('api/mail'); const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); mailPanel(el, j);

@@ -29,7 +29,6 @@
  "A → B sent / received": "A → B відправлено / отримано",
  "AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20": "AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20",
  "API unavailable": "API недоступне",
- "About": "Про програму",
  "Account": "Обліковий запис",
  "Activate": "Активувати",
  "Activating at the license server…": "Активую на сервері ліцензій…",
@@ -770,7 +769,6 @@
  "observed": "видно",
  "of hop": "хопа",
  "of the busiest hop": "від найбільшого хопа",
- "of this browser · other users keep their own": "цього браузера · інші користувачі мають свою",
  "off": "вимк.",
  "on": "увімк.",
  "on another exit": "на іншому виході",
@@ -892,7 +890,6 @@
  "up to ": "до ",
  "upload (inside → outside)": "upload (внутр. → зовн.)",
  "vendor": "виробник",
- "version and edition": "версія і редакція",
  "waiting": "очікую",
  "waiting for the first poll": "чекаю на перше опитування",
  "warning": "увага",
@@ -1507,5 +1504,6 @@
  "{n} d": "{n} д",
  "{n} h": "{n} год",
  "{n} min": "{n} хв",
- "↑ ↓ against the period of the same length just before.": "↑ ↓ — порівняно з попереднім періодом такої ж тривалості."
+ "↑ ↓ against the period of the same length just before.": "↑ ↓ — порівняно з попереднім періодом такої ж тривалості.",
+ "only in this browser": "лише в цьому браузері"
 }

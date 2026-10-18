@@ -9,6 +9,9 @@ in Settings → General, at the bottom of every page, in the collector log and b
   an attack or an outage you zoomed into — or of any *from – to* you type (also in Settings → Reports). Anyone can
   download it; administrators can also e-mail it to the addresses they enter. A period without records says so instead
   of showing another one.
+- **Settings → General** is one even row of cards — version, edition, language, account — with the mail server
+  under it. The top bar keeps one row on laptops: up to 1280 px the search has a row of its own, up to 1440 px the
+  account shows as the avatar alone.
 - **Scheduled reports** (Settings → Reports). A PDF of the last day, week (Monday to Sunday) or calendar month goes by
   e-mail at its hour, through the mail server of the notifications, to the report's own recipients: totals against
   the period before, traffic over time, the busiest inside hosts, outside networks, services, countries, your named
