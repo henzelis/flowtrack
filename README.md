@@ -116,6 +116,13 @@ that scan, contact with addresses on eight public reputation lists (plus your ow
 and exporter health. FlowTrack works out who opened each connection and which of your services are public, so busy
 web sites stay quiet. New events go to Telegram (your own bot) and e-mail.
 
+### Reports — by e-mail, on schedule or for any period
+
+A PDF for the management or the duty engineer: totals against the period before, traffic over time, the busiest hosts,
+outside networks, services, countries, your networks, security events and the devices. Daily, weekly or monthly on
+the day and hour you choose, in English or Ukrainian — or, after an attack or an outage, for exactly the period and
+filters on your screen, with one click.
+
 ## Works with your equipment
 
 Ready configuration — with a **Copy** button — for each vendor and export protocol, right in *Settings → Devices*:
@@ -177,4 +184,5 @@ Details: [docs/editions.md](docs/editions.md).
 a hosted service or circumventing the license checks. The FlowTrack core (`ftcore`) ships compiled under the FlowTrack
 End User License Agreement. Versions up to 1.1.0 were published under MIT and stay so. IP geolocation by
 [DB-IP](https://db-ip.com), licensed under CC BY 4.0. Fonts Manrope and JetBrains Mono ship with FlowTrack under the
-[SIL Open Font License 1.1](web/fonts/). Screenshots show demo data, no real network.
+[SIL Open Font License 1.1](web/fonts/). PDF reports are made with [ReportLab](https://www.reportlab.com) (BSD).
+Screenshots show demo data, no real network.

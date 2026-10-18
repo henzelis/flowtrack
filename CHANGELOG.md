@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.10.0 — 2026-10-18
 
 - **Report for a period**: the report button in the top bar makes a PDF of exactly the period and filters on screen —
   an attack or an outage you zoomed into — or of any *from – to* you type (also in Settings → Reports). Anyone can
