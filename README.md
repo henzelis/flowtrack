@@ -128,6 +128,9 @@ and exporter health. FlowTrack works out who opened each connection and which of
 web sites stay quiet. New events go to Telegram (your own bot), e-mail, webhooks (Slack, Mattermost, Discord or your
 own system) and your SIEM as syslog (CEF or JSON).
 
+<p align="center"><img src="docs/media/en/events.webp" alt="Events page: port scan, password guessing, link near capacity, with Filter / Exclude / Ignore" width="100%"></p>
+
+
 ### Reports — by e-mail, on schedule or for any period
 
 A PDF for the management or the duty engineer: totals against the period before, traffic over time, the busiest hosts,
@@ -157,6 +160,15 @@ QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog or Wazuh.
 <td width="72%" valign="top"><img src="docs/media/en/api-tokens.webp" alt="Settings → API: tokens and examples"></td>
 </tr>
 </table>
+
+### Backups — your history is safe
+
+Every night FlowTrack backs up the flow data and every setting on its own: a full backup once a week, only the changes
+on the other days. Copies go to a folder on the server and, if you like, to S3-compatible storage, SFTP or FTP —
+encrypted with your passphrase (AES-256-GCM). One click checks that a backup is whole; another restores it — on the
+same server or on a brand-new one after a disk failure.
+
+<p align="center"><img src="docs/media/en/backups.webp" alt="Settings → Backups: a week of verified, encrypted backups kept here and on S3" width="100%"></p>
 
 ## Works with your equipment
 
