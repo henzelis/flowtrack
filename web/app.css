@@ -692,3 +692,7 @@ td.nowrap{white-space:nowrap}
 .capheat i{display:block;aspect-ratio:1;border-radius:3px;min-width:6px}
 .capheat .hh{font:500 10px var(--f-mono);color:var(--ink3);text-align:left}
 .capheat .wd{font:600 11px var(--f-ui,inherit);color:var(--ink2)}
+/* (1.13.2) Capacity: the page head alone in its panel; the link picker next to In / Out */
+.caphead .ph{margin-bottom:0}
+#capPickBox{margin-right:8px}
+#capPickBox select{max-width:240px}

@@ -1766,5 +1766,8 @@
  "no interface named {name}": "немає інтерфейсу з назвою {name}",
  "The days differ too much for a trend; it shows once there is more history.": "Дні надто різні для тренду; він з'явиться, коли накопичиться більше історії.",
  "over +100%": "понад +100%",
- "over −100%": "понад −100%"
+ "over −100%": "понад −100%",
+ "All links": "Усі канали",
+ "the fullest first · click a row to see it above": "найзаповненіші першими · клік по рядку показує канал угорі",
+ "Link": "Канал"
 }

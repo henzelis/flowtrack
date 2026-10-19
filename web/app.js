@@ -1147,12 +1147,16 @@ let CAP = null;
 function vCapacity(){
   const v = document.getElementById('view');
   const days = state.capDays || 30;
-  v.innerHTML = `<div class="grid"><div id="capKpi" style="display:contents"></div>
-    <section class="glass panel s12">${ph(CAP_ICON, T('page::Capacity'), T('how full each link is on its busy days and where it is heading · all its traffic · whole days · the device and interface filters apply'), '<span id="capDaysBox"></span>', true)}<div id="capTable" class="loading"></div></section>
-    <section class="glass panel s8" id="capDetailS">${ph('chart', `<span id="capDetT">${T('Trend and forecast')}</span>`, `<span id="capDetSub">${T('daily 95th percentile, the trend of the busy days and where it meets the capacity')}</span>`, '<span id="capDirBox"></span>')}<div id="capChart" class="loading"></div><p class="capsay" id="capSay"></p></section>
+  // (1.13.2) visual first (Yegor's rule for every page): the cards, the chart of one link, when it is busy and what
+  // drives it; the table of all links last — a row of it picks the link above
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s12 caphead">${ph(CAP_ICON, T('page::Capacity'), T('how full each link is on its busy days and where it is heading · all its traffic · whole days · the device and interface filters apply'), '<span id="capDaysBox"></span>', true)}</section>
+    <div id="capKpi" style="display:contents"></div>
+    <section class="glass panel s8" id="capDetailS">${ph('chart', `<span id="capDetT">${T('Trend and forecast')}</span>`, `<span id="capDetSub">${T('daily 95th percentile, the trend of the busy days and where it meets the capacity')}</span>`, '<span id="capPickBox"></span><span id="capDirBox"></span>')}<div id="capChart" class="loading"></div><p class="capsay" id="capSay"></p></section>
     <section class="glass panel s4">${ph('pulse', T('When it is busy'), T('busiest 5 minutes of each hour, averaged over the weeks'))}<div id="capHeat" class="loading"></div></section>
     <section class="glass panel s6">${ph('users', T('Hosts on this link'), `<span id="capHalfH">${T('recent half of the period against the earlier one')}</span>`)}<div id="capHosts" class="loading"></div></section>
-    <section class="glass panel s6">${ph('grid', T('Services on this link'), `<span id="capHalfS">${T('recent half of the period against the earlier one')}</span>`)}<div id="capSvcs" class="loading"></div></section></div>`;
+    <section class="glass panel s6">${ph('grid', T('Services on this link'), `<span id="capHalfS">${T('recent half of the period against the earlier one')}</span>`)}<div id="capSvcs" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('All links'), T('the fullest first · click a row to see it above'))}<div id="capTable" class="loading"></div></section></div>`;
   const seq = renderSeq;
   const done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
   (async () => {
@@ -1202,10 +1206,16 @@ function vCapacity(){
       ${isAdmin() ? ` <button class="lnk" id="capCaps">${T('Set capacities')} →</button>` : ''}</p>`);
     const cb = document.getElementById('capCaps');
     if (cb) cb.onclick = () => { const x = all.find(y => key(y) === state.capSel) || all[0]; state.view = 'settings'; state.setTab = 'devices'; state.ifDev = x.device; render(); };
-    document.querySelectorAll('.caprow').forEach(r => { const pick = () => { state.capSel = r.dataset.k; state.capDir = null;
-      document.querySelectorAll('.caprow').forEach(o => o.setAttribute('aria-selected', String(o === r))); capDetail(all.find(x => key(x) === r.dataset.k), seq); };
-      r.onclick = pick; r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }; });
-    capDetail(all.find(x => key(x) === state.capSel), seq);
+    const pickLink = (k, scroll) => { state.capSel = k; state.capDir = null;
+      document.querySelectorAll('.caprow').forEach(o => o.setAttribute('aria-selected', String(o.dataset.k === k)));
+      const ps = document.getElementById('capPick'); if (ps) ps.value = k;
+      capDetail(all.find(x => key(x) === k), seq);
+      if (scroll) { const el = document.getElementById('capDetailS'); if (el) el.scrollIntoView({behavior:'smooth', block:'start'}); } };
+    document.querySelectorAll('.caprow').forEach(r => { r.onclick = () => pickLink(r.dataset.k, true);
+      r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickLink(r.dataset.k, true); } }; });
+    fill('capPickBox', `<label class="sel glass" title="${T('Link')}">${icon(ICO.ip, 16)}<select id="capPick" aria-label="${T('Link')}">${all.map(x => `<option value="${esc(key(x))}"${key(x) === state.capSel ? ' selected' : ''}>${esc(x.name)} · ${esc(x.device_name)}</option>`).join('')}</select></label>`);
+    document.getElementById('capPick').onchange = e => pickLink(e.target.value, false);
+    pickLink(state.capSel, false);
   })();
 }
 // the trend chart: daily 95th percentile (dots) and peak (faint), the busy days' trend line carried on dashed into the
@@ -1246,7 +1256,7 @@ function capChart(x, d){
 async function capDetail(x, seq){
   if (!x) return;
   const d = state.capDir && x[state.capDir] ? state.capDir : x.worst;
-  fill('capDetT', `${esc(x.name)} <span class="nat" style="font-weight:500">· ${esc(x.device_name)}</span>`);
+  fill('capDetT', T('Trend and forecast'));
   fill('capDirBox', seg('capDir', [['in', T('In')], ['out', T('Out')]], d));
   wireSeg('capDir', v => { state.capDir = v; capDetail(x, seq); });
   const ch = fill('capChart', capChart(x, d)); if (ch) ch.classList.remove('loading');
