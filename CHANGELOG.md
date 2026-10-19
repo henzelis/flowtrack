@@ -3,6 +3,16 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **QoS (DSCP)** — a page of its own: how the traffic is marked as it enters each device — the marked share, voice and
+  video, what the devices re-mark (FortiGate reports the class on the way in and out), what the export does not report;
+  the classes over time and their shares, the class mix of each interface, the services in each class (is Zoom really
+  voice and video?), then the table of classes. A class is a filter on every page: `dscp:EF`, `dscp:AF41`, `dscp:46`.
+  The record inspector on *Flows* shows the class (and the re-marking).
+- The compiled core 1.6.0 decodes the marking: NetFlow v5 ToS, v9 / IPFIX SRC_TOS / DST_TOS / ipDiffServCodePoint /
+  postIpDiffServCodePoint, sFlow ToS / traffic class. Records from before the upgrade show as «not reported».
+
 ## 1.15.2 — 2026-10-19
 
 - **A tunnel's own packets counted twice** (MikroTik / RouterOS): the outer GRE packets a router sends to the far end

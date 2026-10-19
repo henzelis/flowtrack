@@ -2,6 +2,11 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.16**
+- **QoS (DSCP)**: the class each record carried on the way in (and on the way out where the device says, e.g.
+  FortiGate) — classes over time, their shares, the class mix of each interface, what the devices re-mark, the
+  services of each class; the filter `dscp:` (EF, AF41, CS1 … or 0–63) on every page.
+
 **New in 1.15**
 - **Usage**: what each host downloaded and uploaded this month, last month or the last 7 – 365 days (as far as the
   edition keeps data), against the same time before it; day by day, who uses most, the biggest changes, by network,
@@ -131,6 +136,13 @@
   start. Cards (downloaded, uploaded, active hosts with the change; the share of the 10 busiest), the days (months over
   92 days), who uses most, the biggest changes, by named network, then the table (500 busiest; all: *Download CSV* =
   `/api/top?dim=int_ip&limit=all&format=csv` with the same period and filters).
+- *QoS*: DSCP from NetFlow v5 (ToS), v9 / IPFIX (SRC_TOS 5 and DST_TOS 55, ipDiffServCodePoint 195 and
+  postIpDiffServCodePoint 98) and sFlow (the sampled header's ToS / traffic class, the sampled IPv4 / IPv6 records),
+  decoded by the core (1.6.0). `dscp` = the class on the way in, `dscp_out` = on the way out where the exporter sends
+  it; 255 = not sent (records from before 1.16 too). Read from the rollups `agg_dscp` (5 min: in / out interface,
+  class in and out) and `agg_dscp_svc` (1 h: class, service, L7, inside host). Cards: marked share, voice and video
+  (EF, VA, CS4, CS5, AF4x), re-marked share, not reported; then classes over time, shares, interfaces, re-marking,
+  services per class, the classes table (a row filters every page). The record inspector on *Flows* shows the class.
 - *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
   included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
   missing, and the hops of any source → destination path across the devices, with NAT and gaps.

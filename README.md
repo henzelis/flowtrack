@@ -113,6 +113,15 @@ hosts and services that drive the growth; and the same in your scheduled reports
 
 <p align="center"><img src="docs/media/en/capacity-table.webp" alt="All links: status, capacity, busy-hour load in and out, trend, the date each reaches 85 %, how much of it the flows see" width="100%"></p>
 
+### QoS — see how your traffic is prioritised
+
+Every packet carries a class (DSCP) that tells the network what to put first — voice before downloads. FlowTrack shows
+how much of your traffic is marked and how, which classes cross each interface, which services fall into each class
+(is Zoom really voice and video, or best effort?), and what your devices re-mark on the way through. A class is a
+filter like any other: `dscp:EF` narrows every page to it.
+
+<p align="center"><img src="docs/media/en/qos.webp" alt="QoS: marked share, voice and video, re-marked traffic; classes over time and their shares; the class mix of each interface; what the firewall re-marks" width="100%"></p>
+
 ### Top hosts and your own networks
 
 Name your networks once (*172.16.0.0/24 → Office*) and see the traffic, trend and main services of each — or of every

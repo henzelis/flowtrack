@@ -44,6 +44,12 @@ ROLLUPS = {
                           ('asn', 'UInt32'), ('as_org', 'LowCardinality(String)')]},
     # Through device and Path analysis (1.8.1): the paths through each device (input -> output interface); per hour the
     # inside hosts on them (and, between inside hosts, the other end) and the outside addresses beyond them
+    # (1.16.0) QoS: traffic per DSCP class through each device (in -> out interface, the marking in and out), and per
+    # hour the services of each class
+    'agg_dscp': {'bucket': 300, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('dscp', 'UInt8', 'dscp'),
+                 ('dscp_out', 'UInt8', 'dscp_out')], 'attrs': []},
+    'agg_dscp_svc': {'bucket': 3600, 'keys': [('dscp', 'UInt8', 'dscp'), ('service', 'LowCardinality(String)', 'service'),
+                     ('l7', 'LowCardinality(String)', 'l7'), ('int_ip', 'String', 'int_ip')], 'attrs': []},
     'agg_iface': {'bucket': 300, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('service', 'LowCardinality(String)', 'service')],
                   'attrs': []},
     'agg_iface_host': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('int_ip', 'String', 'int_ip'),

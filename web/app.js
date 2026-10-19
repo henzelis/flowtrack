@@ -39,8 +39,8 @@ const isAdmin = () => ME && ME.role === 'admin';
 const isInternal = () => state.traffic === 'internal';
 // a record whose packets went to int_ip: from the internet, or a server's answer to an inside client
 const isBack = f => f.dir === 'down' || f.dir === 'internal_back';
-const FILTER_KEYS = ['ip', 'net', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface'];
-const FILTER_LABEL = {net:T('network'), iface:T('interface'), in_if:T('in via'), out_if:T('out via'), ip:T('host'), dst:T('ext. IP'), service:T('service'), l7:T('protocol'), country:T('country'), city:T('city'), port:T('port'), device:T('device'), asn:'ASN', dir:T('direction'), proto:'L4'};
+const FILTER_KEYS = ['ip', 'net', 'dst', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface', 'dscp'];
+const FILTER_LABEL = {net:T('network'), iface:T('interface'), dscp:'DSCP', in_if:T('in via'), out_if:T('out via'), ip:T('host'), dst:T('ext. IP'), service:T('service'), l7:T('protocol'), country:T('country'), city:T('city'), port:T('port'), device:T('device'), asn:'ASN', dir:T('direction'), proto:'L4'};
 let renderSeq = 0;
 
 // widgets of one page often ask the same thing (Overview: the trend and the KPI sparklines, the map overlay and the
@@ -499,6 +499,8 @@ function globe(el, geo){
 }
 
 // ===================== shared UI =====================
+// (1.16.0) stacked classes
+const QOS_ICON = 'M3 14h12M3 10h9M3 6h6M13 4l2 2-2 2';
 // (1.15.0) bars of a period
 const USAGE_ICON = 'M3 15V9M7 15V5M11 15V8M15 15V3M2 15.5h14';
 // (1.13.0) a gauge
@@ -506,7 +508,7 @@ const CAP_ICON = 'M2.5 13.5a6.5 6.5 0 1 1 13 0M9 13.5l3.2-4.2M4.6 9.6l.9.6M13.4 
 const NAV = [
   ['overview',T('Overview'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 10 6 10M6 14c3 0 3-10 6-10M6 9h6'], ['network',T('Path analysis'),'M6.9 4a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M1.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M11.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M7.57 6.86L5.43 11.14M10.43 6.86L12.57 11.14M7.2 14L10.8 14'], ['talkers',T('Top hosts'),'M4 6a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M2 15.5c0-2.8 2-4.5 4.5-4.5s4.5 1.7 4.5 4.5M11 7a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M12.6 11.2c.4-.1.9-.2 1.4-.2 1.9 0 3 1.5 3 4'],
   ['usage',T('Usage'),USAGE_ICON], ['apps',T('Services'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation'),'M9 16.2s5.2-4.6 5.2-8.7A5.2 5.2 0 0 0 3.8 7.5c0 4.1 5.2 8.7 5.2 8.7zM7.2 7.4a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0'],
-  ['capacity',T('page::Capacity'),CAP_ICON],
+  ['capacity',T('page::Capacity'),CAP_ICON], ['qos',T('QoS'),QOS_ICON],
   ['threats',T('Events'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'],
   ['settings',T('Settings'),'M14.29 7.93L16.15 8.14L16.15 9.86L14.29 10.07L13.5 11.98L14.66 13.45L13.45 14.66L11.98 13.5L10.07 14.29L9.86 16.15L8.14 16.15L7.93 14.29L6.02 13.5L4.55 14.66L3.34 13.45L4.5 11.98L3.71 10.07L1.85 9.86L1.85 8.14L3.71 7.93L4.5 6.02L3.34 4.55L4.55 3.34L6.02 4.5L7.93 3.71L8.14 1.85L9.86 1.85L10.07 3.71L11.98 4.5L13.45 3.34L14.66 4.55L13.5 6.02zM6.7 9a2.3 2.3 0 1 0 4.6 0a2.3 2.3 0 1 0 -4.6 0'],
 ];
@@ -1390,6 +1392,76 @@ function vUsage(){
     wireFilters(document.getElementById('uTable'));
   })();
 }
+// ===================== (1.16.0) QoS: the DSCP marking of the traffic =====================
+// /api/qos under the period and the filters at the top — visual first: cards, the classes over time and their shares,
+// the class mix of each interface, what the devices re-mark, the services of each class; the table of classes last.
+// A class opens the other pages filtered by it (dscp:EF).
+const DSCP_INFO = () => ({0:[T('Best effort'), '#6E7FA6'], 8:[T('Low-priority data'), '#4C5A7A'], 10:[T('High-throughput data'), '#2F7BFF'], 12:[T('High-throughput data'), '#2F7BFF'], 14:[T('High-throughput data'), '#2F7BFF'],
+  16:[T('Network management'), '#5AC8FA'], 18:[T('Low-latency data'), '#27D3F5'], 20:[T('Low-latency data'), '#27D3F5'], 22:[T('Low-latency data'), '#27D3F5'],
+  24:[T('Broadcast video / call signalling'), '#8B5CFF'], 26:[T('Multimedia streaming'), '#A879FF'], 28:[T('Multimedia streaming'), '#A879FF'], 30:[T('Multimedia streaming'), '#A879FF'],
+  32:[T('Real-time interactive'), '#FF4FA0'], 34:[T('Video calls'), '#FFD166'], 36:[T('Video calls'), '#FFD166'], 38:[T('Video calls'), '#FFD166'],
+  40:[T('Signalling'), '#FF9F43'], 44:[T('Voice (admitted)'), '#FF5C7A'], 46:[T('Voice'), '#FF5C7A'], 48:[T('Network control'), '#2EE59D'], 56:[T('Network control'), '#2EE59D'], 255:[T('Not reported by the device'), '#2A3550']});
+const dscpName = (names, k) => names[String(k)] || ('DSCP ' + k);
+const dscpInfo = k => DSCP_INFO()[k] || [T('Non-standard marking'), '#B0B8CC'];
+const dscpLabel = (names, k) => k === 255 ? T('not reported') : dscpName(names, k);
+function vQos(){
+  const v = document.getElementById('view');
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s12 caphead">${ph(QOS_ICON, T('QoS'), T('how the traffic is marked (DSCP) as it enters each device · the period and the filters at the top apply · click a class to filter by it'), '', true)}</section>
+    <div id="qKpi" style="display:contents"></div>
+    <section class="glass panel s8">${ph('chart', T('Classes over time'), T('traffic of each class'))}<div id="qChart" class="loading" style="height:340px"></div></section>
+    <section class="glass panel s4">${ph('pie', T('Share of each class'), T('of the traffic in the period'))}<div id="qDonut" class="loading" style="height:340px"></div></section>
+    <section class="glass panel s6">${ph('ip', T('Interfaces'), T('the class mix of what enters each interface'))}<div id="qIfs" class="loading"></div></section>
+    <section class="glass panel s6">${ph('pulse', T('Re-marked by the devices'), T('class on the way in → class on the way out'))}<div id="qRemark" class="loading"></div></section>
+    <section class="glass panel s12">${ph('grid', T('Services in each class'), T('the 5 biggest of each'))}<div id="qSvc" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('Classes'), T('click to filter every page by the class'))}<div id="qTable" class="loading"></div></section></div>`;
+  const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
+  (async () => {
+    let d;
+    try { d = await api('qos'); } catch (e) { done('qChart', errBox(e)); return; }
+    if (seq !== renderSeq) return;
+    const N = d.names, cls = d.classes, all = cls.reduce((a, c) => a + c.bytes, 0);
+    const known = cls.filter(c => c.k !== 255), kb = known.reduce((a, c) => a + c.bytes, 0), unk = all - kb;
+    const marked = known.filter(c => c.k !== 0).reduce((a, c) => a + c.bytes, 0);
+    const rt = known.filter(c => [46, 44, 40, 34, 36, 38, 32].includes(c.k)).reduce((a, c) => a + c.bytes, 0);
+    const rem = d.remarked.reduce((a, r) => a + r.bytes, 0);
+    const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span><span class="nat" style="grid-column:2">${sub}</span></section>`;
+    fill('qKpi', kc('shield', T('Marked'), kb ? pct(marked, kb) : '—', kb ? T('of the traffic carries a class other than best effort') : T('No device reports the marking yet'), kb ? '' : 'var(--ink3)')
+      + kc('pulse', T('Voice and video'), fmtB(rt), kb ? T('EF, signalling and video-call classes · {pct} of the marked traffic', {pct:pct(rt, marked || 1)}) : '—', rt ? '#FF5C7A' : '')
+      + kc('conv', T('Re-marked'), d.both_known ? pct(rem, d.both_known) : '—', d.both_known ? T('of the traffic leaves a device in another class') : T('the devices do not report the class on the way out'), rem ? 'var(--warn)' : '')
+      + kc('ip', T('Not reported'), all ? pct(unk, all) : '—', unk ? T('traffic of devices (or of times) without the marking in their export') : T('every device reports the marking'), unk ? 'var(--ink2)' : 'var(--ok)'));
+    if (!all) { ['qChart', 'qDonut', 'qIfs', 'qRemark', 'qSvc', 'qTable'].forEach(id => done(id, `<div class="empty">${T('No traffic under this filter')}</div>`)); return; }
+    // classes over time: stacked areas, the class colours
+    const order = cls.map(c => c.k), ts = [...new Set(d.series.map(r => r[0]))].sort((a, b) => a - b), m = new Map(d.series.map(r => [r[0] + ':' + r[1], r[2]]));
+    const ch = mkChart(done('qChart', ''));
+    ch.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true},
+      legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}, type:'scroll'},
+      tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(ts), yAxis:axisY(v => fmtR(v)),
+      series:order.map(k => ({name:dscpLabel(N, k), type:'line', stack:'q', smooth:.25, showSymbol:false, lineStyle:{width:1.2, color:dscpInfo(k)[1]},
+        itemStyle:{color:dscpInfo(k)[1]}, areaStyle:{opacity:k === 255 ? .25 : .45}, data:ts.map(t => [t * 1000, (m.get(t + ':' + k) || 0) * 8 / d.step])}))});
+    donut(done('qDonut', ''), cls.map(c => ({k:dscpLabel(N, c.k), up:c.bytes, dn:0})), k => dscpInfo(cls.find(c => dscpLabel(N, c.k) === k).k)[1], [kb ? pct(marked, kb) : '—', T('marked')]);
+    // interfaces: one bar each, split by class
+    const ifs = d.interfaces.slice(0, 12), top = Math.max(1, ...ifs.map(x => x.bytes));
+    done('qIfs', !ifs.length ? `<div class="empty">${T('No traffic under this filter')}</div>` : '<div class="qifs">' + ifs.map(x => `<div class="qif"><div class="qifh"><b>${esc(x.name)}</b> <span class="nat">${esc(x.device_name)}</span><span class="mono nat">${fmtB(x.bytes)}</span></div>
+      <div class="qbar" style="width:${(100 * x.bytes / top).toFixed(1)}%">${Object.entries(x.classes).sort((a, b) => b[1] - a[1]).map(([k, b]) => `<i style="width:${(100 * b / x.bytes).toFixed(2)}%;background:${dscpInfo(+k)[1]}" title="${esc(dscpLabel(N, +k))}: ${esc(fmtB(b))} · ${pct(b, x.bytes)}"></i>`).join('')}</div></div>`).join('') + '</div>');
+    // re-marking
+    done('qRemark', d.remarked.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Device')}</th><th>${T('In')}</th><th></th><th>${T('Out')}</th><th class="num">${T('Traffic')}</th></tr></thead><tbody>
+      ${d.remarked.map(r => `<tr><td>${esc(r.device_name)}</td><td><span class="dscp" style="--c:${dscpInfo(r.from)[1]}">${esc(dscpName(N, r.from))}</span></td><td>→</td><td><span class="dscp" style="--c:${dscpInfo(r.to)[1]}">${esc(dscpName(N, r.to))}</span></td><td class="num mono">${fmtB(r.bytes)}</td></tr>`).join('')}</tbody></table></div>`
+      : `<div class="empty">${d.both_known ? T('No device changed the class of the traffic in this period.') : T('The devices do not report the class on the way out (FortiGate does), so re-marking cannot be seen.')}</div>`);
+    // services of each class
+    const byK = new Map(); for (const sv of d.services) { if (!byK.has(sv.k)) byK.set(sv.k, []); byK.get(sv.k).push(sv); }
+    done('qSvc', '<div class="qsvc">' + cls.filter(c => byK.has(c.k)).slice(0, 8).map(c => `<div><h5><span class="dscp" style="--c:${dscpInfo(c.k)[1]}">${esc(dscpLabel(N, c.k))}</span> <span class="nat">${esc(dscpInfo(c.k)[0])}</span></h5>
+      <div class="blist">${byK.get(c.k).map(sv => `<button class="brow" data-f="service" data-v="${esc(sv.service)}"><span class="n">${esc(sv.service)}</span><span class="t">${fmtB(sv.bytes)}</span><span class="p">${pct(sv.bytes, c.bytes)}</span>
+        <span class="bar2" style="width:${(100 * sv.bytes / (byK.get(c.k)[0].bytes || 1)).toFixed(1)}%"><i class="d" style="flex:1;background:${dscpInfo(c.k)[1]}"></i></span></button>`).join('')}</div></div>`).join('') + '</div>');
+    wireFilters(document.getElementById('qSvc'));
+    // the classes, last
+    done('qTable', `<div class="tw"><table class="compact"><thead><tr><th>${T('Class')}</th><th class="num">DSCP</th><th>${T('Meant for')}</th><th class="num">${T('Traffic')}</th><th class="num">${T('Share')}</th><th class="num">${T('Packets')}</th><th class="num">${T('Flows')}</th></tr></thead><tbody>
+      ${cls.map(c => `<tr data-f="dscp" data-v="${c.k === 255 ? '255' : esc(dscpName(N, c.k))}" style="cursor:pointer"><td><span class="dscp" style="--c:${dscpInfo(c.k)[1]}">${esc(dscpLabel(N, c.k))}</span></td><td class="num mono">${c.k === 255 ? '—' : c.k}</td><td>${esc(dscpInfo(c.k)[0])}</td>
+        <td class="num mono">${fmtB(c.bytes)}</td><td class="num mono">${pct(c.bytes, all)}</td><td class="num mono">${fmtN(c.packets)}</td><td class="num mono">${fmtN(c.flows)}</td></tr>`).join('')}</tbody></table></div>
+      <p class="note">${T('DSCP is the class a sender or a device puts on each packet so the network can give it priority (voice before downloads). FortiGate reports the class on the way in and on the way out (re-marking shows); MikroTik on the way in. «Not reported»: traffic from before FlowTrack 1.16 or from devices that do not export it.')}</p>`);
+    wireFilters(document.getElementById('qTable'));
+  })();
+}
 function vPaths(){
   const v = document.getElementById('view'), live = !!state.pathsLive && !isCustom();
   v.innerHTML = `<div class="grid">
@@ -2217,7 +2289,7 @@ function recTable(rows){
       <td>${f.country ? `<button class="link" data-f="country" data-v="${esc(f.country)}">${esc(f.country)}</button>` : '—'}</td><td class="num mono">${fmtB(f.bytes)}</td><td class="num mono">${fmtN(f.packets)}</td><td class="num mono">${Math.max(0, f.t - f.t0).toFixed(0)} ${T('s')}</td></tr>
       ${state.openFlow === i ? `<tr class="detail"><td colspan="11"><div class="kv"><div><span>${T('Host')}</span><b>${esc(f.name || '—')} · ${esc(f.int_ip)}</b></div><div><span>${T('NAT (after translation)')}</span><b>${f.nat_ip ? esc(f.nat_ip) + ':' + f.nat_port : '—'}</b></div>
         <div><span>ASN</span><b>${f.asn ? 'AS' + f.asn + ' ' + esc(f.as_org) : '—'}</b></div><div><span>${T('City')}</span><b>${esc([f.city, ccName(f.country)].filter(Boolean).join(', ') || '—')}</b></div>
-        <div><span>${T('Interfaces')}</span><b>${esc(ifLabel(f.exporter, f.in_if))} → ${esc(ifLabel(f.exporter, f.out_if))}</b></div><div><span>${T('Sampling')}</span><b>${f.sampling > 1 ? '1:' + f.sampling + T(' (volume scaled up)') : T('1:1 (not sampled)')}</b></div><div><span>L4</span><b>${({1:'ICMP', 6:'TCP', 17:'UDP', 50:'ESP', 47:'GRE'})[f.proto] || f.proto}</b></div></div></td></tr>` : ''}`).join('') || `<tr><td colspan="11"><div class="empty">${T('No records for this filter')}</div></td></tr>`}
+        <div><span>${T('Interfaces')}</span><b>${esc(ifLabel(f.exporter, f.in_if))} → ${esc(ifLabel(f.exporter, f.out_if))}</b></div><div><span>DSCP</span><b>${f.dscp == null || f.dscp === 255 ? T('not reported') : esc(DSCP_NAME(f.dscp)) + (f.dscp_out != null && f.dscp_out !== 255 && f.dscp_out !== f.dscp ? ' → ' + esc(DSCP_NAME(f.dscp_out)) + ' ' + T('(re-marked)') : '')}</b></div><div><span>${T('Sampling')}</span><b>${f.sampling > 1 ? '1:' + f.sampling + T(' (volume scaled up)') : T('1:1 (not sampled)')}</b></div><div><span>L4</span><b>${({1:'ICMP', 6:'TCP', 17:'UDP', 50:'ESP', 47:'GRE'})[f.proto] || f.proto}</b></div></div></td></tr>` : ''}`).join('') || `<tr><td colspan="11"><div class="empty">${T('No records for this filter')}</div></td></tr>`}
     </tbody></table></div>`;
 }
 document.addEventListener('click', e => { const tr = e.target.closest && e.target.closest('tr[data-rec]'); if (!tr || e.target.closest('[data-f]')) return; const i = +tr.dataset.rec; state.openFlow = state.openFlow === i ? null : i; const box = document.getElementById('recBox'); if (box && window.__recs) { box.innerHTML = recTable(window.__recs); wireFilters(box); } });
@@ -4120,7 +4192,7 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, qos:vQos, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
@@ -4208,11 +4280,13 @@ document.getElementById('trafSel').onchange = e => { state.traffic = e.target.va
 // country code, else a service). On focus a panel lists every filter with an example; while typing it suggests what
 // the word can be (↑ ↓ to pick, Enter or Tab to take) and says what is wrong with a value before it is applied.
 const q = document.getElementById('q');
+const DSCP_NAME = n => Object.keys(DSCP_BY_NAME).find(k => DSCP_BY_NAME[k] === n && !['BE', 'DEFAULT'].includes(k)) || `DSCP ${n}`;
+const DSCP_BY_NAME = {BE:0, DEFAULT:0, CS0:0, CS1:8, AF11:10, AF12:12, AF13:14, CS2:16, AF21:18, AF22:20, AF23:22, CS3:24, AF31:26, AF32:28, AF33:30, CS4:32, AF41:34, AF42:36, AF43:38, CS5:40, VA:44, EF:46, CS6:48, CS7:56};
 const QHELP = () => [
   [T('Who'), [['ip', T('inside host or network'), '10.0.0.5 · 172.16.0.0/24'], ['net', T('named network'), (META.networks || []).slice(0, 2).map(n => netTyped(n.name)).join(' · ') || T('Office')], ['dst', T('outside address or network'), '8.8.8.8 · 203.0.113.0/24'],
     ['asn', T('network owner: AS number or name'), 'AS15169 · Google'], ['country', T('country: two letters'), 'US · UA'], ['city', T('city'), 'Kyiv']]],
   [T('What'), [['service', T('service by address'), 'Telegram · YouTube'], ['l7', T('protocol by port'), 'HTTPS · DNS'], ['port', T('port of the server'), '443 · 3389'],
-    ['proto', T('L4 protocol number'), T('6 = TCP · 17 = UDP · 1 = ICMP')]]],
+    ['proto', T('L4 protocol number'), T('6 = TCP · 17 = UDP · 1 = ICMP')], ['dscp', T('QoS class: name or number'), 'EF · AF41 · 46']]],
   [T('Where'), [['device', T('device: name or address'), (META.devices && META.devices[0] || {}).name || 'fw-main'], ['iface', T('interface: name or number, in or out'), 'wan'],
     ['in_if', T('input interface number'), '5'], ['out_if', T('output interface number'), '1'], ['dir', T('direction: up · down · internal'), 'up']]]];
 const QKEY_INFO = () => Object.fromEntries(QHELP().flatMap(([, rows]) => rows.map(r => [r[0], r])));
@@ -4252,6 +4326,7 @@ function qParse(t){
     if (key === 'net') { const n = netFind(v); if (!n) return {err:(META.networks || []).length ? T('No network named {v}: name networks in Settings → Flow configuration', {v}) : T('No named networks yet: name them in Settings → Flow configuration')}; v = n.name; }
     if (['port', 'proto', 'in_if', 'out_if'].includes(key) && !/^\d+$/.test(v)) return {err:T('{key} takes a number: {v}', {key, v})};
     if (key === 'iface' && !/^\d+$/.test(v) && !/^[\w.\/:-]{1,60}$/.test(v)) return {err:T('{key} takes a number or a name: {v}', {key, v})};      // (1.13.0) iface:wan
+    if (key === 'dscp') { const n = /^\d+$/.test(v) ? +v : DSCP_BY_NAME[v.toUpperCase()]; if (n == null || (n > 63 && n !== 255)) return {err:T('Not a DSCP class: {v} (EF, AF41, CS1 … or 0–63)', {v})}; v = /^\d+$/.test(v) ? v : v.toUpperCase(); }      // (1.16.0)
     return {f:{k:key, v, neg}}; }
   if (/^[\d.]+(\/\d+)?$/.test(t) && t.split('.').length === 4 || /^[0-9a-f]*:[0-9a-f:.]*(\/\d+)?$/i.test(t) && !FILTER_KEYS.includes(key)) { const c = addrCheck(t); if (!c.ok) return {err:c.msg};
     return {f:{k:isPrivate(c.v) ? 'ip' : 'dst', v:c.v, neg}}; }

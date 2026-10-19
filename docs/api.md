@@ -5,7 +5,7 @@
 JSON over HTTP — with the session cookie of the UI, or with an **API token** (see below). Read endpoints take `range` (`1h`, `6h`, `24h`, `7d`,
 `30d`) or `from` + `to` (unix seconds, from 1 minute up to the retention of flow details) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip` / `dst` (an address or a network such as
 `172.16.0.0/24`), `net` (a named network), `service`, `l7`, `country`, `city`, `port`, `device`, `asn`, `dir`, `proto`,
-`iface`, `in_if`, `out_if`; several positive filters of one key match any of them).
+`iface`, `in_if`, `out_if`, `dscp` (1.16: EF, AF41, CS1 … or 0–63); several positive filters of one key match any of them).
 
 | Endpoint | Returns |
 |---|---|
@@ -15,6 +15,7 @@ JSON over HTTP — with the session cookie of the UI, or with an **API token** (
 | `GET /api/capacity?days=&tz=` | (1.13) every interface over whole local days (`days` 7 / 30 / 90 / 180 / 365, `tz` an IANA zone): daily p95 / peak in and out, the period's p95, trend, forecast (`full_in` / `over_in` days, `horizon`), status; fullest first; (1.14) `source` (`snmp` / `sflow` / `flows`), `seen_pct` {in, out} = flows' bytes against the interface counters; `days` rows end with 1 when the day came from the counters |
 | `GET /api/capacity/iface?device=&if=&days=&tz=` | (1.13) one interface: weekday × hour load (`heat.in` / `heat.out`, 7 × 24 bit/s, Monday first) and the top hosts / services, `recent` vs `earlier` bytes split at `mid` |
 | `GET /api/usage?period=&tz=` | (1.15) usage by host: `period` = `month` / `prev_month` / `7` / `30` / `90` / `180` / `365` (as far as the edition keeps data), `tz` an IANA zone; `total` and `prev` {up, dn, hosts} (`prev` only when the data reach back), `series` [[t, up, dn, hosts]] per day (per month over 92 days), `hosts` (500 busiest: k, name, net, up, dn, days, prev_up, prev_dn), `more` = hosts not listed. Filters and `t` as everywhere |
+| `GET /api/qos` | (1.16) QoS marking under the period and filters: `classes` [{k = DSCP, bytes, packets, flows}] (255 = not reported), `series` [[t, k, bytes]], `interfaces` (class mix of what enters each), `remarked` [{device, from, to, bytes}], `both_known`, `services` (5 per class), `names` |
 | `GET /api/top?dim=` | top-N by `int_ip`, `ext_ip`, `conv`, `service`, `l7`, `country`, `city`, `asn`, `ext_port`, `exporter`; `limit` 1–500 (default 10) or `all` (every row, up to 100,000 — not for `conv`); `format=csv` for a CSV file — see [Export](#export-every-host-of-a-network) |
 | `GET /api/river` | top inside × top outside links (live 2-minute window or whole period) |
 | `GET /api/flows`, `GET /api/live?since=` | raw records; records newer than a timestamp |

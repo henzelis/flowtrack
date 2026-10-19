@@ -360,7 +360,8 @@ class Collector:
     def store(self, e, f):
         """One decoded flow (a tuple from the core, already within the records/s limit) -> a row."""
         (src, dst, nbytes, npkts, proto, sport, dport, in_if, out_if, obs,
-         nat_src, nat_sport, nat_dst, nat_dport, start, end, app_tag, rate) = f
+         nat_src, nat_sport, nat_dst, nat_dport, start, end, app_tag, rate) = f[:18]
+        dscp, dscp_out = f[18:20] if len(f) >= 20 else (255, 255)      # (1.16.0, core 1.6.0) 255 = not sent
         if rate <= 1:
             rate = e.cfg_sampling
         if rate > 1:                    # sampled exporters report 1 of every N packets: scale up
@@ -415,7 +416,7 @@ class Collector:
             'nat_ip': nat_ip, 'nat_port': nat_port, 'bytes': nbytes, 'packets': npkts, 'sampling': rate,
             'l7': l7, 'service': service_name(port_service, asn, as_org, ei[0]),
             'country': country, 'city': city, 'lat': lat, 'lon': lon, 'asn': asn, 'as_org': as_org,
-            'app_tag': app_tag, 'obs': obs, 'keep_days': self.keep_days,
+            'app_tag': app_tag, 'obs': obs, 'keep_days': self.keep_days, 'dscp': dscp, 'dscp_out': dscp_out,
         })
 
     def handle_packet(self, data, addr, learn_only=False):

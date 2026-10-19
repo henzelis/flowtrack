@@ -95,6 +95,21 @@ DIMS = {'int_ip': 'int_ip', 'ext_ip': 'ext_ip', 'service': 'service', 'l7': 'l7'
         'asn': 'asn', 'ext_port': 'ext_port', 'exporter': 'exporter', 'dir': 'dir', 'proto': 'proto'}
 
 
+# (1.16.0) DSCP classes (RFC 4594 names); 255 = the exporter did not send the marking
+DSCP_NAMES = {0: 'CS0', 8: 'CS1', 10: 'AF11', 12: 'AF12', 14: 'AF13', 16: 'CS2', 18: 'AF21', 20: 'AF22', 22: 'AF23', 24: 'CS3',
+              26: 'AF31', 28: 'AF32', 30: 'AF33', 32: 'CS4', 34: 'AF41', 36: 'AF42', 38: 'AF43', 40: 'CS5', 44: 'VA', 46: 'EF',
+              48: 'CS6', 56: 'CS7', 255: '?'}
+DSCP_BY_NAME = {v: k for k, v in DSCP_NAMES.items() if v != '?'} | {'BE': 0, 'DEFAULT': 0}
+
+
+def dscp_value(v):
+    """'46', 'EF', 'af41', 'BE' -> the number, None when it is neither."""
+    v = str(v).strip().upper()
+    if v.isdigit():
+        n = int(v)
+        return n if n < 64 or n == 255 else None
+    return DSCP_BY_NAME.get(v)
+
 # ------------------------------------------------------------------ names
 
 class Names:
@@ -226,6 +241,13 @@ def scope(q):
         elif k == 'host':         # either end (Path analysis: a host's conversations in both directions)
             cond = f'(int_ip = {{f{i}:String}} OR ext_ip = {{f{i}:String}})'
             fcols |= {'int_ip', 'ext_ip'}
+        elif k == 'dscp':         # (1.16.0) a DSCP class by number (46) or name (EF, AF41, CS1, BE); 255 = not sent
+            n = dscp_value(v)
+            if n is None:
+                raise BadRequest(tr('Unknown DSCP class: {v}', v=v[:20]))
+            params[f'f{i}n'] = n
+            cond = f'dscp = {{f{i}n:UInt8}}'
+            fcols.add('dscp')
         elif k == 'iface':
             if v.isascii() and v.isdigit():
                 cond = f'(in_if = {{f{i}:UInt32}} OR out_if = {{f{i}:UInt32}})'
@@ -1030,7 +1052,7 @@ def api_flows(q):
     where, p, rng, step = scope(q)
     p['lim'] = max(1, min(q1(q, 'limit', '50', int), 1000))
     rows = ch(f"""SELECT toUnixTimestamp(ts) AS t, toFloat64(ts_start) AS t0, exporter, in_if, out_if, toString(dir) AS dir, int_ip, int_port, ext_ip, ext_port,
-            proto, nat_ip, nat_port, bytes, packets, l7, service, country, city, asn, as_org, sampling
+            proto, nat_ip, nat_port, bytes, packets, l7, service, country, city, asn, as_org, sampling, dscp, dscp_out
         FROM {p['_flows']} WHERE {where} ORDER BY ts DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
     for r in rows:
         r['name'] = NAMES.get(r['int_ip'])
@@ -1712,6 +1734,48 @@ def api_usage(q):
             'prev_from': pt0, 'prev_to': pt1, 'bucket': bucket, 'cut': t0 == floor, 'since': oldest,
             'total': num(tot), 'prev': num(ptot), 'series': [[int(r['t']), int(r['up']), int(r['dn']), int(r['hosts'])] for r in series],
             'hosts': hosts, 'more': max(0, int(tot['hosts']) - len(hosts))}
+
+
+def api_qos(q):
+    """(1.16.0) QoS marking under the period and the filters: the traffic of each DSCP class (on the way in), over time,
+    through each interface of each device, the services of each class, and what the devices re-marked (class in ->
+    class out, where the exporter sends both). 255 = the exporter did not send the marking."""
+    where, p, rng, step = scope(q)
+    p['step'] = step
+    settings = CAP_SETTINGS
+    classes = ch(f"""SELECT dscp AS k, sum(bytes) AS b, sum(packets) AS pk, sum(flows) AS fl FROM {src(p, ['dscp'])}
+        GROUP BY k ORDER BY b DESC""", p, fmt='JSON', timeout=120, settings=settings)
+    bucket = 'toUnixTimestamp(toStartOfInterval(ts, toIntervalSecond({step:UInt32})))'
+    series = ch(f"""SELECT {bucket} AS t, dscp AS k, sum(bytes) AS b FROM {src(p, ['dscp'], bucketed=True)} GROUP BY t, k ORDER BY t""",
+                p, fmt='JSON', timeout=120, settings=settings)
+    ifs = ch(f"""SELECT exporter, in_if AS i, dscp AS k, sum(bytes) AS b FROM {src(p, ['in_if', 'out_if', 'dscp'])}
+        GROUP BY exporter, i, k HAVING b > 0 ORDER BY b DESC LIMIT 2000""", p, fmt='JSON', timeout=120, settings=settings)
+    remark = ch(f"""SELECT exporter, dscp AS a, dscp_out AS z, sum(bytes) AS b FROM {src(p, ['in_if', 'out_if', 'dscp', 'dscp_out'])}
+        AND dscp_out != 255 AND dscp != 255 AND dscp_out != dscp GROUP BY exporter, a, z ORDER BY b DESC LIMIT 50""", p, fmt='JSON', timeout=120)
+    both = ch(f"""SELECT sumIf(bytes, dscp_out != 255 AND dscp != 255) AS b FROM {src(p, ['in_if', 'out_if', 'dscp', 'dscp_out'])}""",
+              p, fmt='JSON', timeout=120)[0]
+    svc = ch(f"""SELECT dscp AS k, service AS s, sum(bytes) AS b FROM {src(p, ['dscp', 'service'])} AND service != ''
+        GROUP BY k, s ORDER BY b DESC LIMIT 5 BY k""", p, fmt='JSON', timeout=120, settings=settings)
+    cfg = exporters_cfg()
+    names = {}
+    for dev, c in cfg.items():
+        for k, v in (c.get('if_names') or {}).items():
+            names[(dev, int(k))] = v
+    out_ifs = {}
+    for r in ifs:
+        key = (r['exporter'], int(r['i']))
+        e = out_ifs.setdefault(key, {'device': r['exporter'], 'device_name': (cfg.get(r['exporter']) or {}).get('name') or r['exporter'],
+                                     'index': key[1], 'name': names.get(key) or ('local' if key[1] == 0 else f'if {key[1]}'), 'classes': {}, 'bytes': 0})
+        e['classes'][int(r['k'])] = int(r['b'])
+        e['bytes'] += int(r['b'])
+    return {'step': step, 'range': rng, 'from': p['t0'], 'to': p['t1'], 'names': {str(k): v for k, v in DSCP_NAMES.items()},
+            'classes': [{'k': int(r['k']), 'bytes': int(r['b']), 'packets': int(r['pk']), 'flows': int(r['fl'])} for r in classes],
+            'series': [[int(r['t']), int(r['k']), int(r['b'])] for r in series],
+            'interfaces': sorted(out_ifs.values(), key=lambda x: -x['bytes'])[:40],
+            'remarked': [{'device': r['exporter'], 'device_name': (cfg.get(r['exporter']) or {}).get('name') or r['exporter'], 'from': int(r['a']),
+                          'to': int(r['z']), 'bytes': int(r['b'])} for r in remark],
+            'both_known': int(both['b'] or 0),
+            'services': [{'k': int(r['k']), 'service': r['s'], 'bytes': int(r['b'])} for r in svc]}
 
 def api_host(q):
     ip = q1(q, 'ip', '')
@@ -2404,7 +2468,7 @@ CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/networks': api_networks, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts, '/api/ifload': api_ifload,
-          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface, '/api/usage': api_usage}
+          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface, '/api/usage': api_usage, '/api/qos': api_qos}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
 

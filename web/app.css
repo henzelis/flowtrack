@@ -708,3 +708,12 @@ td.nowrap{white-space:nowrap}
 #uPerBox .seg{flex-wrap:wrap;max-width:100%}
 /* (1.15.1) counters read, figures still from the flows */
 .capsrc.soon{color:var(--ink2);font-weight:500}
+/* (1.16.0) QoS */
+.dscp{display:inline-block;font:700 11.5px var(--f-mono);padding:2px 8px;border-radius:999px;color:var(--ink);background:color-mix(in srgb, var(--c) 28%, transparent);border:1px solid color-mix(in srgb, var(--c) 60%, transparent)}
+.qifs{display:flex;flex-direction:column;gap:12px}
+.qifh{display:flex;gap:8px;align-items:baseline;font-size:13px;margin-bottom:5px}
+.qifh .mono{margin-left:auto}
+.qbar{display:flex;height:12px;border-radius:6px;overflow:hidden;min-width:4px;background:rgba(120,160,255,.08)}
+.qbar i{display:block;height:100%}
+.qsvc{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px 22px}
+.qsvc h5{margin:0 0 8px;font-size:13px;display:flex;gap:8px;align-items:center}
