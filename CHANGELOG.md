@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.16.0 — 2026-10-19
 
 - **QoS (DSCP)** — a page of its own: how the traffic is marked as it enters each device — the marked share, voice and
   video, what the devices re-mark (FortiGate reports the class on the way in and out), what the export does not report;
