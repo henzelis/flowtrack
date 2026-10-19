@@ -1098,11 +1098,14 @@ def interfaces_of(c, rows, seen_addrs, sn=None, cnt=None):
 
 
 def sflow_counters():
-    """exporter -> ifIndex -> what the sFlow interface counters of the last 10 minutes say: speed, state, average in /
-    out bit/s, errors and discards (a counter that went back, e.g. after a reboot, is skipped for that step)."""
+    """exporter -> ifIndex -> what the interface counters of the last 10 minutes say (sFlow counter samples, or since
+    1.14.0 the SNMP reads — `src`): speed, state, average in / out bit/s, errors and discards (a counter that went
+    back, e.g. after a reboot, is skipped for that step)."""
     try:
-        rows = ch("""SELECT exporter, if_index, groupArray((toUInt32(ts), speed, status, in_octets, out_octets, in_errors + out_errors,
-                in_discards + out_discards)) AS a FROM if_counters WHERE ts >= now() - INTERVAL 10 MINUTE GROUP BY exporter, if_index""", fmt='JSON')
+        # (1.14.0) the SNMP reads go to the same table: one source per interface (SNMP before sFlow), never both mixed
+        rows = ch("""SELECT exporter, if_index, src, groupArray((toUInt32(ts), speed, status, in_octets, out_octets, in_errors + out_errors,
+                in_discards + out_discards)) AS a FROM if_counters WHERE ts >= now() - INTERVAL 10 MINUTE GROUP BY exporter, if_index, src
+            ORDER BY src = 'snmp'""", fmt='JSON')
     except CHError:                    # the table appears when the collector of 1.7.0 starts
         return {}
     out = {}
@@ -1113,7 +1116,7 @@ def sflow_counters():
         out.setdefault(r['exporter'], {})[int(r['if_index'])] = {
             'speed': a[-1][1], 'up': bool(a[-1][2] & 2), 'admin_up': bool(a[-1][2] & 1), 'last': a[-1][0],
             'in_bps': round(step(3) * 8 / span) if span else None, 'out_bps': round(step(4) * 8 / span) if span else None,
-            'errors': step(5), 'discards': step(6), 'minutes': round(span / 60, 1)}
+            'errors': step(5), 'discards': step(6), 'minutes': round(span / 60, 1), 'src': r.get('src') or 'sflow'}
     return out
 
 

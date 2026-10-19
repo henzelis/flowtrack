@@ -9,6 +9,8 @@ in Settings → General, at the bottom of every page, in the collector log and b
   64-bit octet counters (32-bit where a device has no others; a wrap is undone), errors, discards and state every
   minute. *Capacity* takes them for every day they cover: every byte the port carried, the busiest minute (not five),
   and links that no flow describes at all. *Settings → Devices* shows when they were read last.
+- *Settings → Devices → Interfaces*: the load column names its source — «Load (SNMP counters)» for the minute reads,
+  «Load (sFlow counters)» for sFlow counter samples (the SNMP reads were shown under the sFlow name).
 - **What the flows see**: per link and direction, the bytes in the flows against the interface's counters. Below 80 %
   the export misses traffic (an interface without a sampler), above 125 % it may be exported twice — said on the card
   on top, in the link's sentence, in the table and in the reports.

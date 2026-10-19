@@ -1785,5 +1785,9 @@
  "{who}, {dir}: the busy hours reach {p95} of {cap} (95th percentile, {pct}%), the busiest minute {peak} (the interface's own counters).": "{who}, {dir}: години пік сягають {p95} із {cap} (95-й перцентиль, {pct}%), найзавантаженіша хвилина — {peak} (власні лічильники інтерфейсу).",
  "{name}, {dir}: the rest of its traffic is not exported": "{name}, {dir}: решта його трафіку не експортується",
  "of what the interfaces counted, at least · {n} links by their own counters": "від того, що порахували інтерфейси, щонайменше · за власними лічильниками: {n}",
- "the flows see only {pct}% of what the interface counted — the rest is not exported.": "потоки бачать лише {pct}% від того, що порахував інтерфейс, — решта не експортується."
+ "the flows see only {pct}% of what the interface counted — the rest is not exported.": "потоки бачать лише {pct}% від того, що порахував інтерфейс, — решта не експортується.",
+ "From the interface counters read over SNMP every minute": "З лічильників інтерфейсів, прочитаних через SNMP щохвилини",
+ "Load (SNMP counters)": "Завантаження (лічильники SNMP)",
+ "From the interface counters: read over SNMP or sent with sFlow": "З лічильників інтерфейсів: прочитаних через SNMP або надісланих через sFlow",
+ "Load (interface counters)": "Завантаження (лічильники інтерфейсів)"
 }
