@@ -168,7 +168,8 @@ filters on your screen, with one click.
 **Sign in with Active Directory or LDAP**: the sign-in page asks how to sign in — your directory or a local account —
 and the role comes from the user's groups (nested ones too); LDAPS / STARTTLS, a check that shows what FlowTrack finds
 for a user before you switch it on. **API tokens** let scripts and monitoring (Zabbix, Grafana, your own) read
-FlowTrack — or change it, with a token that may — without a password. **Webhooks** send new events to Slack,
+FlowTrack — or change it, with a token that may — without a password; every host of a network with its upload and
+download for any period comes as JSON or a CSV file for Excel or billing ([how](docs/api.md#export-every-host-of-a-network)). **Webhooks** send new events to Slack,
 Mattermost, Rocket.Chat, Discord or your own system (signed with HMAC), and **syslog** in CEF or JSON feeds Splunk,
 QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog or Wazuh.
 

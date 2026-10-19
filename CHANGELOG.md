@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.14.1 — 2026-10-19
+
+- **Every row from the API, as CSV too**: `/api/top?limit=all` returns every host (service, country, …) under the
+  filters, up to 100,000, with `"truncated": true` when there were more; `format=csv` gives a CSV file (UTF-8 with a
+  BOM, opens in Excel). Upload and download of each host of a network for any period: see docs/api.md, «Export».
+  `limit=0` or `-1` still mean 1 — documented now. An export of many hosts starts no reverse DNS lookups.
+
 ## 1.14.0 — 2026-10-19
 
 - **The interfaces' own counters over SNMP.** For every device with SNMP on, the collector reads each interface's

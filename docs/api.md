@@ -14,7 +14,7 @@ JSON over HTTP — with the session cookie of the UI, or with an **API token** (
 | `GET /api/ifload?device=` | load of each interface of a device: 5-minute in / out bit rates, average / p95 / peak and shares of the capacity |
 | `GET /api/capacity?days=&tz=` | (1.13) every interface over whole local days (`days` 7 / 30 / 90 / 180 / 365, `tz` an IANA zone): daily p95 / peak in and out, the period's p95, trend, forecast (`full_in` / `over_in` days, `horizon`), status; fullest first; (1.14) `source` (`snmp` / `sflow` / `flows`), `seen_pct` {in, out} = flows' bytes against the interface counters; `days` rows end with 1 when the day came from the counters |
 | `GET /api/capacity/iface?device=&if=&days=&tz=` | (1.13) one interface: weekday × hour load (`heat.in` / `heat.out`, 7 × 24 bit/s, Monday first) and the top hosts / services, `recent` vs `earlier` bytes split at `mid` |
-| `GET /api/top?dim=` | top-N by `int_ip`, `ext_ip`, `conv`, `service`, `l7`, `country`, `city`, `asn`, `ext_port`, `exporter` |
+| `GET /api/top?dim=` | top-N by `int_ip`, `ext_ip`, `conv`, `service`, `l7`, `country`, `city`, `asn`, `ext_port`, `exporter`; `limit` 1–500 (default 10) or `all` (every row, up to 100,000 — not for `conv`); `format=csv` for a CSV file — see [Export](#export-every-host-of-a-network) |
 | `GET /api/river` | top inside × top outside links (live 2-minute window or whole period) |
 | `GET /api/flows`, `GET /api/live?since=` | raw records; records newer than a timestamp |
 | `GET /api/geo`, `GET /api/host?ip=` | per-city aggregates; one host's details |
@@ -47,6 +47,52 @@ Never with a token, whatever its access: users, tokens, the license, deleting ba
 have an end date (30 / 90 / 365 days) and is revoked in *Settings → API*; the list shows when and from where each one
 was last used. Wrong tokens count with the failed logins of the address: 5 in 5 minutes → `429` for a while.
 Answers: `401` unknown or ended token, `403` not allowed for this token.
+
+## Export: every host of a network
+
+Upload and download of each host of a network over any period — for billing, reports in Excel or your own system.
+`/api/top` with `dim=int_ip`, the network as a filter, the period, and `limit=all`:
+
+```bash
+TOKEN=ftapi_…            # Settings → API → New token, read only is enough
+curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode 'dim=int_ip' --data-urlencode 'limit=all' \
+  --data-urlencode 'from=1792368000' --data-urlencode 'to=1792454400' \
+  --data-urlencode 'f=[{"k":"ip","v":"10.0.1.0/24"}]'
+```
+
+```json
+{"total": 27996906454, "truncated": false,
+ "rows": [{"k": "10.0.1.100", "name": "nas", "up": 271794048, "dn": 15556114390, "fl": 32607, "pk": 14964092}, …]}
+```
+
+- `up` — bytes the host sent (uploaded), `dn` — bytes it received (downloaded), `fl` — flow records, `pk` — packets,
+  `name` — the host's name when FlowTrack knows it; `total` — all the traffic under the filters. Rows: the busiest first.
+- **The network**: `{"k":"ip","v":"10.0.1.0/24"}` (any CIDR, IPv4 or IPv6) or a named network of *Settings → Flow
+  configuration*: `{"k":"net","v":"Office"}`. Any other filter narrows it further, as in the search box:
+  `{"k":"device","v":"fw-main"}`, `{"k":"service","v":"YouTube"}`, `{"k":"country","v":"US","neg":true}`.
+- **The period**: `from` + `to` in unix seconds, or `range=1h|6h|24h|7d|30d` (ending now); at most the days your
+  edition keeps flow details (Community: 31).
+- **Traffic**: `t=internet` (default, with outside addresses), `t=internal` (between your hosts), `t=all`.
+- **`limit=all`** returns every host, up to 100,000; `"truncated": true` means there were more — narrow the filters (a
+  smaller network, a shorter period). A number keeps to 1–500 (`0` or `-1` mean 1). Names come from what FlowTrack
+  knows already: an export never starts reverse DNS lookups.
+- **CSV**: add `format=csv` — a file `flowtrack-int_ip.csv` (UTF-8 with a BOM, opens in Excel as is):
+
+```bash
+curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Bearer $TOKEN" \
+  --data-urlencode 'dim=int_ip' --data-urlencode 'limit=all' --data-urlencode 'format=csv' \
+  --data-urlencode 'range=30d' --data-urlencode 'f=[{"k":"net","v":"Office"}]' -o office-hosts.csv
+```
+
+```csv
+host,name,upload_bytes,download_bytes,flows,packets,total_bytes
+10.0.1.100,nas,271794048,15556114390,32607,14964092,15827908438
+```
+
+  A cut list ends with a `# truncated …` line. The same works for every other `dim` (services, countries, outside
+  addresses, ports, ASNs, devices, named networks with `dim=net`): the first column is named by it.
+- One host over time: `GET /api/series` with `{"k":"ip","v":"10.0.1.100"}` gives the chart's points.
 
 ## Webhooks
 

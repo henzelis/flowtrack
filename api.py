@@ -125,14 +125,16 @@ class Names:
             self.cache[ip] = (name, time.time())
             self.pending.discard(ip)
 
-    def get(self, ip):
+    def get(self, ip, lookup=True):
+        """lookup=False (1.14.1): only names known already — an export of 100,000 hosts must not queue as many
+        reverse DNS lookups"""
         if ip in self.manual:
             return self.manual[ip]
         if ip in self.self_ips:
             return self.self_ips[ip]
         with self.lock:
             hit = self.cache.get(ip)
-            if (hit is None or time.time() - hit[1] > 3600) and ip not in self.pending and is_private(ip):
+            if lookup and (hit is None or time.time() - hit[1] > 3600) and ip not in self.pending and is_private(ip):
                 self.pending.add(ip)
                 self.pool.submit(self._resolve, ip)
         return hit[0] if hit else ''
@@ -562,11 +564,20 @@ def attrs(rows, keys, what, where, p, cols=None):
                 r[k] = v
 
 
+TOP_ALL = 100_000      # (1.14.1) rows of /api/top?limit=all at most
+
+
 def api_top(q):
     where, p, rng, step = scope(q)
     totals = {}
     dim = q1(q, 'dim', 'int_ip')
-    p['lim'] = max(1, min(q1(q, 'limit', '10', int), 500))
+    # (1.14.1) limit=all: every row under the filters (scripts, billing, CSV), up to TOP_ALL — one more is asked for to
+    # tell a cut list ('truncated'); a number keeps to 1–500 as before (0 or -1 meant 1 and nobody was told)
+    every = q1(q, 'limit', '10') == 'all'
+    if every and dim == 'conv':
+        raise BadRequest(tr('limit=all is not available for conversations: use a number up to 500'))
+    p['lim'] = TOP_ALL + 1 if every else max(1, min(q1(q, 'limit', '10', int), 500))
+    name_of = (lambda ip: NAMES.get(ip, lookup=False)) if every else NAMES.get      # noqa: E731
     if dim == 'conv':
         # a busy day has millions of host-peer pairs: they are grouped by the pair's 64-bit hash (8 bytes instead of
         # two address strings; a collision among 10 million pairs has a chance of about 1 in 300,000), then the pairs
@@ -574,7 +585,7 @@ def api_top(q):
         sums = """sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl, sum(packets) AS pk"""
         try:
             top, tb = ch_totals(f"""SELECT cityHash64(int_ip, ext_ip) AS h, sum(bytes) AS b FROM {p['_flows']} WHERE {where}
-                GROUP BY h WITH TOTALS ORDER BY b DESC LIMIT {{lim:UInt16}}""", p,      # beyond its memory share: on disk
+                GROUP BY h WITH TOTALS ORDER BY b DESC LIMIT {{lim:UInt32}}""", p,      # beyond its memory share: on disk
                 settings={'max_memory_usage': CH_QUERY_MEMORY, 'max_bytes_before_external_group_by': CH_QUERY_MEMORY * 2 // 5})
             p['hs'], totals = [int(r['h']) for r in top], {'up': tb.get('b', 0), 'dn': 0}
         except CHError as ex:
@@ -587,13 +598,13 @@ def api_top(q):
             p['hs'], totals = [int(h) for h in cand['t']], {'up': cand['b'], 'dn': 0}
         rows = ch(f"""SELECT int_ip, ext_ip, {sums}, any(service) AS service, any(country) AS country, any(city) AS city FROM {p['_flows']}
             WHERE {where} AND cityHash64(int_ip, ext_ip) IN {{hs:Array(UInt64)}}
-            GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON') if p['hs'] else []
+            GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p, fmt='JSON') if p['hs'] else []
         for r in rows:
-            r['name'] = NAMES.get(r['int_ip'])
+            r['name'] = name_of(r['int_ip'])
     elif dim == 'host_svc':     # each inside host with its main service and L7 protocol
         rows, totals = ch_totals(f"""SELECT int_ip AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
                 sum(flows) AS fl, 0 AS pk
-            FROM {src(p, ['int_ip'])} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+            FROM {src(p, ['int_ip'])} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p)
         if rows:                # the main service / L7 / protocol of the hosts shown (per host x service of a whole day
             p['hs'] = [r['k'] for r in rows]                                   # did not fit into memory)
             main = {x['k']: x for x in ch(f"""SELECT k, argMax(service, b) AS service, argMax(l7, b) AS l7, argMax(proto, b) AS proto
@@ -602,7 +613,7 @@ def api_top(q):
             for r in rows:
                 r.update({c: main.get(r['k'], {}).get(c, d) for c, d in (('service', ''), ('l7', ''), ('proto', 0))})
         for r in rows:
-            r['name'] = NAMES.get(r['k'])
+            r['name'] = name_of(r['k'])
             r['proto'] = int(r['proto'])
     elif dim in ('net', 'net_svc') and q1(q, 't', 'internet') == 'internal':
         # (1.8.7) inside <-> inside: a network sends from its client hosts and from its servers
@@ -610,26 +621,26 @@ def api_top(q):
         rows = ch(f"""SELECT k, sum(u) AS up, sum(d) AS dn, sum(f) AS fl, 0 AS pk, uniqExact(h) AS hosts FROM (
                 SELECT {nl} AS k, cityHash64(int_ip) AS h, if(dir = 'internal', bytes, 0) AS u, if(dir = 'internal', 0, bytes) AS d, 1 AS f FROM {p['_flows']} WHERE {where}
                 UNION ALL SELECT {nr}, cityHash64(ext_ip), if(dir = 'internal', 0, bytes), if(dir = 'internal', bytes, 0), 1 FROM {p['_flows']} WHERE {where})
-            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p, fmt='JSON')
         net_rows(rows, p, where, src(p, ['int_ip', 'service', 'l7', 'proto']) if dim == 'net_svc' else None)
     elif dim in ('net', 'net_svc'):      # (1.8.7) traffic of each named network (by the inside address), '' = no network
         rows, totals = ch_totals(f"""SELECT {net_expr('int_ip', p)} AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up,
                 sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, sum(flows) AS fl, 0 AS pk, uniqExact(cityHash64(int_ip)) AS hosts
-            FROM {src(p, ['int_ip'])} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+            FROM {src(p, ['int_ip'])} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p)
         net_rows(rows, p, where, src(p, ['int_ip', 'service', 'l7', 'proto']) if dim == 'net_svc' else None)
     elif dim == 'int_ip' and q1(q, 't', 'internet') == 'internal':
         # inside <-> inside: a host is the client (int_ip) of some sessions and the server (ext_ip) of others; count
         # what it sent (up) and received (dn), how many hosts it connected to (calls) and how many connected to it
         # (callers). For a chosen host the records are turned to it (host_view): `turned` = it was the server.
-        tr = 'turned' if 'hv' in p else '0'
+        turned = 'turned' if 'hv' in p else '0'
         rows = ch(f"""SELECT k, sum(u) AS up, sum(d) AS dn, sum(f) AS fl, sum(pk_) AS pk,
                 uniqExactIf(peer, NOT srv) AS calls, uniqExactIf(peer, srv) AS callers FROM (
-                SELECT int_ip AS k, ext_ip AS peer, toUInt8({tr}) AS srv, if(dir = 'internal', bytes, 0) AS u, if(dir = 'internal', 0, bytes) AS d, 1 AS f, packets AS pk_
+                SELECT int_ip AS k, ext_ip AS peer, toUInt8({turned}) AS srv, if(dir = 'internal', bytes, 0) AS u, if(dir = 'internal', 0, bytes) AS d, 1 AS f, packets AS pk_
                     FROM {p['_flows']} WHERE {where}
-                UNION ALL SELECT ext_ip, int_ip, toUInt8(1 - {tr}), if(dir = 'internal', 0, bytes), if(dir = 'internal', bytes, 0), 1, packets FROM {p['_flows']} WHERE {where})
-            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p, fmt='JSON')
+                UNION ALL SELECT ext_ip, int_ip, toUInt8(1 - {turned}), if(dir = 'internal', 0, bytes), if(dir = 'internal', bytes, 0), 1, packets FROM {p['_flows']} WHERE {where})
+            GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p, fmt='JSON')
         for r in rows:
-            r['name'] = NAMES.get(r['k'])
+            r['name'] = name_of(r['k'])
     elif dim in DIMS:
         col = DIMS[dim]
         extra, cols = '', [col]
@@ -643,7 +654,7 @@ def api_top(q):
             extra, cols = ', any(l7) AS l7, any(proto) AS proto_n, any(service) AS service', [col, 'l7', 'proto', 'service']
         rows, totals = ch_totals(f"""SELECT toString({col}) AS k, sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn,
                 sum(flows) AS fl, sum(packets) AS pk {extra}
-            FROM {src(p, cols)} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt16}}""", p)
+            FROM {src(p, cols)} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p)
         if dim == 'ext_port' and rows:
             p['ports'] = [int(r['k']) for r in rows]
             hp = {str(x['k']): x for x in ch(f"""SELECT ext_port AS k, uniqExact(cityHash64(int_ip)) AS hosts, uniqExact(cityHash64(ext_ip)) AS peers
@@ -654,7 +665,7 @@ def api_top(q):
             attrs(rows, ('k',), 'service, country, city, asn, as_org', where, p, cols=('ext_ip',))
         if dim == 'int_ip':
             for r in rows:
-                r['name'] = NAMES.get(r['k'])
+                r['name'] = name_of(r['k'])
     else:
         raise BadRequest('bad dim')
     if dim in ('int_ip', 'net', 'net_svc') and q1(q, 't', 'internet') == 'internal':     # there every record counts for two hosts
@@ -665,8 +676,36 @@ def api_top(q):
         for k in ('up', 'dn', 'fl', 'pk', 'hosts', 'asn', 'peers', 'proto_n', 'calls', 'callers'):
             if k in r:
                 r[k] = int(r[k])
-    return {'total': int(tot), 'rows': rows}
+    out = {'total': int(tot), 'rows': rows}
+    if every:
+        out['truncated'] = len(rows) > TOP_ALL
+        out['rows'] = rows[:TOP_ALL]
+    return out
 
+
+CSV_ROUTES = {'/api/top'}
+CSV_COLS = {'k': None, 'name': 'name', 'up': 'upload_bytes', 'dn': 'download_bytes', 'fl': 'flows', 'pk': 'packets', 'hosts': 'hosts',
+            'peers': 'peers', 'service': 'service', 'l7': 'l7', 'country': 'country', 'city': 'city', 'as_org': 'as_org', 'asn': 'asn',
+            'calls': 'calls', 'callers': 'callers', 'networks': 'networks', 'int_ip': 'int_ip', 'ext_ip': 'ext_ip'}
+
+
+def top_csv(dim, res):
+    """(1.14.1) /api/top as CSV (UTF-8 with a BOM, so Excel reads names right): the key column is named by the dim
+    (int_ip → host), then the columns the rows have, plus total_bytes; a cut list ends with a '# truncated' line."""
+    import csv
+    import io
+    rows = res.get('rows') or []
+    keys = [k for k in CSV_COLS if any(k in r for r in rows)] or ['k', 'up', 'dn']
+    head = [{'int_ip': 'host', 'ext_ip': 'outside_ip', 'net': 'network'}.get(dim, dim) if k == 'k' else CSV_COLS[k] for k in keys]
+    f = io.StringIO()
+    w = csv.writer(f, lineterminator='\r\n')
+    w.writerow(head + ['total_bytes'])
+    for r in rows:
+        w.writerow([', '.join(map(str, v)) if isinstance(v, list) else ('' if v is None else v) for v in (r.get(k) for k in keys)]
+                   + [int(r.get('up') or 0) + int(r.get('dn') or 0)])
+    if res.get('truncated'):
+        w.writerow([f'# truncated: more than {TOP_ALL} rows, narrow the filters'])
+    return ('\ufeff' + f.getvalue()).encode()
 
 def net_rows(rows, p, where, svc_src=None):
     """(1.8.7) The networks of each named-network row; with `svc_src` also its main service, L7 protocol and protocol."""
@@ -2401,6 +2440,12 @@ class H(BaseHTTPRequestHandler):
         if fn:
             try:
                 q = parse_qs(u.query)
+                if u.path in CSV_ROUTES and q1(q, 'format', 'json') == 'csv':      # (1.14.1) a table as CSV
+                    tag = web_tag(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page'))
+                    with web_query(tag, web_settings(u.path, q)):
+                        res = fn(q)
+                    self._disposition = f'attachment; filename="flowtrack-{q1(q, "dim", "int_ip")}.csv"'
+                    return self.send(200, top_csv(q1(q, 'dim', 'int_ip'), res), 'text/csv; charset=utf-8')
                 body = CACHE.get(u.path, q)
                 if body is None:
                     tag = web_tag(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page'))

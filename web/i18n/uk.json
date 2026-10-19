@@ -1789,5 +1789,6 @@
  "From the interface counters read over SNMP every minute": "З лічильників інтерфейсів, прочитаних через SNMP щохвилини",
  "Load (SNMP counters)": "Завантаження (лічильники SNMP)",
  "From the interface counters: read over SNMP or sent with sFlow": "З лічильників інтерфейсів: прочитаних через SNMP або надісланих через sFlow",
- "Load (interface counters)": "Завантаження (лічильники інтерфейсів)"
+ "Load (interface counters)": "Завантаження (лічильники інтерфейсів)",
+ "limit=all is not available for conversations: use a number up to 500": "limit=all недоступний для розмов: вкажіть число до 500"
 }
