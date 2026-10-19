@@ -14,6 +14,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **What the flows see**: per link and direction, the bytes in the flows against the interface's counters. Below 80 %
   the export misses traffic (an interface without a sampler), above 125 % it may be exported twice — said on the card
   on top, in the link's sentence, in the table and in the reports.
+- **Capacity on a busy firewall**: «Not enough memory for this period» (a customer on 1.13.1). The 5-minute totals
+  were grouped by the pair of interfaces before being split per interface — thousands of VLAN / tunnel pairs × the
+  period's buckets; now each record goes to its two interfaces as it is read (measured: 1.75 GiB → 182 MiB on 20 M
+  records with 3,600 pairs), and the grouping may spill to disk instead of failing.
 - **Capacity — visual first**: the cards, the trend chart with a link picker, the hours of the week and the hosts and
   services come first; the table of all links is at the bottom (a row picks the link above).
 

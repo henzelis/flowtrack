@@ -1352,11 +1352,16 @@ def _tz(q):
 
 
 def _five_min(p):
-    """5-minute totals per device, interface and direction (0 = into it, as the input interface; 1 = out of it)."""
-    return f"""SELECT exporter, x.1 AS i, x.2 AS d, t, sum(b) AS v FROM (
-            SELECT exporter, in_if, out_if, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t, sum(bytes) AS b
-            FROM {src(p, ['in_if', 'out_if'], bucketed=True)} GROUP BY exporter, in_if, out_if, t)
-        ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE x.1 != 0 GROUP BY exporter, i, d, t"""
+    """5-minute totals per device, interface and direction (0 = into it, as the input interface; 1 = out of it).
+    (1.14.0) Each record goes to its two interfaces as it is read: grouping by the PAIR of interfaces first ran out of
+    memory on a busy firewall (thousands of VLAN / tunnel pairs × 8,640 buckets in 30 days, a customer on 1.13.1)."""
+    sql, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=p['_step'], table=p.get('_flows', 'flows'))
+    return f"""SELECT exporter, x.1 AS i, x.2 AS d, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t, sum(bytes) AS v
+        FROM {sql} ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE ({p['_filt']}) AND x.1 != 0 GROUP BY exporter, i, d, t"""
+
+
+# (1.14.0) the Capacity queries spill their grouping to disk rather than fail on a big network
+CAP_SETTINGS = {'max_bytes_before_external_group_by': CH_QUERY_MEMORY * 2 // 5, 'max_bytes_before_external_sort': CH_QUERY_MEMORY * 2 // 5}
 
 
 def _cap_scope(q, extra_f=()):
@@ -1442,13 +1447,13 @@ def api_capacity(q):
     days, tz, today, p = _cap_scope(q)
     rows = ch(f"""SELECT exporter, i, d, toUnixTimestamp(toStartOfDay(t, {{tz:String}})) AS day, sum(v) AS bytes, max(v) AS peak, count() AS m,
             if(count() > {{k:UInt32}}, arrayElement(arraySort(groupArray(v)), toUInt32(count() - {{k:UInt32}})), 0) AS p95
-        FROM ({_five_min(p)}) GROUP BY exporter, i, d, day""", p, fmt='JSON', timeout=120)
+        FROM ({_five_min(p)}) GROUP BY exporter, i, d, day""", p, fmt='JSON', timeout=120, settings=CAP_SETTINGS)
     # the period's own 95th percentile: over its 5-minute buckets from the interface's first record on (a device added
     # last week is not diluted by the weeks before it), the empty ones as 0; `span` = those seconds, for the average
     per = {(r['exporter'], int(r['i']), int(r['d'])): (int(r['p95']), int(r['span'])) for r in ch(f"""SELECT exporter, i, d,
             intDiv({{t1:UInt32}} - toUnixTimestamp(min(t)) + 299, 300) AS n, n * 300 AS span,
             if(count() > intDiv(n * 5, 100), arrayElement(arraySort(groupArray(v)), toUInt32(count() - intDiv(n * 5, 100))), 0) AS p95
-        FROM ({_five_min(p)}) GROUP BY exporter, i, d""", p, fmt='JSON', timeout=120)}
+        FROM ({_five_min(p)}) GROUP BY exporter, i, d""", p, fmt='JSON', timeout=120, settings=CAP_SETTINGS)}
     by = {}
     for r in rows:
         by.setdefault((r['exporter'], int(r['i'])), []).append(r)
@@ -1542,13 +1547,13 @@ def api_capacity_iface(q):
     heat = ch(f"""SELECT d, w, h, avg(mx) AS v FROM (
             SELECT d, toDayOfWeek(t, 0, {{tz:String}}) AS w, toHour(t, {{tz:String}}) AS h, toStartOfHour(t) AS hr, max(v) AS mx
             FROM ({_five_min(p)}) WHERE i = {{idx:UInt32}} GROUP BY d, w, h, hr)
-        GROUP BY d, w, h""", p, fmt='JSON', timeout=120)
+        GROUP BY d, w, h""", p, fmt='JSON', timeout=120, settings=CAP_SETTINGS)
     grid = {'in': [[0] * 24 for _ in range(7)], 'out': [[0] * 24 for _ in range(7)]}
     for r in heat:
         grid['in' if int(r['d']) == 0 else 'out'][int(r['w']) - 1][int(r['h'])] = float(r['v']) * 8 / 300
     # the recent half of the interface's history in the period against the earlier one (whole hours: the per-host
     # table sums hours)
-    first = int(ch(f"SELECT toUnixTimestamp(min(t)) AS f FROM ({_five_min(p)}) WHERE i = {{idx:UInt32}}", p, fmt='JSON', timeout=120)[0]['f'] or p['_t0'])
+    first = int(ch(f"SELECT toUnixTimestamp(min(t)) AS f FROM ({_five_min(p)}) WHERE i = {{idx:UInt32}}", p, fmt='JSON', timeout=120, settings=CAP_SETTINGS)[0]['f'] or p['_t0'])
     first = max(first, p['_t0'])
     p['mid'] = (first + (p['t1'] - first) // 2) // 3600 * 3600
     drivers = {}

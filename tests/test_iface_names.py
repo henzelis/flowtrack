@@ -65,3 +65,16 @@ class Names(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CapacityMemory(unittest.TestCase):
+    """(1.14.0) A customer's 200F on 1.13.1: «Not enough memory» on Capacity. The 5-minute totals were grouped by the
+    PAIR of interfaces first (thousands of VLAN / tunnel pairs × 8,640 buckets); measured on 20 M synthetic rows with
+    3,600 pairs: 1.75 GiB and out of memory, against 182 MiB when each record goes to its two interfaces as it is read."""
+    def test_no_pair_grouping(self):
+        _, p, _, _ = api.scope({'f': ['[]'], 'range': ['24h'], 't': ['all']})
+        p['_step'] = 300
+        q = api._five_min(p)
+        self.assertNotIn('GROUP BY exporter, in_if, out_if', q)
+        self.assertIn('ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE', q)
+        self.assertEqual(q.count('GROUP BY'), 1)
