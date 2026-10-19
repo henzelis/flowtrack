@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.13.0 — 2026-10-19
 
 - **Capacity** — a page of its own for planning the links: every interface of every device day by day over 7 to 365
   days (as far as your edition shows), the busy hours (95th percentile of the 5-minute load) and the busiest 5
