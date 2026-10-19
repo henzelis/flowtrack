@@ -599,7 +599,11 @@ def render(r, data, t0, t1, version='', now=None):
                 fc = x[x['worst']]['forecast']
                 if not fc:
                     return ''
-                return f"{'↑' if fc['direction'] == 'up' else '↓' if fc['direction'] == 'down' else '='} {fc['growth_pct_month']:+g}%"
+                if not fc.get('clear', True):            # (1.13.1) noisy days: no figure
+                    return '≈'
+                g = fc['growth_pct_month']
+                return f"{'↑' if fc['direction'] == 'up' else '↓' if fc['direction'] == 'down' else '='} " + \
+                    (f"{g:+g}%" if abs(g) <= 100 else ('>+100%' if g > 0 else '<−100%'))
             body = [[dot(col[x['status']]), two_lines(x['name'], x['device_name']),
                      two_lines(fmt_rate(x['cap_in'] * 1e6), '') if x['cap_in'] == x['cap_out'] else
                      Paragraph(f"{esc(fmt_rate(x['cap_in'] * 1e6))} ↓<br/>{esc(fmt_rate(x['cap_out'] * 1e6))} ↑", P),

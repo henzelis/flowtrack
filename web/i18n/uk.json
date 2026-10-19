@@ -1763,5 +1763,8 @@
  "how full each link is on its busy days and where it is heading · all its traffic · whole days · the device and interface filters apply": "наскільки заповнений кожен канал у завантажені дні і куди він рухається · увесь його трафік · цілі дні · діють фільтри пристрою та інтерфейсу",
  "interface: name or number, in or out": "інтерфейс: назва або номер, вхід чи вихід",
  "{key} takes a number or a name: {v}": "{key} приймає номер або назву: {v}",
- "no interface named {name}": "немає інтерфейсу з назвою {name}"
+ "no interface named {name}": "немає інтерфейсу з назвою {name}",
+ "The days differ too much for a trend; it shows once there is more history.": "Дні надто різні для тренду; він з'явиться, коли накопичиться більше історії.",
+ "over +100%": "понад +100%",
+ "over −100%": "понад −100%"
 }

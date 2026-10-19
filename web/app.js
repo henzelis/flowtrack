@@ -1114,6 +1114,8 @@ const CAP_IN = '#27D3F5', CAP_OUT = '#FF9F43';
 const CAP_STATUS = () => ({over:[T('Over the limit'), 'crit'], full:[T('Near full'), 'crit'], soon:[T('Will fill'), 'warn'], watch:[T('Worth watching'), 'warn'], ok:[T('Fine'), 'ok'], unknown:[T('Capacity unknown'), '']});
 const capTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } };
 const capApi = (path, params = {}) => apiFetch(`api/${path}?${new URLSearchParams({days:state.capDays || 30, tz:capTz(), f:JSON.stringify(state.filters), ...params})}`);
+// (1.13.1) growth a month as shown: beyond ±100 % only "over" (a link that just started carrying traffic)
+const capGrowth = g => Math.abs(g) > 100 ? (g > 0 ? T('over +100%') : T('over −100%')) : `${g > 0 ? '+' : ''}${g.toLocaleString(LOC, {maximumFractionDigits:1})}%`;
 const dMon = t => new Date(t * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'});
 const capDir = d => d === 'in' ? T('incoming traffic') : T('outgoing traffic');
 const capOf = (x, d) => (d === 'in' ? x.cap_in : x.cap_out) * 1e6;
@@ -1133,6 +1135,7 @@ function capSentence(x){
   if (!fc) return base + ' ' + T('A forecast needs {n} days of history.', {n:CAP.forecast_days});
   if (fc.over_in === 0) return base + ' ' + T('Busy days already fill it — time for more capacity.');
   const g = Math.abs(fc.growth_pct_month).toLocaleString(LOC, {maximumFractionDigits:1});
+  if (!fc.clear) return base + ' ' + T('The days differ too much for a trend; it shows once there is more history.');
   if (fc.direction === 'stable') return base + ' ' + T('The load is stable.');
   if (fc.direction === 'down') return base + ' ' + T('The load is falling, about {g}% a month.', {g});
   const last = s.trend.last_day;
@@ -1167,19 +1170,20 @@ function vCapacity(){
     const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span><span class="nat" style="grid-column:2">${sub}</span></section>`;
     const near = all.filter(x => x.status === 'over' || x.status === 'full'), soon = all.filter(x => x.status === 'soon');
     const dated = all.map(x => ({x, fc:x[x.worst].forecast, last:(x[x.worst].trend || {}).last_day})).filter(o => o.fc && o.fc.full_in != null && o.fc.full_in > 0).sort((a, b) => a.fc.full_in - b.fc.full_in);
-    const grow = all.filter(x => capOf(x, x.worst) && x[x.worst].forecast && x[x.worst].forecast.direction === 'up').sort((a, b) => b[b.worst].forecast.growth_pct_month - a[a.worst].forecast.growth_pct_month);
+    const grow = all.filter(x => capOf(x, x.worst) && x[x.worst].forecast && x[x.worst].forecast.direction === 'up' && x[x.worst].forecast.clear).sort((a, b) => b[b.worst].forecast.growth_pct_month - a[a.worst].forecast.growth_pct_month);
     const known = all.filter(x => x.status !== 'unknown');
     const nm = x => `${esc(x.name)} <span class="nat">${esc(x.device_name)}</span>`;
     fill('capKpi', kc('shield', T('Near full'), String(near.length), near.length ? near.slice(0, 2).map(nm).join(', ') : T('no link at {pct}% on busy days', {pct:d.full_pct}), near.length ? 'var(--crit)' : 'var(--ok)')
       + kc('chart', T('Will fill'), dated.length ? capWhen(dated[0].fc, 'full_in', dated[0].last) : '—', dated.length ? T('{name} reaches {pct}% first', {name:nm(dated[0].x), pct:d.full_pct}) + (soon.length > 1 ? ` · ${Tn(soon.length - 1, '{n} more link', '{n} more links')}` : '') : T('no link reaches {pct}% within the forecast', {pct:d.full_pct}), dated.length ? 'var(--warn)' : '')
-      + kc('pulse', T('Fastest growth'), grow.length ? `+${grow[0][grow[0].worst].forecast.growth_pct_month.toLocaleString(LOC, {maximumFractionDigits:1})}%` : '—', grow.length ? `${nm(grow[0])} · ${T('a month')}` : T('a forecast needs {n} days of history', {n:d.forecast_days}))
+      + kc('pulse', T('Fastest growth'), grow.length ? capGrowth(grow[0][grow[0].worst].forecast.growth_pct_month) : '—', grow.length ? `${nm(grow[0])} · ${T('a month')}` : T('a forecast needs {n} days of history', {n:d.forecast_days}))
       + kc('ip', T('Links measured'), `${known.length} / ${all.length}`, known.length < all.length ? T('{n} without a known capacity', {n:all.length - known.length}) : T('every link has a capacity')));
     // the table
     const bar = (pct, c) => `<div class="ldbar"><i style="width:${Math.min(100, pct || 0)}%;background:${loadColor(pct)}"></i></div>`;
     const dirCell = (x, k) => { const s = x[k]; return `<td class="ld"><div class="ldtop"><b class="mono" style="color:${loadColor(s.p95_pct)}">${s.p95_pct == null ? '—' : s.p95_pct + '%'}</b><span class="nat mono">${fmtR(s.p95)}</span></div>${bar(s.p95_pct)}<div class="nat mono ldsub">${T('peak')} ${fmtR(s.peak)}${s.peak_pct == null ? '' : ` (${s.peak_pct}%)`}</div></td>`; };
     const trendCell = x => { const fc = x[x.worst].forecast; if (!fc) return `<td><span class="nat" title="${T('A forecast needs {n} days of history.', {n:d.forecast_days})}">${T('collecting')}</span></td>`;
+      if (!fc.clear) return `<td><b class="mono" style="color:var(--ink2)">≈</b><div class="nat" title="${T('The days differ too much for a trend; it shows once there is more history.')}">${T('unsteady')}</div></td>`;
       const a = fc.direction === 'up' ? '↗' : fc.direction === 'down' ? '↘' : '→', col = fc.direction === 'up' ? (capOf(x, x.worst) ? 'var(--warn)' : 'var(--ink2)') : fc.direction === 'down' ? 'var(--ok)' : 'var(--ink2)';
-      return `<td><b class="mono" style="color:${col}">${a} ${fc.growth_pct_month > 0 ? '+' : ''}${fc.growth_pct_month.toLocaleString(LOC, {maximumFractionDigits:1})}%</b><div class="nat">${T('a month')}${fc.clear ? '' : ' · ' + T('unsteady')}</div></td>`; };
+      return `<td><b class="mono" style="color:${col}">${a} ${capGrowth(fc.growth_pct_month)}</b><div class="nat">${T('a month')}</div></td>`; };
     const whenCell = x => { const s = x[x.worst], fc = s.forecast; if (!capOf(x, x.worst)) return '<td><span class="nat">—</span></td>';
       if (!fc) return `<td><span class="nat">—</span></td>`;
       const w = capWhen(fc, 'full_in', s.trend.last_day), hot = fc.full_in != null;
@@ -1266,7 +1270,7 @@ async function capDetail(x, seq){
     const top = Math.max(...rows.map(o => o.recent + o.earlier), 1);
     return '<div class="blist">' + rows.map(o => { const ch = o.earlier ? Math.round(100 * (o.recent - o.earlier) / o.earlier) : null;
       return `<button class="brow" ${kind === 'hosts' ? 'data-host' : 'data-svc'}="${esc(o.k)}"><span class="n">${esc(o.name || o.k)}${o.name ? ` <span class="nat mono">${esc(o.k)}</span>` : ''}</span><span class="t">${fmtB(o.recent + o.earlier)}</span>
-        <span class="p" style="color:${ch == null ? 'var(--warn)' : ch > 15 ? 'var(--warn)' : ch < -15 ? 'var(--ok)' : 'var(--ink2)'}">${ch == null ? T('new') : `${ch > 0 ? '+' : ''}${ch}%`}</span>
+        <span class="p" style="color:${ch == null ? 'var(--warn)' : ch > 15 ? 'var(--warn)' : ch < -15 ? 'var(--ok)' : 'var(--ink2)'}">${ch == null ? T('new') : ch > 300 ? `×${Math.round(o.recent / o.earlier).toLocaleString(LOC)}` : `${ch > 0 ? '+' : ''}${ch}%`}</span>
         <span class="bar2" style="width:${(100 * (o.recent + o.earlier) / top).toFixed(1)}%"><i class="u" style="width:${(100 * o.earlier / ((o.recent + o.earlier) || 1)).toFixed(1)}%;background:rgba(120,160,255,.45)"></i><i class="d" style="flex:1;background:${d === 'in' ? CAP_IN : CAP_OUT}"></i></span></button>`; }).join('') + '</div>'
       + `<p class="note">${kind === 'hosts' ? T('Bar: the earlier half (grey) and the recent one (colour); the change is recent against earlier. Click a host for its details.') : T('Bar: the earlier half (grey) and the recent one (colour); the change is recent against earlier. Click a service to open it on the Services page.')}</p>`; };
   for (const [id, kind] of [['capHosts', 'hosts'], ['capSvcs', 'services']]) { const el = fill(id, list(r[kind], kind)); if (el) { el.classList.remove('loading'); wireFilters(el);

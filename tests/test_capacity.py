@@ -79,3 +79,26 @@ class Trend(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RealNoise(unittest.TestCase):
+    """(1.13.1) Prod, 16 days of a home office: a port idle most days with bursts gave −562 % a month and the end of
+    the trend line near 0. Growth is against the typical day now; such a trend is unsteady, without a date."""
+    AKAPULKO = [0.14, 8.42, 10.07, 4.48, 2.25, 4.88, 4.26, 2.62, 5.36, 1.57, 1.07, 10.77, 2.5, 2.99, 10.15]
+    WAN = [6.43, 10.39, 69.61, 9.94, 10.14, 7.79, 7.71, 6.41, 11.27, 7.85, 12.66, 11.43, 13.58, 10.37, 15.78]
+
+    def test_bursty_port_is_unsteady(self):
+        fc = capacity.forecast(capacity.trend([(i, v * M) for i, v in enumerate(self.AKAPULKO)]), 100 * M)
+        self.assertFalse(fc['clear'], fc)
+        self.assertIsNone(fc['full_in'])
+
+    def test_growth_against_the_typical_day(self):
+        tr = capacity.trend([(i, v * M) for i, v in enumerate(self.WAN)])
+        fc = capacity.forecast(tr, 100 * M)
+        self.assertAlmostEqual(fc['growth_pct_month'], 100 * tr['slope'] * 30 / tr['median'], places=1)
+        self.assertLess(abs(fc['growth_pct_month']), 150)
+
+    def test_unsteady_gets_no_date(self):
+        tr = {'slope': 1 * M, 'lo': 0.1 * M, 'hi': 5 * M, 'level': 50 * M, 'busy': 60 * M, 'days': 20, 'span': 20, 'last': 19, 'median': 50 * M}
+        fc = capacity.forecast(tr, 100 * M)
+        self.assertEqual((fc['direction'], fc['clear'], fc['full_in']), ('up', False, None))

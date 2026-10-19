@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.13.1 — 2026-10-19
+
+- Capacity on real, uneven traffic: growth a month is measured against the typical day (it was against the end of the
+  trend line, which on a port idle most days sat near zero — «−562 %» on a real network). When the days differ too much
+  the trend says «unsteady» with no figure and no date; a forecast date comes only from a clear rise. Growth beyond
+  ±100 % shows as «over +100 %», and a host or service many times busier than before as «×N».
+
 ## 1.13.0 — 2026-10-19
 
 - **Capacity** — a page of its own for planning the links: every interface of every device day by day over 7 to 365

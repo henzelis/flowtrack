@@ -46,19 +46,26 @@ def trend(days):
     level = b + slope * last
     lift = _quantile([y - (b + slope * x) for x, y in days], 0.8)
     return {'slope': slope, 'lo': _quantile(slopes, 0.25), 'hi': _quantile(slopes, 0.75), 'level': max(0.0, level),
-            'busy': max(0.0, level + max(0.0, lift)), 'days': len(days), 'span': last - xs[0] + 1, 'last': last}
+            'busy': max(0.0, level + max(0.0, lift)), 'days': len(days), 'span': last - xs[0] + 1, 'last': last,
+            'median': _median([y for _, y in days])}
 
 
 def forecast(tr_, cap_bps):
     """When the busy level reaches FULL_PCT and 100 % of `cap_bps` at the current slope. -> {'growth_pct_month',
-    'direction' ('up' / 'down' / 'stable'), 'clear' (the quartiles agree on the sign), 'full_in' / 'over_in' (days
+    'direction' ('up' / 'down' / 'stable'), 'clear' (the quartiles of the slopes agree on the sign and are not wider than
+    twice the slope: only a clear rise gets a date), 'full_in' / 'over_in' (days
     from the last day; 0 = already there, None = not within 'horizon'), 'horizon' (days), 'busy_pct'}."""
     if not tr_:
         return None
-    lvl = tr_['level'] or tr_['busy']
+    # (1.13.1) growth against the typical day (median), not the line's end: on a link that sits near zero most days
+    # the end of the line can be ~0 and the share absurd (-560 % a month on real data)
+    lvl = tr_.get('median') or tr_['level'] or tr_['busy']
     g = 100 * tr_['slope'] * 30 / lvl if lvl > 0 else 0.0
     direction = 'stable' if abs(g) < STABLE_PCT_MONTH else 'up' if g > 0 else 'down'
-    clear = tr_['lo'] > 0 if direction == 'up' else tr_['hi'] < 0 if direction == 'down' else True
+    # clear: the quartiles of the slopes agree on the sign AND are not wider than the slope itself (noisy days)
+    spread = tr_['hi'] - tr_['lo']
+    clear = (tr_['lo'] > 0 if direction == 'up' else tr_['hi'] < 0 if direction == 'down' else True) and \
+        (direction == 'stable' or spread <= abs(tr_['slope']) * 2)
     out = {'growth_pct_month': round(g, 1), 'direction': direction, 'clear': clear, 'horizon': 2 * tr_['span'],
            'full_in': None, 'over_in': None, 'busy_pct': None}
     if not cap_bps:
@@ -68,7 +75,7 @@ def forecast(tr_, cap_bps):
         need = cap_bps * pct / 100 - tr_['busy']
         if need <= 0:
             out[key] = 0
-        elif tr_['slope'] > 0 and direction == 'up':
+        elif tr_['slope'] > 0 and direction == 'up' and clear:      # an unsteady trend gives no date
             d = int(math.ceil(need / tr_['slope']))
             out[key] = d if d <= out['horizon'] else None
     return out
