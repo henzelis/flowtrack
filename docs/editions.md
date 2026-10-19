@@ -5,7 +5,7 @@
 | | **FlowTrack Community** (free) | **FlowTrack Pro** (license for one server) |
 |---|---|---|
 | Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit, or per license |
-| Flow details kept | **30 days** (hourly totals per host: 3 years) | per license, e.g. 90 days |
+| Data kept (flows and every total built from them) | **30 days** | per license, e.g. 90 days |
 | Term | — | subscription with an end date; afterwards the Community limits apply again |
 | Every feature, now and in future versions | ✓ | ✓ |
 

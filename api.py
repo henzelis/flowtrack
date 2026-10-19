@@ -1603,6 +1603,79 @@ def api_capacity_iface(q):
     return {'device': dev, 'index': idx, 'days': days, 'tz': tz, 'mid': p['mid'], 'from': first, 'to': p['t1'],
             'heat': grid, **drivers}
 
+
+USAGE_PERIODS = ('month', 'prev_month', '7', '30', '90', '180', '365')
+USAGE_ROWS = 500
+UP_SQL, DN_SQL = "sumIf(bytes, dir IN ('up', 'internal'))", "sumIf(bytes, dir NOT IN ('up', 'internal'))"
+
+
+def _usage_period(q, tz):
+    """(1.15.0) -> (t0, t1, kind, label key): this month so far, last month, or the last N whole local days (today so
+    far included); never older than the edition keeps."""
+    import datetime as _dt
+    per = q1(q, 'period', '30')
+    if per not in USAGE_PERIODS:
+        raise BadRequest('bad period')
+    z = reports.ZoneInfo(tz)
+    now = _dt.datetime.now(z)
+    day0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if per == 'month':
+        t0, t1 = day0.replace(day=1), now
+    elif per == 'prev_month':
+        t1 = day0.replace(day=1)
+        t0 = (t1 - _dt.timedelta(days=1)).replace(day=1)
+    else:
+        t0, t1 = day0 - _dt.timedelta(days=int(per) - 1), now
+    floor = int(time.time()) - view_days() * 86400
+    return max(int(t0.timestamp()), floor), int(t1.timestamp()), per, floor
+
+
+def api_usage(q):
+    """(1.15.0) Usage by host: what each inside host downloaded and uploaded over a period (this month, last month or
+    the last 7 – 365 days, as far as the edition keeps data), against the same length of time before it; the totals
+    day by day (month by month over 92 days) and the hosts, the busiest first (USAGE_ROWS; all of them:
+    /api/top?dim=int_ip&limit=all, also as CSV). The filters and the traffic selector apply as on every page."""
+    tz = _tz(q)
+    t0, t1, per, floor = _usage_period(q, tz)
+    if t1 - t0 < 60:
+        raise BadRequest(tr('No data for this period yet'))
+    qq = {k: v for k, v in q.items() if k in ('f', 't')}
+    qq.update({'from': [str(t0)], 'to': [str(t1)]})
+    where, p, _, _ = scope(qq)
+    p['tz'] = tz
+    span = t1 - t0
+    pt0, pt1 = t0 - span, t0
+    bucket = 'day' if span <= 92 * 86400 else 'month'
+    bexpr = ("toUnixTimestamp(toStartOfDay(ts, {tz:String}))" if bucket == 'day'
+             else "toUnixTimestamp(toDateTime(toStartOfMonth(ts, {tz:String}), {tz:String}))")
+    cur, prev = src(p, ['int_ip'], t0, t1), src(p, ['int_ip'], pt0, pt1)
+    series = ch(f"""SELECT {bexpr} AS t, {UP_SQL} AS up, {DN_SQL} AS dn, uniqExact(cityHash64(int_ip)) AS hosts
+        FROM {cur} AND ts < toDateTime({{t1:UInt32}}) GROUP BY t ORDER BY t""", dict(p, t1=t1), fmt='JSON', timeout=120, settings=CAP_SETTINGS)
+    tot = ch(f"""SELECT {UP_SQL} AS up, {DN_SQL} AS dn, uniqExact(cityHash64(int_ip)) AS hosts FROM {cur} AND ts < toDateTime({{t1:UInt32}})""",
+             dict(p, t1=t1), fmt='JSON', timeout=120)[0]
+    # the period before is compared only when the data reach back to its start: on a new installation the days
+    # before the first record are no «zero» to grow from (every host would look new)
+    oldest = int(ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')[0]['t'] or 0)
+    ptot = ch(f"""SELECT {UP_SQL} AS up, {DN_SQL} AS dn, uniqExact(cityHash64(int_ip)) AS hosts FROM {prev} AND ts < toDateTime({{t1:UInt32}})""",
+              dict(p, t1=pt1), fmt='JSON', timeout=120)[0] if pt0 >= floor and 0 < oldest <= pt0 + 3600 else None
+    p['lim'] = USAGE_ROWS
+    rows = ch(f"""SELECT int_ip AS k, {UP_SQL} AS up, {DN_SQL} AS dn, uniqExact(toDate(ts, {{tz:String}})) AS days
+        FROM {cur} AND ts < toDateTime({{t1:UInt32}}) GROUP BY k ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""",
+              dict(p, t1=t1), fmt='JSON', timeout=120, settings=CAP_SETTINGS)
+    before = {}
+    if rows and ptot is not None:
+        p['hs'] = [r['k'] for r in rows]
+        before = {r['k']: (int(r['up']), int(r['dn'])) for r in ch(f"""SELECT int_ip AS k, {UP_SQL} AS up, {DN_SQL} AS dn
+            FROM {prev} AND ts < toDateTime({{t1:UInt32}}) AND int_ip IN {{hs:Array(String)}} GROUP BY k""", dict(p, t1=pt1), fmt='JSON', timeout=120)}
+    hosts = [{'k': r['k'], 'name': NAMES.get(r['k'], lookup=False), 'net': common.network_of(r['k']), 'up': int(r['up']), 'dn': int(r['dn']),
+              'days': int(r['days']), **({'prev_up': before.get(r['k'], (0, 0))[0], 'prev_dn': before.get(r['k'], (0, 0))[1]} if ptot is not None else {})}
+             for r in rows]
+    num = lambda d: {k: int(d[k]) for k in ('up', 'dn', 'hosts')} if d else None      # noqa: E731
+    return {'period': per, 'periods': list(USAGE_PERIODS), 'max_days': view_days(), 'tz': tz, 'from': t0, 'to': t1,
+            'prev_from': pt0, 'prev_to': pt1, 'bucket': bucket, 'cut': t0 == floor, 'since': oldest,
+            'total': num(tot), 'prev': num(ptot), 'series': [[int(r['t']), int(r['up']), int(r['dn']), int(r['hosts'])] for r in series],
+            'hosts': hosts, 'more': max(0, int(tot['hosts']) - len(hosts))}
+
 def api_host(q):
     ip = q1(q, 'ip', '')
     try:
@@ -2294,7 +2367,7 @@ CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/networks': api_networks, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts, '/api/ifload': api_ifload,
-          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface}
+          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface, '/api/usage': api_usage}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
 

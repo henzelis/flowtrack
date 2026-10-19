@@ -499,11 +499,13 @@ function globe(el, geo){
 }
 
 // ===================== shared UI =====================
+// (1.15.0) bars of a period
+const USAGE_ICON = 'M3 15V9M7 15V5M11 15V8M15 15V3M2 15.5h14';
 // (1.13.0) a gauge
 const CAP_ICON = 'M2.5 13.5a6.5 6.5 0 1 1 13 0M9 13.5l3.2-4.2M4.6 9.6l.9.6M13.4 9.6l-.9.6M9 7v1';
 const NAV = [
   ['overview',T('Overview'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 10 6 10M6 14c3 0 3-10 6-10M6 9h6'], ['network',T('Path analysis'),'M6.9 4a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M1.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M11.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M7.57 6.86L5.43 11.14M10.43 6.86L12.57 11.14M7.2 14L10.8 14'], ['talkers',T('Top hosts'),'M4 6a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M2 15.5c0-2.8 2-4.5 4.5-4.5s4.5 1.7 4.5 4.5M11 7a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M12.6 11.2c.4-.1.9-.2 1.4-.2 1.9 0 3 1.5 3 4'],
-  ['apps',T('Services'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation'),'M9 16.2s5.2-4.6 5.2-8.7A5.2 5.2 0 0 0 3.8 7.5c0 4.1 5.2 8.7 5.2 8.7zM7.2 7.4a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0'],
+  ['usage',T('Usage'),USAGE_ICON], ['apps',T('Services'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation'),'M9 16.2s5.2-4.6 5.2-8.7A5.2 5.2 0 0 0 3.8 7.5c0 4.1 5.2 8.7 5.2 8.7zM7.2 7.4a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0'],
   ['capacity',T('page::Capacity'),CAP_ICON],
   ['threats',T('Events'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'],
   ['settings',T('Settings'),'M14.29 7.93L16.15 8.14L16.15 9.86L14.29 10.07L13.5 11.98L14.66 13.45L13.45 14.66L11.98 13.5L10.07 14.29L9.86 16.15L8.14 16.15L7.93 14.29L6.02 13.5L4.55 14.66L3.34 13.45L4.5 11.98L3.71 10.07L1.85 9.86L1.85 8.14L3.71 7.93L4.5 6.02L3.34 4.55L4.55 3.34L6.02 4.5L7.93 3.71L8.14 1.85L9.86 1.85L10.07 3.71L11.98 4.5L13.45 3.34L14.66 4.55L13.5 6.02zM6.7 9a2.3 2.3 0 1 0 4.6 0a2.3 2.3 0 1 0 -4.6 0'],
@@ -1297,6 +1299,94 @@ async function capDetail(x, seq){
       + `<p class="note">${kind === 'hosts' ? T('Bar: the earlier half (grey) and the recent one (colour); the change is recent against earlier. Click a host for its details.') : T('Bar: the earlier half (grey) and the recent one (colour); the change is recent against earlier. Click a service to open it on the Services page.')}</p>`; };
   for (const [id, kind] of [['capHosts', 'hosts'], ['capSvcs', 'services']]) { const el = fill(id, list(r[kind], kind)); if (el) { el.classList.remove('loading'); wireFilters(el);
     el.querySelectorAll('[data-svc]').forEach(b => b.onclick = () => { putFilter({k:'service', v:b.dataset.svc, neg:false}); state.view = 'apps'; render(); }); } }
+}
+// ===================== (1.15.0) Usage: what each inside host downloaded and uploaded over a period =====================
+// /api/usage — this month, last month or the last 7 – 365 days (as far as the edition keeps data), against the same
+// length of time before it; visual first (Yegor's rule): cards, the days, who uses most and who changed, the table last.
+const USAGE_PER = () => [['month', T('This month')], ['prev_month', T('Last month')], ['7', T('{n} d', {n:7})], ['30', T('{n} d', {n:30})], ['90', T('{n} d', {n:90})], ['180', T('{n} d', {n:180})], ['365', T('{n} d', {n:365})]];
+const usageChange = (cur, prev) => prev ? Math.round(100 * (cur - prev) / prev) : null;
+function usageDelta(cur, prev, big){        // ↑ 12% against the period before; new / — when there is nothing to compare with
+  if (prev == null) return '';
+  const ch = usageChange(cur, prev);
+  if (ch == null) return cur ? `<span class="udelta up">${T('new')}</span>` : '';
+  const col = Math.abs(ch) < 5 ? 'var(--ink2)' : ch > 0 ? 'var(--warn)' : 'var(--ok)';
+  return `<span class="udelta${big ? ' big' : ''}" style="color:${col}">${ch > 0 ? '↑' : ch < 0 ? '↓' : '='} ${ch > 300 ? '×' + Math.round(cur / prev).toLocaleString(LOC) : Math.abs(ch) + '%'}</span>`;
+}
+function vUsage(){
+  const v = document.getElementById('view'), per = state.usagePer || '30';
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s12 caphead">${ph(USAGE_ICON, T('Usage'), T('what each inside host downloaded and uploaded · the filters and the traffic selector at the top apply'), '<span id="uPerBox"></span>', true)}</section>
+    <div id="uKpi" style="display:contents"></div>
+    <section class="glass panel s8">${ph('chart', T('Day by day'), `<span id="uChartSub">${T('downloaded and uploaded')}</span>`)}<div id="uChart" class="loading" style="height:420px"></div><p class="note" id="uNote"></p></section>
+    <section class="glass panel s4">${ph('users', T('Who uses most'), T('the 10 busiest hosts · click for details'))}<div id="uTop" class="loading"></div></section>
+    <section class="glass panel s6">${ph('pulse', T('Biggest changes'), `<span id="uMovSub">${T('against the period before')}</span>`)}<div id="uMov" class="loading"></div></section>
+    <section class="glass panel s6">${ph('grid', T('By network'), T('your named networks · Settings → Flow configuration'))}<div id="uNets" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('All hosts'), `<span id="uAllSub"></span>`, `<a class="btn" id="uCsv" href="#" download>${T('Download CSV')}</a>`)}<div id="uTable" class="loading"></div></section></div>`;
+  const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
+  (async () => {
+    let d;
+    const qs = {period:per, tz:capTz(), t:state.traffic, f:JSON.stringify(state.filters)};
+    try { d = await apiFetch(`api/usage?${new URLSearchParams(qs)}`); } catch (e) { done('uChart', errBox(e)); return; }
+    if (seq !== renderSeq) return;
+    if (d.error) { done('uChart', `<p class="err">${esc(d.error)}</p>`); return; }
+    fill('uPerBox', seg('uPer', USAGE_PER().map(([k, l]) => [k, l, /^\d+$/.test(k) && +k > d.max_days ? T('Your edition shows {n} days', {n:d.max_days}) : '']), d.period));
+    document.querySelectorAll('#uPer button').forEach(b => { if (/^\d+$/.test(b.dataset.v) && +b.dataset.v > d.max_days) b.disabled = true; });
+    wireSeg('uPer', k => { if (k === d.period) return; state.usagePer = k; render(); });
+    const tot = d.total, prev = d.prev, all = tot.up + tot.dn, hs = d.hosts;
+    const dateR = (a, b) => `${new Date(a * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'})} – ${new Date((b - 1) * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short', year:'numeric'})}`;
+    // the cards
+    const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span><span class="nat" style="grid-column:2">${sub}</span></section>`;
+    const noPrev = d.since && d.since > d.prev_from ? T('no period before to compare with: data since {date}', {date:new Date(d.since * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'})}) : T('no period before to compare with: the edition keeps {n} days', {n:d.max_days});
+    const vs = prev ? T('against {range}', {range:dateR(d.prev_from, d.prev_to)}) : noPrev;
+    const top10 = hs.slice(0, 10).reduce((a, h) => a + h.up + h.dn, 0);
+    fill('uKpi', kc('pulse', T('Downloaded'), `${fmtB(tot.dn)} ${usageDelta(tot.dn, prev && prev.dn, true)}`, vs, C.down)
+      + kc('pulse', T('Uploaded'), `${fmtB(tot.up)} ${usageDelta(tot.up, prev && prev.up, true)}`, vs, C.up)
+      + kc('users', T('Active hosts'), `${tot.hosts.toLocaleString(LOC)} ${usageDelta(tot.hosts, prev && prev.hosts, true)}`, dateR(d.from, d.to))
+      + kc('pie', T('The 10 busiest'), all ? Math.round(100 * top10 / all) + '%' : '—', all ? T('of all traffic — {n} hosts in all', {n:tot.hosts.toLocaleString(LOC)}) : T('No traffic under this filter')));
+    // day by day (month by month): stacked bars, bytes
+    const el = done('uChart', '');
+    if (el && d.series.length) {
+      const c = mkChart(el), lab = t => new Date(t * 1000).toLocaleDateString(LOC, d.bucket === 'day' ? {day:'numeric', month:'short'} : {month:'short', year:'numeric'});
+      c.setOption({animation:false, grid:{left:14, right:10, top:30, bottom:4, containLabel:true},
+        legend:{top:0, right:0, icon:'roundRect', itemWidth:14, itemHeight:6, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
+        tooltip:{...tipBase(), trigger:'axis', valueFormatter:v => fmtB(v)},
+        xAxis:{type:'category', data:d.series.map(r => lab(r[0])), axisLine:{lineStyle:{color:C.hair}}, axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11}},
+        yAxis:axisY(v => fmtB(v)),
+        series:[{name:'↓ ' + T('Downloaded'), type:'bar', stack:'u', barMaxWidth:28, itemStyle:{color:C.down, borderRadius:[0, 0, 2, 2]}, data:d.series.map(r => r[2])},
+                {name:'↑ ' + T('Uploaded'), type:'bar', stack:'u', barMaxWidth:28, itemStyle:{color:C.up, borderRadius:[3, 3, 0, 0]}, data:d.series.map(r => r[1])}]});
+      fill('uChartSub', d.bucket === 'day' ? T('downloaded and uploaded, day by day') : T('downloaded and uploaded, month by month'));
+    } else if (el) el.innerHTML = `<div class="empty">${T('No traffic under this filter')}</div>`;
+    fill('uNote', d.cut ? T('The period starts {date}: older data is not kept by your edition ({n} days).', {date:new Date(d.from * 1000).toLocaleDateString(LOC), n:d.max_days}) : '');
+    // who uses most: bars split in download / upload
+    const bars = (rows, extra) => !rows.length ? `<div class="empty">${T('No traffic under this filter')}</div>` : '<div class="blist">' + rows.map(h => { const t = h.up + h.dn, mx = rows[0].up + rows[0].dn || 1;
+      return `<button class="brow" data-host="${esc(h.k)}"><span class="n">${esc(h.name || h.k)}${h.name ? ` <span class="nat mono">${esc(h.k)}</span>` : ''}</span><span class="t">${fmtB(t)}</span><span class="p">${extra ? extra(h) : pct(t, all)}</span>
+        <span class="bar2" style="width:${(100 * t / mx).toFixed(1)}%"><i class="d" style="width:${(100 * h.dn / (t || 1)).toFixed(1)}%;background:${C.down}"></i><i class="u" style="flex:1;background:${C.up}"></i></span></button>`; }).join('') + '</div>';
+    const put = (id, html) => { const e = done(id, html); if (e) wireFilters(e); };
+    put('uTop', bars(hs.slice(0, 10)));
+    // biggest changes: the largest growth (and new hosts), then the largest drops
+    if (!prev) { done('uMov', `<div class="empty">${noPrev}</div>`); }
+    else {
+      const ch = hs.map(h => ({...h, diff:(h.up + h.dn) - (h.prev_up + h.prev_dn)})).filter(h => Math.abs(h.diff) > 0);
+      const grow = [...ch].sort((a, b) => b.diff - a.diff).filter(h => h.diff > 0).slice(0, 5), drop = [...ch].sort((a, b) => a.diff - b.diff).filter(h => h.diff < 0).slice(0, 3);
+      fill('uMovSub', T('against {range}', {range:dateR(d.prev_from, d.prev_to)}));
+      put('uMov', grow.length || drop.length ? bars([...grow, ...drop].sort((a, b) => (b.up + b.dn) - (a.up + a.dn)), h => usageDelta(h.up + h.dn, h.prev_up + h.prev_dn)) : `<div class="empty">${T('No changes worth showing')}</div>`);
+    }
+    // by named network
+    const nets = new Map();
+    for (const h of hs) { const k = h.net || ''; const e = nets.get(k) || {k, up:0, dn:0, n:0}; e.up += h.up; e.dn += h.dn; e.n++; nets.set(k, e); }
+    const nl = [...nets.values()].filter(x => x.k).sort((a, b) => (b.up + b.dn) - (a.up + a.dn));
+    done('uNets', !nl.length ? `<div class="empty">${T('Name your networks in Settings → Flow configuration to see the traffic of each one.')}</div>`
+      : '<div class="blist">' + nl.map(x => `<button class="brow" data-f="net" data-v="${esc(x.k)}"><span class="n">${esc(x.k)} <span class="nat">${Tn(x.n, '{n} host', '{n} hosts')}</span></span><span class="t">${fmtB(x.up + x.dn)}</span><span class="p">${pct(x.up + x.dn, all)}</span>
+          <span class="bar2" style="width:${(100 * (x.up + x.dn) / (nl[0].up + nl[0].dn || 1)).toFixed(1)}%"><i class="d" style="width:${(100 * x.dn / ((x.up + x.dn) || 1)).toFixed(1)}%;background:${C.down}"></i><i class="u" style="flex:1;background:${C.up}"></i></span></button>`).join('') + '</div>');
+    wireFilters(document.getElementById('uNets'));
+    // the table, last
+    fill('uAllSub', d.more ? T('the {n} busiest of {all} · all of them: Download CSV', {n:hs.length.toLocaleString(LOC), all:tot.hosts.toLocaleString(LOC)}) : T('{n} hosts, the busiest first', {n:hs.length.toLocaleString(LOC)}));
+    const csv = document.getElementById('uCsv');
+    csv.href = `api/top?${new URLSearchParams({dim:'int_ip', limit:'all', format:'csv', from:d.from, to:d.to, t:state.traffic, f:JSON.stringify(state.filters)})}`;
+    done('uTable', !hs.length ? `<div class="empty">${T('No traffic under this filter')}</div>` : `<div class="tw"><table class="compact utable"><thead><tr><th>${T('Host')}</th><th>${T('Network')}</th><th class="num">↓ ${T('Downloaded')}</th><th class="num">↑ ${T('Uploaded')}</th><th class="num">${T('Total')}</th><th class="num">${T('Share')}</th>${prev ? `<th class="num">${T('column::Change')}</th>` : ''}<th class="num">${T('Active days')}</th></tr></thead><tbody>
+      ${hs.map(h => `<tr data-host="${esc(h.k)}"><td><b>${esc(h.name || h.k)}</b>${h.name ? `<div class="nat mono">${esc(h.k)}</div>` : ''}</td><td>${esc(h.net || '—')}</td><td class="num mono">${fmtB(h.dn)}</td><td class="num mono">${fmtB(h.up)}</td><td class="num mono"><b>${fmtB(h.up + h.dn)}</b></td><td class="num mono">${pct(h.up + h.dn, all)}</td>${prev ? `<td class="num mono">${usageDelta(h.up + h.dn, h.prev_up + h.prev_dn)}</td>` : ''}<td class="num mono">${h.days}</td></tr>`).join('')}</tbody></table></div>`);
+    wireFilters(document.getElementById('uTable'));
+  })();
 }
 function vPaths(){
   const v = document.getElementById('view'), live = !!state.pathsLive && !isCustom();
@@ -4028,7 +4118,7 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });

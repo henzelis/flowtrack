@@ -39,31 +39,14 @@ PARTITION BY toYYYYMMDD(ts)
 ORDER BY (ts, int_ip, ext_ip)
 TTL ts + toIntervalDay(keep_days);   -- per record; tables from before 1.3.1 are moved to it by common.flows_keep_days
 
--- Long-term usage per hour x exporter x inside host x direction (kept for years; raw flows for 30+ days).
-CREATE TABLE IF NOT EXISTS usage_1h
-(
-    ts       DateTime,
-    exporter LowCardinality(String),
-    int_ip   String,
-    dir      Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5),
-    bytes    UInt64,
-    packets  UInt64,
-    flows    UInt64
-)
-ENGINE = SummingMergeTree
-ORDER BY (ts, exporter, int_ip, dir)
-TTL ts + INTERVAL 3 YEAR;
-
 -- tables from before 1.7.0: the direction of a server's answer between inside hosts (adding an Enum value only
 -- changes metadata)
 ALTER TABLE flows MODIFY COLUMN dir Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5);
-ALTER TABLE usage_1h MODIFY COLUMN dir Enum8('up' = 1, 'down' = 2, 'internal' = 3, 'transit' = 4, 'internal_back' = 5);
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS usage_1h_mv TO usage_1h AS
-SELECT toStartOfHour(ts) AS ts, exporter, int_ip, dir,
-       sum(bytes) AS bytes, sum(packets) AS packets, count() AS flows
-FROM flows
-GROUP BY ts, exporter, int_ip, dir;
+-- (1.15.0) usage_1h (hourly totals per host, kept 3 years whatever the edition) is gone: nothing showed it, and data is
+-- kept as long as the license says. The traffic of each host over the edition's days is in agg_host (rollups.py).
+DROP VIEW IF EXISTS usage_1h_mv;
+DROP TABLE IF EXISTS usage_1h;
 
 -- Collector health per exporter, one row per minute.
 CREATE TABLE IF NOT EXISTS exporter_stats

@@ -286,11 +286,6 @@ def reorient_internal(log=print, stop=None, settle=600):
     if phase < 4:
         inside = "dir IN ('internal', 'internal_back')"
         first = int(ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')[0]['t'])
-        lo = first // 3600 * 3600        # from the oldest hour on (its records the TTL already took are not summed again)
-        if lo < t2:
-            ch(f'ALTER TABLE usage_1h DELETE WHERE ts >= toDateTime({lo}) AND ts < toDateTime({t2}) AND {inside}', timeout=3600, settings=sync)
-            ch(f"""INSERT INTO usage_1h SELECT toStartOfHour(ts) AS ts, exporter, int_ip, dir, sum(bytes), sum(packets), count()
-                FROM flows WHERE ts >= toDateTime({lo}) AND ts < toDateTime({t2}) AND {inside} GROUP BY ts, exporter, int_ip, dir""", timeout=3600)
         st = _get_state()
         for name, r in ROLLUPS.items():
             if f'ready_from:{name}' not in st:

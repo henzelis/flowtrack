@@ -2,6 +2,12 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.15**
+- **Usage**: what each host downloaded and uploaded this month, last month or the last 7 – 365 days (as far as the
+  edition keeps data), against the same time before it; day by day, who uses most, the biggest changes, by network,
+  every host as CSV. Everything FlowTrack keeps is shown somewhere and kept as long as the license says: the hourly
+  per-host totals kept for 3 years whatever the edition (shown nowhere) are gone.
+
 **New in 1.14**
 - **Interface counters over SNMP** every minute: Capacity uses the device's own counters (every byte, the busiest
   minute) and shows how much of each link the flows see.
@@ -119,6 +125,12 @@
   ifTable 32-bit with wraps undone; errors, discards, state) into `if_counters` (src `snmp`, kept 90 days). A day with
   counters for at least half of its 5-minute periods takes their figures — the 95th percentile of the 5-minute rates
   and the busiest minute — and *Flows see* compares the flows' bytes with the counters' for the days both have.
+- *Usage*: per inside host, downloaded (from outside, or between your hosts with the traffic selector) and uploaded
+  over this month, last month or 7 – 365 whole local days, read from the 5-minute per-host totals (`agg_host`, kept per
+  record as long as the edition says). The same length of time before is compared only when the data reach back to its
+  start. Cards (downloaded, uploaded, active hosts with the change; the share of the 10 busiest), the days (months over
+  92 days), who uses most, the biggest changes, by named network, then the table (500 busiest; all: *Download CSV* =
+  `/api/top?dim=int_ip&limit=all&format=csv` with the same period and filters).
 - *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
   included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
   missing, and the hops of any source → destination path across the devices, with NAT and gaps.

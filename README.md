@@ -120,6 +120,14 @@ single host.
 
 <p align="center"><img src="docs/media/en/hosts-networks.webp" alt="Top hosts by named network" width="100%"></p>
 
+### Usage — who used how much
+
+What each host downloaded and uploaded this month, last month or over the last days — against the same time before
+it: totals and the change, the days, who uses most, who grew or dropped, each of your networks. Narrow it to a network,
+a device or a service like any page; the full list of hosts downloads as a CSV for Excel or billing.
+
+<p align="center"><img src="docs/media/en/usage.webp" alt="Usage: downloaded and uploaded against the week before, day by day, who uses most, the biggest changes, by network" width="100%"></p>
+
 ### Services, countries, ASNs
 
 <table>
@@ -221,7 +229,7 @@ Unattended install, upgrades, all server commands: [docs/install.md](docs/instal
 |---|---|---|
 | Every feature, now and in future versions | ✓ | ✓ |
 | Flow records per second | up to **5,000** | no limit (or per license) |
-| Flow details kept | **30 days** (hourly totals: 3 years) | per license, e.g. 90 days |
+| Data kept (flows and every total built from them) | **30 days** | per license, e.g. 90 days |
 | Activation | — | a license key, activated in a minute in Settings → License |
 
 5,000 records/s covers homes, small and medium offices; a busy 1 Gbit/s internet edge typically exports a few thousand.

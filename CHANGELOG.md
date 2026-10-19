@@ -3,6 +3,19 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Usage** — a page of its own: what each host downloaded and uploaded this month, last month or over the last
+  7 – 365 days (as far as your edition keeps data), against the same time before it. Visual first: cards with the
+  totals and the change, the days as bars, who uses most, the biggest changes (growth, new hosts, drops), each named
+  network; the table of the 500 busiest last, and every host as CSV in one click. The filters (a network, a device, a
+  service …) and the traffic selector apply as on every page; the period before is compared only when the data reach
+  back to its start.
+- **Data is kept as long as the license says — and only what is shown.** The hourly totals per host (`usage_1h`), kept
+  for 3 years whatever the edition and shown nowhere, are removed on the upgrade (with their table); the traffic of
+  each host is read from the 5-minute totals, which follow the edition's days like the flows. README and docs no
+  longer promise «hourly totals: 3 years».
+
 ## 1.14.1 — 2026-10-19
 
 - **Every row from the API, as CSV too**: `/api/top?limit=all` returns every host (service, country, …) under the
