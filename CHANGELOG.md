@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.15.2 — 2026-10-19
 
 - **A tunnel's own packets counted twice** (MikroTik / RouterOS): the outer GRE packets a router sends to the far end
   of a tunnel were recorded as entering through the tunnel interface, so the tunnel's incoming traffic held its own
