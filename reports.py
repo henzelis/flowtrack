@@ -622,6 +622,12 @@ def render(r, data, t0, t1, version='', now=None):
                     says.append(who + esc(tr('{pct}% of the capacity around {date}, growing {g}% a month.', pct=cd['full_pct'], date=day(v['trend']['last_day'], fc['full_in']), g=f"{fc['growth_pct_month']:g}")))
                 else:
                     says.append(who + esc(tr('busy hours at {pct}% of the capacity already.', pct=f"{v['p95_pct']:g}")))
+            for x in links:              # (1.14.0) links whose own counters show traffic the flows miss
+                for k in ('in', 'out'):
+                    v = (x.get('seen_pct') or {}).get(k)
+                    if v is not None and v < 80:
+                        says.append(f"<b>{esc(x['name'])}</b> ({esc(x['device_name'])}), {esc(tr('incoming traffic') if k == 'in' else tr('outgoing traffic'))}: "
+                                    + esc(tr('the flows see only {pct}% of what the interface counted — the rest is not exported.', pct=f'{v:g}')))
             flow = [table(['', tr('Interface'), tr('Capacity'), tr('In (95th percentile)'), tr('Out (95th percentile)'), tr('Trend'), tr('Reaches {pct}%', pct=cd['full_pct'])],
                           body, [5 * mm, 34 * mm, 28 * mm, 34 * mm, 34 * mm, 17 * mm, W - 152 * mm], right=(5,))]
             if says:

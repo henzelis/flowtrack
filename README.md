@@ -99,16 +99,19 @@ near its limit.
 ### Capacity — know when a link fills up, weeks ahead
 
 Every link of every device, day by day: how full it is in the busy hours, how fast that grows and **the date it
-reaches 85 %** of its capacity — so the upgrade is ordered before users feel it, not after. Quiet weekends do not
-pass for a decline and one odd day does not bend the trend; the forecast never reaches further than the history
-can carry.
+reaches 85 %** of its capacity — so the upgrade is ordered before users feel it, not after. The trend meets the
+capacity on the chart, the heat map shows the hours of the week when the link is busy, and one sentence says it in
+words. Quiet weekends do not pass for a decline, a noisy link is called unsteady instead of given a made-up date.
 
-<p align="center"><img src="docs/media/en/capacity.webp" alt="Capacity: links near full, the first to fill, the fastest growth; each link's busy-hour load, trend and the date it reaches 85 %" width="100%"></p>
+<p align="center"><img src="docs/media/en/capacity.webp" alt="Capacity: links near full, the first to fill, the fastest growth, how much the flows see; the trend meeting the capacity on a date; the busy hours of the week" width="100%"></p>
 
-Open a link to see the trend meet the capacity, the hours of the week when it is busy, and the hosts and services
-that drive the growth. The same picture arrives in your scheduled reports as *Link capacity*.
+**The interfaces' own counters.** With SNMP on, FlowTrack reads every interface's octet counters each minute: the
+figures are every byte the port carried and the busiest minute, not only what the device exports — and it compares
+the two. When the flows see only part of a link (an interface without a sampler, traffic exported twice), the page
+says so at the top. Below: every link with its busy-hour load, trend, the date it fills and what the flows see; the
+hosts and services that drive the growth; and the same in your scheduled reports as *Link capacity*.
 
-<p align="center"><img src="docs/media/en/capacity-forecast.webp" alt="One link in depth: daily busy-hour load, the trend carried into a forecast that meets 85 % on a date, and a weekday × hour heat map" width="100%"></p>
+<p align="center"><img src="docs/media/en/capacity-table.webp" alt="All links: status, capacity, busy-hour load in and out, trend, the date each reaches 85 %, how much of it the flows see" width="100%"></p>
 
 ### Top hosts and your own networks
 

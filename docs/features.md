@@ -2,6 +2,10 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.14**
+- **Interface counters over SNMP** every minute: Capacity uses the device's own counters (every byte, the busiest
+  minute) and shows how much of each link the flows see.
+
 **New in 1.13**
 - **Capacity**: a page for planning the links — each interface day by day (busy hours = 95th percentile, busiest 5
   minutes) against its capacity, the trend a month and the date it reaches 85 %, the load by weekday and hour, and
@@ -111,6 +115,10 @@
   minutes of each hour averaged over the weeks), and the inside hosts and services on it, recent half against
   earlier. Status: over the limit · near full (85 % now or within a month) · will fill (within the forecast) · worth
   watching (busy hours above 70 % or peaks above 85 %) · fine · capacity unknown.
+  With SNMP on (1.14), the collector reads every interface's octet counters each minute (ifXTable 64-bit, else
+  ifTable 32-bit with wraps undone; errors, discards, state) into `if_counters` (src `snmp`, kept 90 days). A day with
+  counters for at least half of its 5-minute periods takes their figures — the 95th percentile of the 5-minute rates
+  and the busiest minute — and *Flows see* compares the flows' bytes with the counters' for the days both have.
 - *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
   included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
   missing, and the hops of any source → destination path across the devices, with NAT and gaps.

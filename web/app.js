@@ -1129,19 +1129,23 @@ function capWhen(fc, key, lastDay){
 // one sentence about a link, for the detail and the reports' spirit
 function capSentence(x){
   const d = x.worst, s = x[d], fc = s.forecast, cap = capOf(x, d), who = `${esc(x.device_name)} · ${esc(x.name)}`;
-  if (!cap) return T('{who}: the capacity is unknown — set it (e.g. your ISP contract) in Settings → Devices → Interfaces to see shares and a forecast.', {who});
-  const base = T('{who}, {dir}: the busy hours reach {p95} of {cap} (95th percentile, {pct}%), the busiest 5 minutes {peak}.',
-    {who, dir:capDir(d), p95:fmtR(s.p95), cap:fmtR(cap), pct:s.p95_pct, peak:fmtR(s.peak)});
-  if (!fc) return base + ' ' + T('A forecast needs {n} days of history.', {n:CAP.forecast_days});
-  if (fc.over_in === 0) return base + ' ' + T('Busy days already fill it — time for more capacity.');
+  const sp = x.seen_pct && x.seen_pct[d], cov = sp == null ? '' : ' ' + (sp < 80 ? T('The flows see only {pct}% of what the interface counted: the rest is not exported (check the sampler on this interface).', {pct:sp})
+    : sp > 125 ? T('The flows count {pct}% of what the interface counted: some traffic may be exported twice.', {pct:sp}) : T('The flows see {pct}% of what the interface counted.', {pct:sp}));
+  if (!cap) return T('{who}: the capacity is unknown — set it (e.g. your ISP contract) in Settings → Devices → Interfaces to see shares and a forecast.', {who}) + cov;
+  const ctr = x.source && x.source !== 'flows';      // (1.14.0) the interface's own counters: the peak is one minute
+  const ba = {who, dir:capDir(d), p95:fmtR(s.p95), cap:fmtR(cap), pct:s.p95_pct, peak:fmtR(s.peak)};
+  const base = ctr ? T('{who}, {dir}: the busy hours reach {p95} of {cap} (95th percentile, {pct}%), the busiest minute {peak} (the interface\'s own counters).', ba)
+    : T('{who}, {dir}: the busy hours reach {p95} of {cap} (95th percentile, {pct}%), the busiest 5 minutes {peak}.', ba);
+  if (!fc) return base + ' ' + T('A forecast needs {n} days of history.', {n:CAP.forecast_days}) + cov;
+  if (fc.over_in === 0) return base + ' ' + T('Busy days already fill it — time for more capacity.') + cov;
   const g = Math.abs(fc.growth_pct_month).toLocaleString(LOC, {maximumFractionDigits:1});
-  if (!fc.clear) return base + ' ' + T('The days differ too much for a trend; it shows once there is more history.');
-  if (fc.direction === 'stable') return base + ' ' + T('The load is stable.');
-  if (fc.direction === 'down') return base + ' ' + T('The load is falling, about {g}% a month.', {g});
+  if (!fc.clear) return base + ' ' + T('The days differ too much for a trend; it shows once there is more history.') + cov;
+  if (fc.direction === 'stable') return base + ' ' + T('The load is stable.') + cov;
+  if (fc.direction === 'down') return base + ' ' + T('The load is falling, about {g}% a month.', {g}) + cov;
   const last = s.trend.last_day;
   return base + ' ' + (fc.full_in === 0 ? T('Growing about {g}% a month; already above {full}% on busy days, the limit around {over}.', {g, full:CAP.full_pct, over:capWhen(fc, 'over_in', last)})
     : fc.full_in != null ? T('Growing about {g}% a month: {full}% around {date}, the limit {over}.', {g, full:CAP.full_pct, date:capWhen(fc, 'full_in', last), over:fc.over_in != null ? T('around {date}', {date:capWhen(fc, 'over_in', last)}) : T('not within {n} days', {n:fc.horizon})})
-    : T('Growing about {g}% a month; {full}% not within {n} days.', {g, full:CAP.full_pct, n:fc.horizon}));
+    : T('Growing about {g}% a month; {full}% not within {n} days.', {g, full:CAP.full_pct, n:fc.horizon})) + cov;
 }
 let CAP = null;
 function vCapacity(){
@@ -1180,7 +1184,11 @@ function vCapacity(){
     fill('capKpi', kc('shield', T('Near full'), String(near.length), near.length ? near.slice(0, 2).map(nm).join(', ') : T('no link at {pct}% on busy days', {pct:d.full_pct}), near.length ? 'var(--crit)' : 'var(--ok)')
       + kc('chart', T('Will fill'), dated.length ? capWhen(dated[0].fc, 'full_in', dated[0].last) : '—', dated.length ? T('{name} reaches {pct}% first', {name:nm(dated[0].x), pct:d.full_pct}) + (soon.length > 1 ? ` · ${Tn(soon.length - 1, '{n} more link', '{n} more links')}` : '') : T('no link reaches {pct}% within the forecast', {pct:d.full_pct}), dated.length ? 'var(--warn)' : '')
       + kc('pulse', T('Fastest growth'), grow.length ? capGrowth(grow[0][grow[0].worst].forecast.growth_pct_month) : '—', grow.length ? `${nm(grow[0])} · ${T('a month')}` : T('a forecast needs {n} days of history', {n:d.forecast_days}))
-      + kc('ip', T('Links measured'), `${known.length} / ${all.length}`, known.length < all.length ? T('{n} without a known capacity', {n:all.length - known.length}) : T('every link has a capacity')));
+      + (() => {      // (1.14.0) with interface counters: how much of the links the flows see, the worst first
+        const cov = all.flatMap(x => ['in', 'out'].filter(k => x.seen_pct && x.seen_pct[k] != null).map(k => ({x, k, v:x.seen_pct[k]}))).sort((a, b) => a.v - b.v);
+        if (!cov.length) return kc('ip', T('Links measured'), `${known.length} / ${all.length}`, known.length < all.length ? T('{n} without a known capacity', {n:all.length - known.length}) : T('every link has a capacity'));
+        const w = cov[0], low = w.v < 80;
+        return kc('ip', T('Flows see'), `${Math.round(w.v)}%`, low ? T('{name}, {dir}: the rest of its traffic is not exported', {name:nm(w.x), dir:capDir(w.k)}) : T('of what the interfaces counted, at least · {n} links by their own counters', {n:all.filter(x => x.source && x.source !== 'flows').length}), low ? 'var(--warn)' : 'var(--ok)'); })());
     // the table
     const bar = (pct, c) => `<div class="ldbar"><i style="width:${Math.min(100, pct || 0)}%;background:${loadColor(pct)}"></i></div>`;
     const dirCell = (x, k) => { const s = x[k]; return `<td class="ld"><div class="ldtop"><b class="mono" style="color:${loadColor(s.p95_pct)}">${s.p95_pct == null ? '—' : s.p95_pct + '%'}</b><span class="nat mono">${fmtR(s.p95)}</span></div>${bar(s.p95_pct)}<div class="nat mono ldsub">${T('peak')} ${fmtR(s.peak)}${s.peak_pct == null ? '' : ` (${s.peak_pct}%)`}</div></td>`; };
@@ -1192,6 +1200,10 @@ function vCapacity(){
       if (!fc) return `<td><span class="nat">—</span></td>`;
       const w = capWhen(fc, 'full_in', s.trend.last_day), hot = fc.full_in != null;
       return `<td><b class="mono" style="color:${fc.full_in === 0 ? 'var(--crit)' : hot ? 'var(--warn)' : 'var(--ink2)'}">${w}</b>${fc.over_in != null && fc.over_in > 0 ? `<div class="nat">${T('limit {date}', {date:capWhen(fc, 'over_in', s.trend.last_day)})}</div>` : ''}</td>`; };
+    // (1.14.0) how much of what the interface counted the flows see (in / out): below 80 % the export misses traffic
+    const seenCell = x => { const v = x.seen_pct; if (!v || (v.in == null && v.out == null)) return `<td><span class="nat" title="${T('Switch SNMP on for the device to compare the flows with the interface\'s counters')}">—</span></td>`;
+      const one = (k, a) => v[k] == null ? '' : `<div class="mono" style="color:${v[k] < 80 ? 'var(--warn)' : v[k] > 125 ? 'var(--warn)' : 'var(--ink2)'}">${a} ${Math.round(v[k])}%</div>`;
+      return `<td>${one('in', '↓')}${one('out', '↑')}</td>`; };
     const spark = x => { const w = 200, h = 34, rows = x.days, top = Math.max(capOf(x, 'in'), capOf(x, 'out'), ...rows.map(r => Math.max(r[1], r[2])), 1);
       const line = (k, color) => `<polyline points="${rows.map((r, n) => `${(n / Math.max(1, rows.length - 1) * w).toFixed(1)},${(h - 2 - r[k] / top * (h - 4)).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-width="1.4" vector-effect="non-scaling-stroke"/>`;
       const cy = capOf(x, x.worst) ? (h - 2 - capOf(x, x.worst) / top * (h - 4)).toFixed(1) : null;
@@ -1199,9 +1211,9 @@ function vCapacity(){
     const capTxt = x => !x.cap_in && !x.cap_out ? `<span class="nat">${T('unknown')}</span>` : `<span class="mono">${x.cap_in === x.cap_out ? fmtR(x.cap_in * 1e6) : `${fmtR(x.cap_in * 1e6)} ↓<br>${fmtR(x.cap_out * 1e6)} ↑`}</span><div class="nat">${x.cap_own ? T('your figures') : T('port speed')}</div>`;
     const key = x => `${x.device}|${x.index}`;
     if (!all.some(x => key(x) === state.capSel)) state.capSel = key(all[0]);
-    done('capTable', skipNote + `<div class="tw"><table class="compact ldtable captable"><thead><tr><th>${T('Status')}</th><th>${T('Interface')}</th><th>${T('Capacity')}</th><th>${T('In (95th percentile)')}</th><th>${T('Out (95th percentile)')}</th><th>${T('Trend')}</th><th>${T('Reaches {pct}%', {pct:d.full_pct})}</th><th>${T('Day by day')} <span class="nat" style="font-weight:500"><span style="color:${CAP_IN}">— ${T('in')}</span> <span style="color:${CAP_OUT}">— ${T('out')}</span></span></th></tr></thead><tbody>
+    done('capTable', skipNote + `<div class="tw"><table class="compact ldtable captable"><thead><tr><th>${T('Status')}</th><th>${T('Interface')}</th><th>${T('Capacity')}</th><th>${T('In (95th percentile)')}</th><th>${T('Out (95th percentile)')}</th><th>${T('Trend')}</th><th>${T('Reaches {pct}%', {pct:d.full_pct})}</th><th title="${T('Bytes in the flows against the interface\'s own counters, the days both have')}">${T('Flows see')}</th><th>${T('Day by day')} <span class="nat" style="font-weight:500"><span style="color:${CAP_IN}">— ${T('in')}</span> <span style="color:${CAP_OUT}">— ${T('out')}</span></span></th></tr></thead><tbody>
       ${all.map(x => `<tr class="caprow" data-k="${esc(key(x))}" tabindex="0" aria-selected="${key(x) === state.capSel}"><td><span class="pill ${st[x.status][1]}">${st[x.status][0]}</span></td>
-        <td><b>${esc(x.name)}</b> ${x.role === 'wan' ? '<span class="pill warn">WAN</span>' : ''}<div class="nat">${esc(x.device_name)}</div></td><td>${capTxt(x)}</td>${dirCell(x, 'in')}${dirCell(x, 'out')}${trendCell(x)}${whenCell(x)}<td>${spark(x)}</td></tr>`).join('')}</tbody></table></div>
+        <td><b>${esc(x.name)}</b> ${x.role === 'wan' ? '<span class="pill warn">WAN</span>' : ''}<div class="nat">${esc(x.device_name)}${x.source && x.source !== 'flows' ? ` · <span class="capsrc" title="${T('The interface\'s own counters: every octet, the busiest minute')}">${x.source === 'snmp' ? T('SNMP counters') : T('sFlow counters')}</span>` : ''}</div></td><td>${capTxt(x)}</td>${dirCell(x, 'in')}${dirCell(x, 'out')}${trendCell(x)}${whenCell(x)}${seenCell(x)}<td>${spark(x)}</td></tr>`).join('')}</tbody></table></div>
       <p class="note">${T('95th percentile = the load of the busy hours: only 5% of the 5-minute periods were busier. The trend compares days a whole number of weeks apart, so quiet weekends are no decline, and a forecast never reaches further than twice the history it rests on. In = entering the device through the interface, out = leaving through it.')}
       ${isAdmin() ? ` <button class="lnk" id="capCaps">${T('Set capacities')} →</button>` : ''}</p>`);
     const cb = document.getElementById('capCaps');
@@ -1251,7 +1263,7 @@ function capChart(x, d){
     }
   }
   return `<svg class="capchart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${T('Trend and forecast')}">${g}</svg>
-    <div class="legend caplegend"><span><i style="background:${color}"></i>${T('95th percentile of the day')}</span><span><i style="background:${color};opacity:.4"></i>${T('busiest 5 minutes of the day')}</span>${tr ? `<span><i class="lt"></i>${T('trend of the busy days')}</span>` : ''}${cap ? `<span><i class="lc"></i>${T('capacity')}</span>` : ''}</div>`;
+    <div class="legend caplegend"><span><i style="background:${color}"></i>${T('95th percentile of the day')}</span><span><i style="background:${color};opacity:.4"></i>${x.source && x.source !== 'flows' ? T('busiest minute of the day') : T('busiest 5 minutes of the day')}</span>${tr ? `<span><i class="lt"></i>${T('trend of the busy days')}</span>` : ''}${cap ? `<span><i class="lc"></i>${T('capacity')}</span>` : ''}</div>`;
 }
 async function capDetail(x, seq){
   if (!x) return;
@@ -1260,7 +1272,7 @@ async function capDetail(x, seq){
   fill('capDirBox', seg('capDir', [['in', T('In')], ['out', T('Out')]], d));
   wireSeg('capDir', v => { state.capDir = v; capDetail(x, seq); });
   const ch = fill('capChart', capChart(x, d)); if (ch) ch.classList.remove('loading');
-  fill('capSay', capSentence({...x, worst:d}).replace(/\.\.$/, '.'));         // an abbreviation with a dot at the end of a sentence
+  fill('capSay', capSentence({...x, worst:d}).replace(/\.\.( |$)/g, '.$1'));         // an abbreviation with a dot at the end of a sentence
   ['capHeat', 'capHosts', 'capSvcs'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('loading'); });
   let r;
   try { r = await capApi('capacity/iface', {device:x.device, if:x.index}); } catch (e) { ['capHeat', 'capHosts', 'capSvcs'].forEach(id => { const el = fill(id, errBox(e)); if (el) el.classList.remove('loading'); }); return; }
@@ -3639,7 +3651,7 @@ function ifaceTable(x, edit){
     return `<tr${i.unseen ? ' class="unseen"' : ''}><td class="num mono">${i.index}</td><td>${name}</td><td>${addrs}</td><td>${role} ${hint}${unseen}</td><td class="nowrap">${cap}</td><td class="num mono">${i.unseen ? '—' : fmtB(i.bytes)}</td><td class="num mono">${i.unseen ? '—' : Math.round(i.ext_share * 100) + '%'}</td>${counted ? `<td class="ifcnt">${ifCounters(i.counters)}</td>` : ''}</tr>`;
   }).join('');
   const sn = x.snmp || {}, when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'});
-  const snmpLine = !sn.enabled ? '' : `<div class="ifsnmp">${sn.polled ? (sn.ok ? `<span class="pill ok">SNMP</span> <span class="nat">${esc(sn.sys && sn.sys.name || '')}${sn.sys && sn.sys.name ? ' · ' : ''}${T('{ifs} interfaces, {addrs} addresses · polled {when}', {ifs: sn.interfaces, addrs: sn.addresses, when: when(sn.polled)})}</span>`
+  const snmpLine = !sn.enabled ? '' : `<div class="ifsnmp">${sn.polled ? (sn.ok ? `<span class="pill ok">SNMP</span> <span class="nat">${esc(sn.sys && sn.sys.name || '')}${sn.sys && sn.sys.name ? ' · ' : ''}${T('{ifs} interfaces, {addrs} addresses · polled {when}', {ifs: sn.interfaces, addrs: sn.addresses, when: when(sn.polled)})}${sn.counters ? ' · ' + (sn.counters.ok ? T('traffic counters every minute, read {when}', {when: when(sn.counters.t)}) : T('traffic counters not read: {err}', {err: sn.counters.error || '?'})) : ''}</span>`
       : `<span class="pill warn" title="${esc(sn.detail || '')}">${T('SNMP error')}</span> <span class="nat">${esc(sn.error_text || '')}${sn.last_ok ? ' · ' + T('last good poll {when}', {when: when(sn.last_ok)}) : ''}</span>`)
       : `<span class="pill info">SNMP</span> <span class="nat">${T('waiting for the first poll')}</span>`}${admin && !edit ? ` <button class="btn snmppoll">${T('Poll now')}</button>` : ''}</div>`;
   const btns = !admin || !x.interfaces.length ? '' : edit ? `<span class="nat ifmsg"></span><button class="btn ifcancel">${T('Cancel')}</button><button class="btn primary ifsave" disabled>${T('Save')}</button>`

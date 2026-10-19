@@ -182,3 +182,7 @@ CREATE TABLE IF NOT EXISTS if_counters
 ENGINE = MergeTree
 ORDER BY (exporter, if_index, ts)
 TTL ts + INTERVAL 90 DAY;
+-- (1.14.0) counters read over SNMP every minute go here too: src 'snmp' (sFlow counter samples: 'sflow'); wide = 0 for
+-- the 32-bit ifTable counters of devices without ifXTable (a wrap between two reads is undone when rates are made)
+ALTER TABLE if_counters ADD COLUMN IF NOT EXISTS src LowCardinality(String) DEFAULT 'sflow';
+ALTER TABLE if_counters ADD COLUMN IF NOT EXISTS wide UInt8 DEFAULT 1;

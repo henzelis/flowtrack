@@ -50,7 +50,8 @@ def fake_call(log=None):
                                     'trend': {'slope': 1, 'level': 1, 'busy': 1, 'days': 30, 'last_day': ts(2026, 10, 18)}, 'forecast': fc(full), 'status': 'ok'}
             return {'days': int(q['days'][0]), 'full_pct': 85, 'watch_pct': 70, 'interfaces': [
                 {'device_name': 'fw', 'name': 'wan1', 'cap_in': 100, 'cap_out': 100, 'worst': 'in', 'status': 'soon', 'in': d(60, 40), 'out': d(20, None)},
-                {'device_name': 'fw', 'name': 'lan', 'cap_in': 1000, 'cap_out': 1000, 'worst': 'out', 'status': 'ok', 'in': d(2, None), 'out': d(3, None)},
+                {'device_name': 'fw', 'name': 'lan', 'cap_in': 1000, 'cap_out': 1000, 'worst': 'out', 'status': 'ok', 'in': d(2, None), 'out': d(3, None),
+                 'source': 'snmp', 'seen_pct': {'in': 58.0, 'out': 97.0}},
                 {'device_name': 'fw', 'name': 'dmz', 'cap_in': 0, 'cap_out': 0, 'worst': 'in', 'status': 'unknown', 'in': d(0, None), 'out': d(0, None)}]}
         raise AssertionError(path)
     return call

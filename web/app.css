@@ -696,3 +696,5 @@ td.nowrap{white-space:nowrap}
 .caphead .ph{margin-bottom:0}
 #capPickBox{margin-right:8px}
 #capPickBox select{max-width:240px}
+/* (1.14.0) Capacity: the source of a link's figures */
+.capsrc{color:var(--down);font-weight:600}

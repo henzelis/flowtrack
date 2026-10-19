@@ -12,7 +12,7 @@ JSON over HTTP — with the session cookie of the UI, or with an **API token** (
 | `GET /api/summary` | totals for the period and the previous one |
 | `GET /api/series?by=` | time series, optionally split by `service`, `int_ip`, … |
 | `GET /api/ifload?device=` | load of each interface of a device: 5-minute in / out bit rates, average / p95 / peak and shares of the capacity |
-| `GET /api/capacity?days=&tz=` | (1.13) every interface over whole local days (`days` 7 / 30 / 90 / 180 / 365, `tz` an IANA zone): daily p95 / peak in and out, the period's p95, trend, forecast (`full_in` / `over_in` days, `horizon`), status; fullest first |
+| `GET /api/capacity?days=&tz=` | (1.13) every interface over whole local days (`days` 7 / 30 / 90 / 180 / 365, `tz` an IANA zone): daily p95 / peak in and out, the period's p95, trend, forecast (`full_in` / `over_in` days, `horizon`), status; fullest first; (1.14) `source` (`snmp` / `sflow` / `flows`), `seen_pct` {in, out} = flows' bytes against the interface counters; `days` rows end with 1 when the day came from the counters |
 | `GET /api/capacity/iface?device=&if=&days=&tz=` | (1.13) one interface: weekday × hour load (`heat.in` / `heat.out`, 7 × 24 bit/s, Monday first) and the top hosts / services, `recent` vs `earlier` bytes split at `mid` |
 | `GET /api/top?dim=` | top-N by `int_ip`, `ext_ip`, `conv`, `service`, `l7`, `country`, `city`, `asn`, `ext_port`, `exporter` |
 | `GET /api/river` | top inside × top outside links (live 2-minute window or whole period) |

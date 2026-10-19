@@ -27,6 +27,7 @@ import reports  # noqa: E402
 import notify  # noqa: E402
 import reputation  # noqa: E402
 import capacity  # noqa: E402
+import ifcounters  # noqa: E402
 import common  # noqa: E402
 import licensing  # noqa: E402
 import rollups  # noqa: E402
@@ -1175,6 +1176,9 @@ def snmp_status(ip, settings, data):
                     'ifs': snmp_ifs(d), 'interfaces': len(d.get('ifs', {})), 'addresses': sum(len(v) for v in d.get('addrs', {}).values())})
         if not d.get('ok'):
             out.update({'error': d.get('error'), 'error_text': snmp_error_text(d.get('error'), e, ip), 'detail': d.get('detail', '')})
+        c = ifcounters.load_status().get(ip) if e.get('enabled') else None     # (1.14.0) the collector's minute reads
+        if c:
+            out['counters'] = {'t': c.get('t', 0), 'ok': c.get('ok', False), 'interfaces': c.get('interfaces', 0), 'error': c.get('error')}
     return out
 
 
@@ -1393,6 +1397,41 @@ def _cap_filter(q):
         return not any(hit(f, dev, idx, info) for f in use if f.get('neg'))
     return keep, sorted({str(f.get('k')) for f in flt if f.get('k') not in ('device', 'iface')})
 
+
+def _counter_rates(where=''):
+    """(1.14.0) Rates from the interface counters (SNMP every minute, sFlow counter samples): one row per read and
+    direction (d 0 = into the device through the interface, 1 = out of it) with the octets since the previous read of
+    the same source and the seconds between. A 32-bit counter that wrapped is undone; a counter that went down
+    (reboot), a gap over 15 minutes or more than the port can carry is left out."""
+    return f"""SELECT exporter, i, src, x.1 AS d, ts, if(x.2 < 0 AND wide = 0, x.2 + 4294967296, x.2) AS delta, dt FROM (
+            SELECT exporter, if_index AS i, src, ts, wide, speed, dateDiff('second', lagInFrame(ts) OVER w, ts) AS dt,
+                toInt64(in_octets) - toInt64(lagInFrame(in_octets) OVER w) AS di, toInt64(out_octets) - toInt64(lagInFrame(out_octets) OVER w) AS dout
+            FROM if_counters WHERE ts >= toDateTime({{c0:UInt32}}) AND ts < toDateTime({{t1:UInt32}}){where}
+            WINDOW w AS (PARTITION BY exporter, if_index, src ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+        ARRAY JOIN [(0, di), (1, dout)] AS x
+        WHERE dt BETWEEN 10 AND 900 AND delta >= 0 AND (speed = 0 OR delta * 8 <= speed * dt * 1.1)"""
+
+
+def counter_days(p, where=''):
+    """-> ({(dev, idx, src, d, day): {...}}, {(dev, idx, src, d): {...}}): per local day and over the period — the
+    95th percentile of the 5-minute rates, the busiest minute (one read to the next), the bytes and the 5-minute
+    buckets seen (m)."""
+    p['c0'] = p['_t0'] - 300          # the read before the period: the first rate inside it
+    five = f"""SELECT exporter, i, src, d, toUnixTimestamp(toStartOfDay(ts, {{tz:String}})) AS day, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t5,
+            sum(delta) AS b, sum(dt) AS sdt, max(delta * 8 / dt) AS pk FROM ({_counter_rates(where)}) WHERE ts >= toDateTime({{t0:UInt32}})
+            GROUP BY exporter, i, src, d, day, t5"""
+    keys = ('exporter', 'i', 'src', 'd')
+    day = {}
+    for r in ch(f"""SELECT exporter, i, src, d, day, sum(b) AS bytes, count() AS m, max(pk) AS peak, quantileExact(0.95)(b * 8 / sdt) AS p95
+            FROM ({five}) GROUP BY exporter, i, src, d, day""", dict(p, t0=p['_t0']), fmt='JSON', timeout=120):
+        day[(r['exporter'], int(r['i']), r['src'], int(r['d']), int(r['day']))] = {'bytes': int(r['bytes']), 'm': int(r['m']), 'peak': float(r['peak']), 'p95': float(r['p95'])}
+    per = {}
+    for r in ch(f"""SELECT exporter, i, src, d, sum(b) AS bytes, count() AS m, sum(sdt) AS secs, max(pk) AS peak, quantileExact(0.95)(b * 8 / sdt) AS p95
+            FROM ({five}) GROUP BY exporter, i, src, d""", dict(p, t0=p['_t0']), fmt='JSON', timeout=120):
+        per[tuple(r[k] if k in ('exporter', 'src') else int(r[k]) for k in keys)] = {'bytes': int(r['bytes']), 'm': int(r['m']), 'secs': int(r['secs']),
+                                                                                    'peak': float(r['peak']), 'p95': float(r['p95'])}
+    return day, per
+
 def api_capacity(q):
     """(1.13.0) Capacity planning: every interface of every device, day by day over whole local days — the busiest 5
     minutes, the 95th percentile of the 5-minute load (empty ones count as 0) and the bytes, into and out of it — with
@@ -1410,13 +1449,22 @@ def api_capacity(q):
     by = {}
     for r in rows:
         by.setdefault((r['exporter'], int(r['i'])), []).append(r)
+    # (1.14.0) the interfaces' own counters where a device has them: SNMP before sFlow; also links without any flows
+    cday, cper = counter_days(p)
+    csrc = {}
+    for dev, idx, src, d in cper:
+        if csrc.get((dev, idx)) != 'snmp':
+            csrc[(dev, idx)] = src
+    for key in csrc:
+        by.setdefault(key, [])
     keep, skipped = _cap_filter(q)
     cfg = exporters_cfg(raw=True)
     sset, sdata = snmp.load_settings(), snmp.load_data()
     cnts = sflow_counters()
     out = []
     for (dev, idx), rs in by.items():
-        total = sum(int(r['bytes']) for r in rs)
+        src = csrc.get((dev, idx))
+        total = max(sum(int(r['bytes']) for r in rs), sum(v['bytes'] for k, v in cper.items() if k[:3] == (dev, idx, src)))
         c = cfg.get(dev, {})
         own = str(idx) in (c.get('if_caps') or {})
         if total < 1_000_000 and not own:
@@ -1426,22 +1474,40 @@ def api_capacity(q):
             continue
         series = {}
         for r in rs:
-            e = series.setdefault(int(r['day']), [int(r['day']), 0, 0, 0, 0, 0, 0])
+            e = series.setdefault(int(r['day']), [int(r['day']), 0, 0, 0, 0, 0, 0, 0])
             d = int(r['d'])
             e[1 + d], e[3 + d] = int(r['p95']) * 8 / 300, int(r['peak']) * 8 / 300
             e[5] = max(e[5], int(r['m']))
             e[6] += int(r['bytes'])
-        days_l = [series[k] for k in sorted(series)]
+        # a day with counters for at least half of it takes their figures (every octet, the busiest minute); the
+        # flows' bytes of such days against the counters' = how much of the link the flows see
+        fbytes = {(int(r['day']), int(r['d'])): int(r['bytes']) for r in rs}
+        seen = {}
+        for d in (0, 1):
+            cdays = {k[4]: v for k, v in cday.items() if k[:4] == (dev, idx, src, d) and v['m'] >= 144}
+            for dy, v in cdays.items():
+                e = series.setdefault(dy, [dy, 0, 0, 0, 0, 0, 0, 0])
+                e.extend([0] * (8 - len(e)))
+                e[1 + d], e[3 + d], e[5], e[7] = v['p95'], v['peak'], max(e[5], v['m']), 1
+            both = [dy for dy in cdays if dy < today and (dy, d) in fbytes]
+            cb = sum(cdays[dy]['bytes'] for dy in both)
+            seen['in' if d == 0 else 'out'] = round(100 * sum(fbytes[(dy, d)] for dy in both) / cb, 1) if cb > 10_000_000 else None
+        days_l = [series[k] + [0] * (8 - len(series[k])) for k in sorted(series)]
         first = days_l[0][0] if days_l else today
+        ctr = bool(src) and sum(1 for e in days_l if e[7]) * 2 >= max(1, len(days_l))       # counters for most days
         dirs = {}
         for name, d, cap in (('in', 0, info['cap_in']), ('out', 1, info['cap_out'])):
             pts = [(round((e[0] - first) / 86400), e[1 + d]) for e in days_l if e[0] < today and e[5] >= 144]
             tr_ = capacity.trend(pts)
             fc = capacity.forecast(tr_, cap * 1e6)
             peak = max((e[3 + d] for e in days_l), default=0)
-            p95, span = per.get((dev, idx, d), (0, 0))
-            p95 = p95 * 8 / 300
-            byts = sum(int(r['bytes']) for r in rs if int(r['d']) == d)
+            if ctr and (dev, idx, src, d) in cper:
+                cp = cper[(dev, idx, src, d)]
+                p95, span, byts = cp['p95'], cp['secs'], cp['bytes']
+            else:
+                p95, span = per.get((dev, idx, d), (0, 0))
+                p95 = p95 * 8 / 300
+                byts = sum(int(r['bytes']) for r in rs if int(r['d']) == d)
             pct = (lambda v: round(100 * v / (cap * 1e6), 1) if cap else None)
             dirs[name] = {'peak': peak, 'p95': p95, 'avg': byts * 8 / max(300, span), 'bytes': byts, 'since': p['t1'] - span if span else None,
                           'peak_pct': pct(peak), 'p95_pct': pct(p95), 'trend': tr_ and {**{k: tr_[k] for k in ('slope', 'level', 'busy', 'days')}, 'last_day': first + tr_['last'] * 86400},
@@ -1450,7 +1516,8 @@ def api_capacity(q):
         out.append({'device': dev, 'device_name': c.get('name') or dev, 'index': idx, 'name': info['name'], 'role': info['role'],
                     'cap_in': info['cap_in'], 'cap_out': info['cap_out'], 'cap_own': info['cap_own'], 'cap_auto': info['cap_auto'],
                     'in': dirs['in'], 'out': dirs['out'], 'worst': worst, 'status': dirs[worst]['status'],
-                    'days': [e[:5] for e in days_l]})
+                    'source': src if ctr else 'flows', 'seen_pct': seen if src else None,
+                    'days': [e[:5] + [e[7]] for e in days_l]})
     out.sort(key=lambda x: (capacity.RANK[x['status']], -(x[x['worst']]['p95_pct'] or -1), -(x['in']['bytes'] + x['out']['bytes'])))
     counts = {k: sum(1 for x in out if x['status'] == k) for k in capacity.RANK}
     return {'unfiltered': skipped, 'days': days, 'max_days': view_days(), 'choices': [d for d in CAP_DAYS if d <= max(view_days(), CAP_DAYS[0])], 'tz': tz,

@@ -1769,5 +1769,21 @@
  "over −100%": "понад −100%",
  "All links": "Усі канали",
  "the fullest first · click a row to see it above": "найзаповненіші першими · клік по рядку показує канал угорі",
- "Link": "Канал"
+ "Link": "Канал",
+ "Bytes in the flows against the interface's own counters, the days both have": "Байти в потоках відносно власних лічильників інтерфейсу, за дні, де є і те, і те",
+ "Flows see": "Потоки бачать",
+ "SNMP counters": "лічильники SNMP",
+ "Switch SNMP on for the device to compare the flows with the interface's counters": "Увімкніть SNMP для пристрою, щоб порівняти потоки з лічильниками інтерфейсу",
+ "The flows count {pct}% of what the interface counted: some traffic may be exported twice.": "Потоки налічують {pct}% від того, що порахував інтерфейс: частина трафіку, можливо, експортується двічі.",
+ "The flows see only {pct}% of what the interface counted: the rest is not exported (check the sampler on this interface).": "Потоки бачать лише {pct}% від того, що порахував інтерфейс: решта не експортується (перевірте семплер на цьому інтерфейсі).",
+ "The flows see {pct}% of what the interface counted.": "Потоки бачать {pct}% від того, що порахував інтерфейс.",
+ "The interface's own counters: every octet, the busiest minute": "Власні лічильники інтерфейсу: кожен байт, найзавантаженіша хвилина",
+ "busiest minute of the day": "найзавантаженіша хвилина дня",
+ "sFlow counters": "лічильники sFlow",
+ "traffic counters every minute, read {when}": "лічильники трафіку щохвилини, прочитано {when}",
+ "traffic counters not read: {err}": "лічильники трафіку не прочитано: {err}",
+ "{who}, {dir}: the busy hours reach {p95} of {cap} (95th percentile, {pct}%), the busiest minute {peak} (the interface's own counters).": "{who}, {dir}: години пік сягають {p95} із {cap} (95-й перцентиль, {pct}%), найзавантаженіша хвилина — {peak} (власні лічильники інтерфейсу).",
+ "{name}, {dir}: the rest of its traffic is not exported": "{name}, {dir}: решта його трафіку не експортується",
+ "of what the interfaces counted, at least · {n} links by their own counters": "від того, що порахували інтерфейси, щонайменше · за власними лічильниками: {n}",
+ "the flows see only {pct}% of what the interface counted — the rest is not exported.": "потоки бачать лише {pct}% від того, що порахував інтерфейс, — решта не експортується."
 }

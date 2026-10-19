@@ -3,6 +3,18 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **The interfaces' own counters over SNMP.** For every device with SNMP on, the collector reads each interface's
+  64-bit octet counters (32-bit where a device has no others; a wrap is undone), errors, discards and state every
+  minute. *Capacity* takes them for every day they cover: every byte the port carried, the busiest minute (not five),
+  and links that no flow describes at all. *Settings → Devices* shows when they were read last.
+- **What the flows see**: per link and direction, the bytes in the flows against the interface's counters. Below 80 %
+  the export misses traffic (an interface without a sampler), above 125 % it may be exported twice — said on the card
+  on top, in the link's sentence, in the table and in the reports.
+- **Capacity — visual first**: the cards, the trend chart with a link picker, the hours of the week and the hosts and
+  services come first; the table of all links is at the bottom (a row picks the link above).
+
 ## 1.13.1 — 2026-10-19
 
 - Capacity on real, uneven traffic: growth a month is measured against the typical day (it was against the end of the
