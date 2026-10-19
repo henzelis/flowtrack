@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.15.0 — 2026-10-19
 
 - **Usage** — a page of its own: what each host downloaded and uploaded this month, last month or over the last
   7 – 365 days (as far as your edition keeps data), against the same time before it. Visual first: cards with the
