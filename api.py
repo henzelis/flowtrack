@@ -1473,11 +1473,43 @@ def counter_days(p, where=''):
             FROM ({five}) GROUP BY exporter, i, src, d, day""", dict(p, t0=p['_t0']), fmt='JSON', timeout=120):
         day[(r['exporter'], int(r['i']), r['src'], int(r['d']), int(r['day']))] = {'bytes': int(r['bytes']), 'm': int(r['m']), 'peak': float(r['peak']), 'p95': float(r['p95'])}
     per = {}
-    for r in ch(f"""SELECT exporter, i, src, d, sum(b) AS bytes, count() AS m, sum(sdt) AS secs, max(pk) AS peak, quantileExact(0.95)(b * 8 / sdt) AS p95
+    for r in ch(f"""SELECT exporter, i, src, d, sum(b) AS bytes, count() AS m, sum(sdt) AS secs, max(pk) AS peak, quantileExact(0.95)(b * 8 / sdt) AS p95,
+                toUnixTimestamp(min(t5)) AS first
             FROM ({five}) GROUP BY exporter, i, src, d""", dict(p, t0=p['_t0']), fmt='JSON', timeout=120):
         per[tuple(r[k] if k in ('exporter', 'src') else int(r[k]) for k in keys)] = {'bytes': int(r['bytes']), 'm': int(r['m']), 'secs': int(r['secs']),
-                                                                                    'peak': float(r['peak']), 'p95': float(r['p95'])}
+                                                                                    'peak': float(r['peak']), 'p95': float(r['p95']), 'first': int(r['first'])}
     return day, per
+
+
+SEEN_MIN = 3 * 3600      # (1.15.1) hours of counters before «what the flows see»: long sessions report every 30 minutes
+
+
+def flows_seen(p, cper):
+    """(1.15.1) {(dev, idx, d): % of the counted bytes the flows carry} over the time both have — from a device's first
+    counter read (+ 10 minutes, the first read gives no rate) to 10 minutes ago (the flows of the last minutes are still
+    coming) — as soon as that is SEEN_MIN long; before, it waited for whole days (a new SNMP device showed nothing)."""
+    end = int(time.time()) // 300 * 300 - 600
+    starts = {}
+    for (dev, idx, src, d), v in cper.items():
+        starts[dev] = min(starts.get(dev, v['first']), v['first'])
+    starts = {dev: max(t + 600, p['_t0']) for dev, t in starts.items() if end - max(t + 600, p['_t0']) >= SEEN_MIN}
+    if not starts:
+        return {}
+    q = dict(p, cE=end)
+    conds = []
+    for n, (dev, t) in enumerate(sorted(starts.items())):
+        q[f'cx{n}'], q[f'ct{n}'] = dev, t
+        conds.append(f'(exporter = {{cx{n}:String}} AND {{col}} >= toDateTime({{ct{n}:UInt32}}))')
+    cond = lambda col: '(' + ' OR '.join(c.replace('{col}', col) for c in conds) + ')'      # noqa: E731
+    flows = {(r['exporter'], int(r['i']), int(r['d'])): int(r['b']) for r in ch(f"""SELECT exporter, i, d, sum(v) AS b FROM ({_five_min(p)})
+        WHERE {cond('t')} AND t < toDateTime({{cE:UInt32}}) GROUP BY exporter, i, d""", q, fmt='JSON', timeout=120, settings=CAP_SETTINGS)}
+    ctr = {}
+    for r in ch(f"""SELECT exporter, i, src, d, sum(delta) AS b FROM ({_counter_rates()}) WHERE {cond('ts')} AND ts < toDateTime({{cE:UInt32}})
+            GROUP BY exporter, i, src, d""", q, fmt='JSON', timeout=120):
+        key = (r['exporter'], int(r['i']), int(r['d']))
+        if r['src'] == 'snmp' or key not in ctr:
+            ctr[key] = int(r['b'])
+    return {k: round(100 * flows.get(k, 0) / b, 1) for k, b in ctr.items() if b > 10_000_000}
 
 def api_capacity(q):
     """(1.13.0) Capacity planning: every interface of every device, day by day over whole local days — the busiest 5
@@ -1504,6 +1536,7 @@ def api_capacity(q):
             csrc[(dev, idx)] = src
     for key in csrc:
         by.setdefault(key, [])
+    seen_all = flows_seen(p, cper) if cper else {}
     keep, skipped = _cap_filter(q)
     cfg = exporters_cfg(raw=True)
     sset, sdata = snmp.load_settings(), snmp.load_data()
@@ -1526,22 +1559,21 @@ def api_capacity(q):
             e[1 + d], e[3 + d] = int(r['p95']) * 8 / 300, int(r['peak']) * 8 / 300
             e[5] = max(e[5], int(r['m']))
             e[6] += int(r['bytes'])
-        # a day with counters for at least half of it takes their figures (every octet, the busiest minute); the
-        # flows' bytes of such days against the counters' = how much of the link the flows see
-        fbytes = {(int(r['day']), int(r['d'])): int(r['bytes']) for r in rs}
+        # a day with counters for at least half of it takes their figures (every octet, the busiest minute); what the
+        # flows see: flows_seen, over the hours both have
         seen = {}
+        # (1.15.1) a link no flow describes has the counters as its only source: their days count from the first read
+        only_ctr = bool(src) and not any(int(r['bytes']) for r in rs)
         for d in (0, 1):
-            cdays = {k[4]: v for k, v in cday.items() if k[:4] == (dev, idx, src, d) and v['m'] >= 144}
+            cdays = {k[4]: v for k, v in cday.items() if k[:4] == (dev, idx, src, d) and (v['m'] >= 144 or only_ctr and v['m'] > 0)}
             for dy, v in cdays.items():
                 e = series.setdefault(dy, [dy, 0, 0, 0, 0, 0, 0, 0])
                 e.extend([0] * (8 - len(e)))
                 e[1 + d], e[3 + d], e[5], e[7] = v['p95'], v['peak'], max(e[5], v['m']), 1
-            both = [dy for dy in cdays if dy < today and (dy, d) in fbytes]
-            cb = sum(cdays[dy]['bytes'] for dy in both)
-            seen['in' if d == 0 else 'out'] = round(100 * sum(fbytes[(dy, d)] for dy in both) / cb, 1) if cb > 10_000_000 else None
+            seen['in' if d == 0 else 'out'] = seen_all.get((dev, idx, d))
         days_l = [series[k] + [0] * (8 - len(series[k])) for k in sorted(series)]
         first = days_l[0][0] if days_l else today
-        ctr = bool(src) and sum(1 for e in days_l if e[7]) * 2 >= max(1, len(days_l))       # counters for most days
+        ctr = bool(src) and (only_ctr or sum(1 for e in days_l if e[7]) * 2 >= max(1, len(days_l)))     # counters for most days
         dirs = {}
         for name, d, cap in (('in', 0, info['cap_in']), ('out', 1, info['cap_out'])):
             pts = [(round((e[0] - first) / 86400), e[1 + d]) for e in days_l if e[0] < today and e[5] >= 144]
@@ -1563,7 +1595,8 @@ def api_capacity(q):
         out.append({'device': dev, 'device_name': c.get('name') or dev, 'index': idx, 'name': info['name'], 'role': info['role'],
                     'cap_in': info['cap_in'], 'cap_out': info['cap_out'], 'cap_own': info['cap_own'], 'cap_auto': info['cap_auto'],
                     'in': dirs['in'], 'out': dirs['out'], 'worst': worst, 'status': dirs[worst]['status'],
-                    'source': src if ctr else 'flows', 'seen_pct': seen if src else None,
+                    'source': src if ctr else 'flows', 'seen_pct': seen if src else None, 'counters': src,
+                    'counters_since': min((v['first'] for k, v in cper.items() if k[:3] == (dev, idx, src)), default=None) if src else None,
                     'days': [e[:5] + [e[7]] for e in days_l]})
     out.sort(key=lambda x: (capacity.RANK[x['status']], -(x[x['worst']]['p95_pct'] or -1), -(x['in']['bytes'] + x['out']['bytes'])))
     counts = {k: sum(1 for x in out if x['status'] == k) for k in capacity.RANK}

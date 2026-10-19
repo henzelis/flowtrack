@@ -72,3 +72,30 @@ class Read(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FlowsSeen(unittest.TestCase):
+    """(1.15.1) «What the flows see» over the hours both sources have, from 3 hours of counters on (it waited for whole
+    days: a device with SNMP switched on today showed nothing for a day, the counters' label for half the period)."""
+    def seen(self, hours, flows_b, ctr_b):
+        import api
+        now = 1792400000
+        cper = {('192.0.2.1', 1, 'snmp', 0): {'first': now - hours * 3600, 'bytes': 1, 'm': 1, 'secs': 1, 'peak': 0, 'p95': 0}}
+        asked = []
+
+        def ch(sql, params=None, **kw):
+            asked.append(params)
+            return [{'exporter': '192.0.2.1', 'i': 1, 'd': 0, 'b': flows_b}] if 'delta' not in sql else \
+                [{'exporter': '192.0.2.1', 'i': 1, 'src': 'snmp', 'd': 0, 'b': ctr_b}]
+        with mock.patch.object(api, 'ch', ch), mock.patch('time.time', lambda: now):
+            p = {'_t0': now - 30 * 86400, '_t1': None, '_fcols': set(), '_filt': '1', '_step': 300}
+            return api.flows_seen(p, cper), asked
+
+    def test_two_hours_is_too_early(self):
+        r, asked = self.seen(2, 50_000_000, 100_000_000)
+        self.assertEqual((r, asked), ({}, []))
+
+    def test_after_three_hours(self):
+        r, asked = self.seen(4, 48_000_000, 100_000_000)
+        self.assertEqual(r, {('192.0.2.1', 1, 0): 48.0})
+        self.assertEqual(asked[0]['ct0'], 1792400000 - 4 * 3600 + 600)            # from the first read + 10 minutes

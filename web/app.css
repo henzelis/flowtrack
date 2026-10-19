@@ -706,3 +706,5 @@ td.nowrap{white-space:nowrap}
 .utable tbody tr:hover td{background:rgba(92,140,255,.06)}
 /* (1.15.0) a long period choice wraps on a phone instead of widening the page */
 #uPerBox .seg{flex-wrap:wrap;max-width:100%}
+/* (1.15.1) counters read, figures still from the flows */
+.capsrc.soon{color:var(--ink2);font-weight:500}

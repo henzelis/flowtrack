@@ -1820,5 +1820,9 @@
  "{n} hosts, the busiest first": "хостів: {n}, найактивніші першими",
  "No data for this period yet": "Для цього періоду ще немає даних",
  "no period before to compare with: data since {date}": "немає попереднього періоду для порівняння: дані збираються з {date}",
- "column::Change": "Зміна"
+ "column::Change": "Зміна",
+ "Counters read since {date}: the days take their figures once the counters cover most of the period; what the flows see shows after 3 hours.": "Лічильники читаються з {date}: дні беруть їхні значення, коли лічильники покривають більшу частину періоду; «Потоки бачать» — через 3 години.",
+ "since {date}": "з {date}",
+ "After 3 hours of counters": "Через 3 години роботи лічильників",
+ "{n} links with counters since {date}: the comparison shows after 3 hours": "каналів із лічильниками: {n}, з {date}; порівняння — через 3 години"
 }

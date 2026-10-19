@@ -3,6 +3,13 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.15.1 — 2026-10-19
+
+- **Interface counters show from the start** (*Capacity*). «Flows see» compares the flows with the counters over the
+  hours both have, from 3 hours of counters on — it waited for whole days. A link's label says «SNMP counters since …»
+  as soon as they are read (the figures still switch to the counters for the days they cover most of). A port that no
+  flow describes takes its load from its counters at once — it showed «0 bit/s» until the days were covered.
+
 ## 1.15.0 — 2026-10-19
 
 - **Usage** — a page of its own: what each host downloaded and uploaded this month, last month or over the last
