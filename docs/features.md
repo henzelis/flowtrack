@@ -2,6 +2,11 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**New in 1.13**
+- **Capacity**: a page for planning the links — each interface day by day (busy hours = 95th percentile, busiest 5
+  minutes) against its capacity, the trend a month and the date it reaches 85 %, the load by weekday and hour, and
+  the hosts and services that drive it; the same as *Link capacity* in the reports.
+
 **New in 1.12**
 - **Sign-in through Active Directory / LDAP**: the sign-in page offers «Local account» or your directory; roles from
   groups (nested in AD), LDAPS / STARTTLS, a *Check* that shows the user's groups and role before you switch it on.
@@ -96,6 +101,16 @@
   it *Interface load*: every interface's peak, 95th percentile and average in and out over the period against its
   capacity (the port speed from SNMP / sFlow, or your own figures in and out — Settings → Devices → Interfaces), from
   the 5-minute totals, with a small chart; the fullest first.
+- *Capacity*: every interface of every device over 7 to 365 whole days (as far as the edition shows), all traffic
+  whatever the selector and filters. Per day: the 95th percentile of the 5-minute load (empty 5 minutes count as 0)
+  and the busiest 5 minutes, in and out, against the capacity. The trend is a Theil–Sen median over days a whole
+  number of weeks apart (quiet weekends are no decline, an odd day does not tilt it) on the busy days' level; a
+  forecast needs 14 complete days and reaches at most twice the history it rests on, so it gives the date a link
+  reaches 85 % and 100 % or says «not within N days». Days on which a device was mostly silent are left out of the
+  trend. A link in depth: chart with the capacity and the forecast, one sentence, weekday × hour (the busiest 5
+  minutes of each hour averaged over the weeks), and the inside hosts and services on it, recent half against
+  earlier. Status: over the limit · near full (85 % now or within a month) · will fill (within the forecast) · worth
+  watching (busy hours above 70 % or peaks above 85 %) · fine · capacity unknown.
 - *Path analysis*: the layer-3 neighbours of a chosen device (shared subnets, or found from the records — tunnels
   included) with each link's traffic as both ends recorded it, links whose far end is not seen or where traffic goes
   missing, and the hops of any source → destination path across the devices, with NAT and gaps.

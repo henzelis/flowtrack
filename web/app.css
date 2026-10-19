@@ -688,7 +688,7 @@ td.nowrap{white-space:nowrap}
 .caplegend i.lc{width:18px;height:2px;border-radius:1px;background:var(--crit);vertical-align:3px}
 .capsay{margin:12px 0 0;font-size:14px;line-height:1.55;color:var(--ink);padding:12px 14px;border-radius:12px;background:rgba(47,123,255,.08);border:1px solid var(--hair)}
 .capsay:empty{display:none}
-.capheat{display:grid;grid-template-columns:26px repeat(24,1fr);gap:3px;align-items:center;margin-top:6px}
+.capheat{display:grid;grid-template-columns:34px repeat(24,1fr);gap:3px;align-items:center;margin-top:6px}
 .capheat i{display:block;aspect-ratio:1;border-radius:3px;min-width:6px}
 .capheat .hh{font:500 10px var(--f-mono);color:var(--ink3);text-align:left}
 .capheat .wd{font:600 11px var(--f-ui,inherit);color:var(--ink2)}

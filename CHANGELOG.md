@@ -3,6 +3,23 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **Capacity** — a page of its own for planning the links: every interface of every device day by day over 7 to 365
+  days (as far as your edition shows), the busy hours (95th percentile of the 5-minute load) and the busiest 5
+  minutes against its capacity, the trend a month and **the date it reaches 85 %** of the capacity. Cards on top: links
+  near full, the first that fills, the fastest growth, how many links have a known capacity. A link opens in depth:
+  the trend chart with the capacity, the forecast carried on dashed and where they meet; a sentence that says it in
+  words; the load by weekday and hour; the inside hosts and services on the link, the recent half of the period
+  against the earlier one (who drives the growth). The trend compares days a whole number of weeks apart (quiet
+  weekends are no decline, one odd day does not tilt it) and never forecasts further than twice the history it rests
+  on; a forecast needs 14 days.
+- **The interface filter takes a name**: `iface:wan` in the search box is that interface on every device that has one
+  (your own name or the SNMP one, any case); a number works as before, and the chip shows the name as typed.
+- Capacity follows the device and interface filters (also in reports); other filters are said not to apply there.
+- **Link capacity in reports**: the links with a known capacity, their busy-hour load in and out, the trend and the
+  date each reaches 85 %, with a sentence for those to plan for. Switched on once in the reports made before.
+
 ## 1.12.1 — 2026-10-18
 
 - **Delete the mail server** (*Settings → General → Mail server*): asked for in a window of its own that says what

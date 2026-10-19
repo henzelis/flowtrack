@@ -1113,7 +1113,7 @@ async function ifLoadPanel(ip, seq){
 const CAP_IN = '#27D3F5', CAP_OUT = '#FF9F43';
 const CAP_STATUS = () => ({over:[T('Over the limit'), 'crit'], full:[T('Near full'), 'crit'], soon:[T('Will fill'), 'warn'], watch:[T('Worth watching'), 'warn'], ok:[T('Fine'), 'ok'], unknown:[T('Capacity unknown'), '']});
 const capTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } };
-const capApi = (path, params = {}) => apiFetch(`api/${path}?${new URLSearchParams({days:state.capDays || 30, tz:capTz(), ...params})}`);
+const capApi = (path, params = {}) => apiFetch(`api/${path}?${new URLSearchParams({days:state.capDays || 30, tz:capTz(), f:JSON.stringify(state.filters), ...params})}`);
 const dMon = t => new Date(t * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'});
 const capDir = d => d === 'in' ? T('incoming traffic') : T('outgoing traffic');
 const capOf = (x, d) => (d === 'in' ? x.cap_in : x.cap_out) * 1e6;
@@ -1145,7 +1145,7 @@ function vCapacity(){
   const v = document.getElementById('view');
   const days = state.capDays || 30;
   v.innerHTML = `<div class="grid"><div id="capKpi" style="display:contents"></div>
-    <section class="glass panel s12">${ph(CAP_ICON, T('page::Capacity'), T('how full each link is on its busy days and where it is heading · all traffic, whatever the selector and filters at the top · whole days'), '<span id="capDaysBox"></span>', true)}<div id="capTable" class="loading"></div></section>
+    <section class="glass panel s12">${ph(CAP_ICON, T('page::Capacity'), T('how full each link is on its busy days and where it is heading · all its traffic · whole days · the device and interface filters apply'), '<span id="capDaysBox"></span>', true)}<div id="capTable" class="loading"></div></section>
     <section class="glass panel s8" id="capDetailS">${ph('chart', `<span id="capDetT">${T('Trend and forecast')}</span>`, `<span id="capDetSub">${T('daily 95th percentile, the trend of the busy days and where it meets the capacity')}</span>`, '<span id="capDirBox"></span>')}<div id="capChart" class="loading"></div><p class="capsay" id="capSay"></p></section>
     <section class="glass panel s4">${ph('pulse', T('When it is busy'), T('busiest 5 minutes of each hour, averaged over the weeks'))}<div id="capHeat" class="loading"></div></section>
     <section class="glass panel s6">${ph('users', T('Hosts on this link'), `<span id="capHalfH">${T('recent half of the period against the earlier one')}</span>`)}<div id="capHosts" class="loading"></div></section>
@@ -1161,7 +1161,8 @@ function vCapacity(){
     document.querySelectorAll('#capDays button').forEach(b => { if (+b.dataset.v > d.max_days) b.disabled = true; });
     wireSeg('capDays', n => { if (+n === d.days || +n > d.max_days) return; state.capDays = +n; render(); });
     const all = d.interfaces, st = CAP_STATUS();
-    if (!all.length) { done('capTable', `<div class="empty">${T('No interface traffic in this period')}</div>`); ['capChart', 'capHeat', 'capHosts', 'capSvcs'].forEach(id => done(id, '')); return; }
+    const skip = (d.unfiltered || []).map(k => FILTER_LABEL[k] || k), skipNote = skip.length ? `<p class="note evskip">${T('Not applied here')}: ${esc(skip.join(', '))}</p>` : '';
+    if (!all.length) { done('capTable', skipNote + `<div class="empty">${state.filters.some(f => f.k === 'device' || f.k === 'iface') ? T('No link matches these filters') : T('No interface traffic in this period')}</div>`); ['capChart', 'capHeat', 'capHosts', 'capSvcs'].forEach(id => done(id, '')); return; }
     // the cards
     const kc = (ic, k, val, sub, col) => `<section class="glass panel kcard s3" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span><span class="nat" style="grid-column:2">${sub}</span></section>`;
     const near = all.filter(x => x.status === 'over' || x.status === 'full'), soon = all.filter(x => x.status === 'soon');
@@ -1190,7 +1191,7 @@ function vCapacity(){
     const capTxt = x => !x.cap_in && !x.cap_out ? `<span class="nat">${T('unknown')}</span>` : `<span class="mono">${x.cap_in === x.cap_out ? fmtR(x.cap_in * 1e6) : `${fmtR(x.cap_in * 1e6)} ↓<br>${fmtR(x.cap_out * 1e6)} ↑`}</span><div class="nat">${x.cap_own ? T('your figures') : T('port speed')}</div>`;
     const key = x => `${x.device}|${x.index}`;
     if (!all.some(x => key(x) === state.capSel)) state.capSel = key(all[0]);
-    done('capTable', `<div class="tw"><table class="compact ldtable captable"><thead><tr><th>${T('Status')}</th><th>${T('Interface')}</th><th>${T('Capacity')}</th><th>${T('In (95th percentile)')}</th><th>${T('Out (95th percentile)')}</th><th>${T('Trend')}</th><th>${T('Reaches {pct}%', {pct:d.full_pct})}</th><th>${T('Day by day')} <span class="nat" style="font-weight:500"><span style="color:${CAP_IN}">— ${T('in')}</span> <span style="color:${CAP_OUT}">— ${T('out')}</span></span></th></tr></thead><tbody>
+    done('capTable', skipNote + `<div class="tw"><table class="compact ldtable captable"><thead><tr><th>${T('Status')}</th><th>${T('Interface')}</th><th>${T('Capacity')}</th><th>${T('In (95th percentile)')}</th><th>${T('Out (95th percentile)')}</th><th>${T('Trend')}</th><th>${T('Reaches {pct}%', {pct:d.full_pct})}</th><th>${T('Day by day')} <span class="nat" style="font-weight:500"><span style="color:${CAP_IN}">— ${T('in')}</span> <span style="color:${CAP_OUT}">— ${T('out')}</span></span></th></tr></thead><tbody>
       ${all.map(x => `<tr class="caprow" data-k="${esc(key(x))}" tabindex="0" aria-selected="${key(x) === state.capSel}"><td><span class="pill ${st[x.status][1]}">${st[x.status][0]}</span></td>
         <td><b>${esc(x.name)}</b> ${x.role === 'wan' ? '<span class="pill warn">WAN</span>' : ''}<div class="nat">${esc(x.device_name)}</div></td><td>${capTxt(x)}</td>${dirCell(x, 'in')}${dirCell(x, 'out')}${trendCell(x)}${whenCell(x)}<td>${spark(x)}</td></tr>`).join('')}</tbody></table></div>
       <p class="note">${T('95th percentile = the load of the busy hours: only 5% of the 5-minute periods were busier. The trend compares days a whole number of weeks apart, so quiet weekends are no decline, and a forecast never reaches further than twice the history it rests on. In = entering the device through the interface, out = leaving through it.')}
@@ -1220,8 +1221,8 @@ function capChart(x, d){
   const nT = Math.min(6, Math.max(2, Math.round((t1 - t0) / 86400 / 7)));
   for (let i = 0; i <= nT; i++) { const t = t0 + (t1 - t0) * i / nT; g += `<text x="${X(t).toFixed(1)}" y="${H - 8}" class="caxis" text-anchor="${i === 0 ? 'start' : i === nT ? 'end' : 'middle'}">${esc(dMon(t))}</text>`; }
   if (t1 > today) g += `<rect x="${X(today + 86400).toFixed(1)}" y="${Tp}" width="${(X(t1) - X(today + 86400)).toFixed(1)}" height="${H - Tp - B}" class="cfuture"/><text x="${(X(today + 86400) + 6).toFixed(1)}" y="${Tp + 14}" class="caxis">${T('forecast')}</text>`;
-  if (cap) g += `<line x1="${L}" x2="${W - R}" y1="${Y(cap).toFixed(1)}" y2="${Y(cap).toFixed(1)}" class="ccap"/><text x="${W - R - 4}" y="${(Y(cap) - 6).toFixed(1)}" class="caxis ccapt" text-anchor="end">${T('capacity')} ${esc(fmtR(cap))}</text>`
-    + `<line x1="${L}" x2="${W - R}" y1="${Y(cap * CAP.full_pct / 100).toFixed(1)}" y2="${Y(cap * CAP.full_pct / 100).toFixed(1)}" class="cfull"/><text x="${W - R - 4}" y="${(Y(cap * CAP.full_pct / 100) - 6).toFixed(1)}" class="caxis cfullt" text-anchor="end">${CAP.full_pct}%</text>`;
+  if (cap) g += `<line x1="${L}" x2="${W - R}" y1="${Y(cap).toFixed(1)}" y2="${Y(cap).toFixed(1)}" class="ccap"/><text x="${L + 6}" y="${(Y(cap) - 6).toFixed(1)}" class="caxis ccapt">${T('capacity')} ${esc(fmtR(cap))}</text>`
+    + `<line x1="${L}" x2="${W - R}" y1="${Y(cap * CAP.full_pct / 100).toFixed(1)}" y2="${Y(cap * CAP.full_pct / 100).toFixed(1)}" class="cfull"/><text x="${L + 6}" y="${(Y(cap * CAP.full_pct / 100) - 6).toFixed(1)}" class="caxis cfullt">${CAP.full_pct}%</text>`;
   g += `<polyline points="${rows.map(r => `${X(r[0] + 43200).toFixed(1)},${Y(r[k + 2]).toFixed(1)}`).join(' ')}" fill="none" stroke="${color}" stroke-opacity=".35" stroke-width="1.3"/>`;
   g += rows.map(r => `<circle cx="${X(r[0] + 43200).toFixed(1)}" cy="${Y(r[k]).toFixed(1)}" r="3.2" fill="${color}"${r[0] >= today ? ' fill-opacity=".45"' : ''}><title>${esc(dMon(r[0]))}: p95 ${esc(fmtR(r[k]))} · ${T('peak')} ${esc(fmtR(r[k + 2]))}</title></circle>`).join('');
   if (tr) {
@@ -1245,17 +1246,19 @@ async function capDetail(x, seq){
   fill('capDirBox', seg('capDir', [['in', T('In')], ['out', T('Out')]], d));
   wireSeg('capDir', v => { state.capDir = v; capDetail(x, seq); });
   const ch = fill('capChart', capChart(x, d)); if (ch) ch.classList.remove('loading');
-  fill('capSay', capSentence({...x, worst:d}));
+  fill('capSay', capSentence({...x, worst:d}).replace(/\.\.$/, '.'));         // an abbreviation with a dot at the end of a sentence
   ['capHeat', 'capHosts', 'capSvcs'].forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('loading'); });
   let r;
   try { r = await capApi('capacity/iface', {device:x.device, if:x.index}); } catch (e) { ['capHeat', 'capHosts', 'capSvcs'].forEach(id => { const el = fill(id, errBox(e)); if (el) el.classList.remove('loading'); }); return; }
   if (seq !== renderSeq || state.capSel !== `${x.device}|${x.index}`) return;
   // weekday × hour: share of the capacity when known, else of the busiest hour
-  const grid = r.heat[d], cap = capOf(x, d), max = Math.max(1, ...grid.flat()), wd = WDAYS();
-  const lvl = v => cap ? v / cap : v / max, col = v => { const p = lvl(v); return p <= 0 ? 'rgba(120,160,255,.06)' : cap && p >= CAP.full_pct / 100 ? `rgba(255,92,122,${(.45 + .5 * Math.min(1, p)).toFixed(2)})` : cap && p >= .7 ? `rgba(255,195,77,${(.35 + .5 * p).toFixed(2)})` : `rgba(39,211,245,${(.1 + .8 * Math.min(1, cap ? p / .7 : p)).toFixed(2)})`; };
+  const grid = r.heat[d], cap = capOf(x, d), max = Math.max(1, ...grid.flat()), wd = WDAYS(), wds = [...Array(7)].map((_, i) => new Date(Date.UTC(2026, 0, 5 + i)).toLocaleDateString(LOC, {weekday:'short', timeZone:'UTC'}));
+  // brightness against the busiest hour (the rhythm shows on a quiet link too), the colour by the share of the capacity
+  const col = v => { const a = (.12 + .83 * v / max).toFixed(2), p = cap ? v / cap : 0;
+    return v <= 0 ? 'rgba(120,160,255,.06)' : p >= CAP.full_pct / 100 ? `rgba(255,92,122,${a})` : p >= .7 ? `rgba(255,195,77,${a})` : `rgba(39,211,245,${a})`; };
   const heat = `<div class="capheat"><span></span>${[...Array(24)].map((_, h) => `<span class="hh">${h % 3 ? '' : h}</span>`).join('')}
-    ${grid.map((row, w) => `<span class="wd">${esc(wd[w].slice(0, 2))}</span>${row.map((v, h) => `<i style="background:${col(v)}" title="${esc(wd[w])} ${String(h).padStart(2, '0')}:00 · ${esc(fmtR(v))}${cap ? ` · ${Math.round(100 * v / cap)}%` : ''}"></i>`).join('')}`).join('')}</div>
-    <p class="note">${cap ? T('Colour = share of the capacity: blue below 70%, amber above, red above {pct}%.', {pct:CAP.full_pct}) : T('Colour = against the busiest hour (the capacity is unknown).')} ${T('Direction: {dir}.', {dir:capDir(d)})}</p>`;
+    ${grid.map((row, w) => `<span class="wd">${esc(wds[w])}</span>${row.map((v, h) => `<i style="background:${col(v)}" title="${esc(wd[w])} ${String(h).padStart(2, '0')}:00 · ${esc(fmtR(v))}${cap ? ` · ${Math.round(100 * v / cap)}%` : ''}"></i>`).join('')}`).join('')}</div>
+    <p class="note">${cap ? T('Brighter = busier; colour = share of the capacity: blue below 70%, amber above, red above {pct}%.', {pct:CAP.full_pct}) : T('Brighter = busier (the capacity is unknown).')} ${T('Direction: {dir}.', {dir:capDir(d)})}</p>`;
   const h = fill('capHeat', heat); if (h) h.classList.remove('loading');
   const half = `${dMon(r.from)} – ${dMon(r.mid)} → ${dMon(r.mid)} – ${dMon(r.to)}`;
   fill('capHalfH', half); fill('capHalfS', half);
@@ -4005,7 +4008,7 @@ function renderShell(){
   // on narrow screens the menu is a scrolling row: keep the current page in sight
   const cur = document.querySelector('#nav [aria-current="page"]'), navEl = document.getElementById('nav');
   if (cur && navEl.scrollWidth > navEl.clientWidth) navEl.scrollLeft += cur.getBoundingClientRect().left - navEl.getBoundingClientRect().left - (navEl.clientWidth - cur.offsetWidth) / 2;
-  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${chipKey(f)}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter')}" data-i="${i}">×</button></span>`).join('')
+  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${chipKey(f)}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') && /^\d+$/.test(f.v) ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter')}" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
@@ -4091,7 +4094,7 @@ const QHELP = () => [
     ['asn', T('network owner: AS number or name'), 'AS15169 · Google'], ['country', T('country: two letters'), 'US · UA'], ['city', T('city'), 'Kyiv']]],
   [T('What'), [['service', T('service by address'), 'Telegram · YouTube'], ['l7', T('protocol by port'), 'HTTPS · DNS'], ['port', T('port of the server'), '443 · 3389'],
     ['proto', T('L4 protocol number'), T('6 = TCP · 17 = UDP · 1 = ICMP')]]],
-  [T('Where'), [['device', T('device: name or address'), (META.devices && META.devices[0] || {}).name || 'fw-main'], ['iface', T('interface number, in or out'), '5'],
+  [T('Where'), [['device', T('device: name or address'), (META.devices && META.devices[0] || {}).name || 'fw-main'], ['iface', T('interface: name or number, in or out'), 'wan'],
     ['in_if', T('input interface number'), '5'], ['out_if', T('output interface number'), '1'], ['dir', T('direction: up · down · internal'), 'up']]]];
 const QKEY_INFO = () => Object.fromEntries(QHELP().flatMap(([, rows]) => rows.map(r => [r[0], r])));
 // (1.8.7) a named network as typed: spaces of its name as _ (a word of the box has none), any case
@@ -4128,7 +4131,8 @@ function qParse(t){
     if (key === 'device') { const d = (META.devices || []).find(x => x.ip === v || (x.name || '').toLowerCase() === v.toLowerCase()); if (d) v = d.ip; }   // by name too
     if (key === 'ip' || key === 'dst') { const c = addrCheck(v); if (!c.ok) return {err:c.msg}; v = c.v; }
     if (key === 'net') { const n = netFind(v); if (!n) return {err:(META.networks || []).length ? T('No network named {v}: name networks in Settings → Flow configuration', {v}) : T('No named networks yet: name them in Settings → Flow configuration')}; v = n.name; }
-    if (['port', 'proto', 'in_if', 'out_if', 'iface'].includes(key) && !/^\d+$/.test(v)) return {err:T('{key} takes a number: {v}', {key, v})};
+    if (['port', 'proto', 'in_if', 'out_if'].includes(key) && !/^\d+$/.test(v)) return {err:T('{key} takes a number: {v}', {key, v})};
+    if (key === 'iface' && !/^\d+$/.test(v) && !/^[\w.\/:-]{1,60}$/.test(v)) return {err:T('{key} takes a number or a name: {v}', {key, v})};      // (1.13.0) iface:wan
     return {f:{k:key, v, neg}}; }
   if (/^[\d.]+(\/\d+)?$/.test(t) && t.split('.').length === 4 || /^[0-9a-f]*:[0-9a-f:.]*(\/\d+)?$/i.test(t) && !FILTER_KEYS.includes(key)) { const c = addrCheck(t); if (!c.ok) return {err:c.msg};
     return {f:{k:isPrivate(c.v) ? 'ip' : 'dst', v:c.v, neg}}; }

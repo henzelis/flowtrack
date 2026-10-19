@@ -224,10 +224,18 @@ def scope(q):
             cond = f'(int_ip = {{f{i}:String}} OR ext_ip = {{f{i}:String}})'
             fcols |= {'int_ip', 'ext_ip'}
         elif k == 'iface':
-            if not (v.isascii() and v.isdigit()):
-                raise BadRequest('bad value for iface')
-            cond = f'(in_if = {{f{i}:UInt32}} OR out_if = {{f{i}:UInt32}})'
-            fcols |= {'in_if', 'out_if'}
+            if v.isascii() and v.isdigit():
+                cond = f'(in_if = {{f{i}:UInt32}} OR out_if = {{f{i}:UInt32}})'
+                fcols |= {'in_if', 'out_if'}
+            else:                 # (1.13.0) by name (wan, port1, ether1): that interface on each device that has one
+                hits = ifaces_named(v)
+                if not hits:
+                    raise BadRequest(tr('no interface named {name}', name=v[:50]))
+                for n, (dev, idx) in enumerate(hits):
+                    params[f'f{i}d{n}'], params[f'f{i}i{n}'] = dev, idx
+                cond = '(' + ' OR '.join(f'(exporter = {{f{i}d{n}:String}} AND (in_if = {{f{i}i{n}:UInt32}} OR out_if = {{f{i}i{n}:UInt32}}))'
+                                         for n in range(len(hits))) + ')'
+                fcols |= {'exporter', 'in_if', 'out_if'}
         elif k in FILTERS:
             col, typ = FILTERS[k]
             if typ != 'String' and not (v.isascii() and v.isdigit()) or k == 'dir' and v not in DIR_VALUES:
@@ -1044,6 +1052,21 @@ def iface(c, idx, nbytes, ext, seen=(), sn=None):
             **if_capacity(c, idx, si.get('speed') or 0)}
 
 
+def ifaces_named(name):
+    """(1.13.0) [(device, index)] of the interfaces called `name` (any case): your own name, else the SNMP one."""
+    name = name.strip().lower()
+    sset, sdata = snmp.load_settings(), snmp.load_data()
+    out = []
+    for dev, c in exporters_cfg(raw=True).items():
+        sn = sdata.get(dev) if sset.get(dev, {}).get('enabled') else None
+        idxs = {int(k) for key in ('if_names', 'if_addrs', 'if_caps') for k in (c.get(key) or {}) if str(k).isdigit()}
+        idxs |= {int(k) for k in (sn or {}).get('ifs', {}) if str(k).isdigit()} | set(c.get('wan_ifs', []))
+        for idx in sorted(idxs):
+            info = iface(c, idx, 0, 0, (), sn)
+            if name in (info['name'].lower(), info['snmp_name'].lower()):
+                out.append((dev, idx))
+    return out
+
 def if_capacity(c, idx, auto_mbps):
     """(1.12.0) What an interface can carry, Mbit/s in and out: the operator's own figures (an ISP contract of 300 / 50
     on a 1 Gbit/s port) or the port's speed (SNMP ifHighSpeed, else the sFlow counters' ifSpeed); 0 = unknown."""
@@ -1344,6 +1367,32 @@ def _cap_scope(q, extra_f=()):
     return days, tz, today, p
 
 
+def _cap_filter(q):
+    """(1.13.0) Capacity follows the device and interface filters (an interface by number or by name; several of one
+    key: any of them; '-' leaves out) -> (keep(dev, idx, info), the keys of the other filters, which do not apply:
+    a link is full or not whatever part of its traffic one looks at)."""
+    try:
+        flt = json.loads(q.get('f', ['[]'])[0])
+    except ValueError:
+        raise BadRequest('bad filter JSON')
+    flt = [f for f in flt if isinstance(f, dict)] if isinstance(flt, list) else []
+    cfg = exporters_cfg(raw=True)
+
+    def hit(f, dev, idx, info):
+        v = str(f.get('v', '')).strip()
+        if f['k'] == 'device':
+            return v == dev or v.lower() == str(cfg.get(dev, {}).get('name', '')).lower()
+        return str(idx) == v if v.isdigit() else v.lower() in (info['name'].lower(), info['snmp_name'].lower())
+    use = [f for f in flt if f.get('k') in ('device', 'iface')]
+
+    def keep(dev, idx, info):
+        for k in ('device', 'iface'):
+            pos = [f for f in use if f['k'] == k and not f.get('neg')]
+            if pos and not any(hit(f, dev, idx, info) for f in pos):
+                return False
+        return not any(hit(f, dev, idx, info) for f in use if f.get('neg'))
+    return keep, sorted({str(f.get('k')) for f in flt if f.get('k') not in ('device', 'iface')})
+
 def api_capacity(q):
     """(1.13.0) Capacity planning: every interface of every device, day by day over whole local days — the busiest 5
     minutes, the 95th percentile of the 5-minute load (empty ones count as 0) and the bytes, into and out of it — with
@@ -1361,6 +1410,7 @@ def api_capacity(q):
     by = {}
     for r in rows:
         by.setdefault((r['exporter'], int(r['i'])), []).append(r)
+    keep, skipped = _cap_filter(q)
     cfg = exporters_cfg(raw=True)
     sset, sdata = snmp.load_settings(), snmp.load_data()
     cnts = sflow_counters()
@@ -1372,6 +1422,8 @@ def api_capacity(q):
         if total < 1_000_000 and not own:
             continue
         info = if_info(c, idx, sdata.get(dev) if sset.get(dev, {}).get('enabled') else None, cnts.get(dev, {}))
+        if not keep(dev, idx, info):
+            continue
         series = {}
         for r in rs:
             e = series.setdefault(int(r['day']), [int(r['day']), 0, 0, 0, 0, 0, 0])
@@ -1401,7 +1453,7 @@ def api_capacity(q):
                     'days': [e[:5] for e in days_l]})
     out.sort(key=lambda x: (capacity.RANK[x['status']], -(x[x['worst']]['p95_pct'] or -1), -(x['in']['bytes'] + x['out']['bytes'])))
     counts = {k: sum(1 for x in out if x['status'] == k) for k in capacity.RANK}
-    return {'days': days, 'max_days': view_days(), 'choices': [d for d in CAP_DAYS if d <= max(view_days(), CAP_DAYS[0])], 'tz': tz,
+    return {'unfiltered': skipped, 'days': days, 'max_days': view_days(), 'choices': [d for d in CAP_DAYS if d <= max(view_days(), CAP_DAYS[0])], 'tz': tz,
             'from': p['_t0'], 'to': p['t1'], 'today': today, 'forecast_days': capacity.FORECAST_DAYS,
             'watch_pct': capacity.WATCH_PCT, 'full_pct': capacity.FULL_PCT, 'counts': counts, 'interfaces': out}
 

@@ -96,6 +96,20 @@ near its limit.
 
 <p align="center"><img src="docs/media/en/interface-load.webp" alt="Interface load: peak, 95th percentile and average against the capacity" width="100%"></p>
 
+### Capacity — know when a link fills up, weeks ahead
+
+Every link of every device, day by day: how full it is in the busy hours, how fast that grows and **the date it
+reaches 85 %** of its capacity — so the upgrade is ordered before users feel it, not after. Quiet weekends do not
+pass for a decline and one odd day does not bend the trend; the forecast never reaches further than the history
+can carry.
+
+<p align="center"><img src="docs/media/en/capacity.webp" alt="Capacity: links near full, the first to fill, the fastest growth; each link's busy-hour load, trend and the date it reaches 85 %" width="100%"></p>
+
+Open a link to see the trend meet the capacity, the hours of the week when it is busy, and the hosts and services
+that drive the growth. The same picture arrives in your scheduled reports as *Link capacity*.
+
+<p align="center"><img src="docs/media/en/capacity-forecast.webp" alt="One link in depth: daily busy-hour load, the trend carried into a forecast that meets 85 % on a date, and a weekday × hour heat map" width="100%"></p>
+
 ### Top hosts and your own networks
 
 Name your networks once (*172.16.0.0/24 → Office*) and see the traffic, trend and main services of each — or of every
@@ -134,7 +148,8 @@ own system) and your SIEM as syslog (CEF or JSON).
 ### Reports — by e-mail, on schedule or for any period
 
 A PDF for the management or the duty engineer: totals against the period before, traffic over time, the busiest hosts,
-outside networks, services, countries, your networks, security events and the devices. Daily, weekly or monthly on
+outside networks, services, countries, your networks, link capacity with the date each link fills, security events and the
+devices. Daily, weekly or monthly on
 the day and hour you choose, in English or Ukrainian — or, after an attack or an outage, for exactly the period and
 filters on your screen, with one click.
 

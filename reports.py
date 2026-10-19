@@ -278,7 +278,7 @@ def collect(r, t0, t1, call):
     if 'devices' in sec:
         d['devices'] = call('/api/devices', {})['devices']
     if 'capacity' in sec:          # (1.13.0) whole days up to now in the report's zone: at least 30 for a trend
-        d['capacity'] = call('/api/capacity', {'days': [str(max(30, -(-(t1 - t0) // 86400)))], 'tz': [r['tz']]})
+        d['capacity'] = call('/api/capacity', {'days': [str(max(30, -(-(t1 - t0) // 86400)))], 'tz': [r['tz']], 'f': base['f']})
     return d
 
 
