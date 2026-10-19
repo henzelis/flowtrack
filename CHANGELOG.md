@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.14.0 — 2026-10-19
 
 - **The interfaces' own counters over SNMP.** For every device with SNMP on, the collector reads each interface's
   64-bit octet counters (32-bit where a device has no others; a wrap is undone), errors, discards and state every
