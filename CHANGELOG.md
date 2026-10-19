@@ -3,6 +3,16 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **A tunnel's own packets counted twice** (MikroTik / RouterOS): the outer GRE packets a router sends to the far end
+  of a tunnel were recorded as entering through the tunnel interface, so the tunnel's incoming traffic held its own
+  outgoing traffic again (a real GRE tunnel: 167 % of its counters). Outer tunnel packets (GRE, IPsec ESP, IPIP, 6in4)
+  sent from the device's own public address now come from the device itself — on *Capacity*, *Through device* and
+  *Path analysis*. Records stored before stay as they were.
+- *Capacity*: «Flows see» compares the last 3 days at most — it follows a change of the export (a sampler switched on)
+  within days.
+
 ## 1.15.1 — 2026-10-19
 
 - **Interface counters show from the start** (*Capacity*). «Flows see» compares the flows with the counters over the

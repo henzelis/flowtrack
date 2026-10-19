@@ -1482,6 +1482,7 @@ def counter_days(p, where=''):
 
 
 SEEN_MIN = 3 * 3600      # (1.15.1) hours of counters before «what the flows see»: long sessions report every 30 minutes
+SEEN_DAYS = 3            # (1.15.2) over the last days only
 
 
 def flows_seen(p, cper):
@@ -1492,7 +1493,10 @@ def flows_seen(p, cper):
     starts = {}
     for (dev, idx, src, d), v in cper.items():
         starts[dev] = min(starts.get(dev, v['first']), v['first'])
-    starts = {dev: max(t + 600, p['_t0']) for dev, t in starts.items() if end - max(t + 600, p['_t0']) >= SEEN_MIN}
+    # (1.15.2) at most the last SEEN_DAYS: the share follows a change of the export (a sampler switched on) within days,
+    # and records stored before a fix of the collector do not weigh on it for the whole period
+    starts = {dev: max(t + 600, p['_t0'], end - SEEN_DAYS * 86400) for dev, t in starts.items()}
+    starts = {dev: t for dev, t in starts.items() if end - t >= SEEN_MIN}
     if not starts:
         return {}
     q = dict(p, cE=end)

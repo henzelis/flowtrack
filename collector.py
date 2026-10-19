@@ -115,6 +115,9 @@ def utc_ms(ts):
     return datetime.fromtimestamp(ts, timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
 
+TUNNEL_PROTOS = {4, 41, 47, 50}      # IPIP, 6in4, GRE, ESP: a tunnel's outer packets
+
+
 class Exporter:
     """What the configuration says about an exporter; decoding state (templates, sampling learned from options
     records, the interfaces seen on ingress) lives in the compiled core."""
@@ -362,6 +365,11 @@ class Collector:
             rate = e.cfg_sampling
         if rate > 1:                    # sampled exporters report 1 of every N packets: scale up
             nbytes, npkts = nbytes * rate, npkts * rate
+        # (1.15.2) a tunnel's own outer packets (GRE, ESP, IPIP, 6in4) that the device sends from its own address come
+        # from the device itself; RouterOS reports them as entering through the tunnel interface (the encapsulation
+        # step), which doubled the tunnel's incoming traffic (167 % of its counters on a real GRE tunnel)
+        if proto in TUNNEL_PROTOS and in_if and src in e.self_ips:
+            in_if = 0                    # what NetFlow uses for the device itself (RouterOS does for its other own traffic)
 
         # inside / outside endpoint and direction
         if e.wan and out_if in e.wan and in_if not in e.wan:

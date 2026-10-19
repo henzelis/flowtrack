@@ -49,3 +49,27 @@ class DestinationNat(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TunnelOwnPackets(unittest.TestCase):
+    """(1.15.2) hap_ac2 (RouterOS) on prod: the outer GRE packets it sends to the far end of a tunnel were recorded as
+    entering through the tunnel interface (in_if 11 → ether1, proto 47, from its own public address) — the tunnel's
+    «in» was 167 % of its counters. They come from the device itself now."""
+    def setUp(self):
+        self.c = C.Collector(accounting=False, rate_limit=False)
+        self.e = C.Exporter('192.0.2.1', {'wan_ifs': [2], 'public_ips': [PUB], 'local_if': 9})   # hap_ac2: bridge as «local»
+
+    def store(self, src, dst, in_if, out_if, proto):
+        self.c.buf = []
+        self.c.store(self.e, (src, dst, 5000, 4, proto, 0, 0, in_if, out_if, 0, '0.0.0.0', 0, '0.0.0.0', 0, 1_700_000_000, 1_700_000_001, 0, 1))
+        r = self.c.buf[0]
+        return r['in_if'], r['out_if'], r['dir']
+
+    def test_own_gre_comes_from_the_device(self):
+        self.assertEqual(self.store(PUB, PEER, 11, 2, 47), (0, 2, 'up'))
+        self.assertEqual(self.store(PUB, PEER, 11, 2, 50), (0, 2, 'up'))            # IPsec ESP too
+
+    def test_others_unchanged(self):
+        self.assertEqual(self.store(PEER, PUB, 2, 0, 47), (2, 0, 'down'))           # the far end's GRE arriving
+        self.assertEqual(self.store(HOST, PEER, 11, 2, 47), (11, 2, 'up'))          # an inside host's GRE, routed
+        self.assertEqual(self.store(PUB, PEER, 11, 2, 6), (11, 2, 'up'))            # not a tunnel protocol
