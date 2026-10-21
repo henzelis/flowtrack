@@ -20,6 +20,7 @@ in Settings → General, at the bottom of every page, in the collector log and b
   above the list, each kind in the colour it has on the page.
 - The notification bell asks the server for the counts only, not for every event of the day.
 - Charts of a custom period of 1–4 days label their time axis with the date and the hour (the date alone repeated).
+- *QoS*: dragging across **Classes over time** picks that stretch of time, as on the other time charts (it did nothing).
 
 ## 1.16.0 — 2026-10-19
 

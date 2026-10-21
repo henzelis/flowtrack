@@ -1435,7 +1435,7 @@ function vQos(){
     if (!all) { ['qChart', 'qDonut', 'qIfs', 'qRemark', 'qSvc', 'qTable'].forEach(id => done(id, `<div class="empty">${T('No traffic under this filter')}</div>`)); return; }
     // classes over time: stacked areas, the class colours
     const order = cls.map(c => c.k), ts = [...new Set(d.series.map(r => r[0]))].sort((a, b) => a - b), m = new Map(d.series.map(r => [r[0] + ':' + r[1], r[2]]));
-    const ch = mkChart(done('qChart', ''));
+    const ch = zoomable(mkChart(done('qChart', '')));     // (1.16.1) drag across it for that stretch of time, as on Ports / Services
     ch.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true},
       legend:{top:0, left:0, icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}, type:'scroll'},
       tooltip:{...tipBase(), trigger:'axis', order:'valueDesc', valueFormatter:v => fmtR(v)}, xAxis:axisX(ts), yAxis:axisY(v => fmtR(v)),
