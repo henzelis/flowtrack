@@ -50,6 +50,10 @@ ROLLUPS = {
                  ('dscp_out', 'UInt8', 'dscp_out')], 'attrs': []},
     'agg_dscp_svc': {'bucket': 3600, 'keys': [('dscp', 'UInt8', 'dscp'), ('service', 'LowCardinality(String)', 'service'),
                      ('l7', 'LowCardinality(String)', 'l7'), ('int_ip', 'String', 'int_ip')], 'attrs': []},
+    # (1.16.2) Flows: the conversations (inside host x outside address) per hour, for Top conversations and the river of
+    # a whole period — a busy network repeats its pairs within the hour (200F: ~8 M records, ~130 k pairs an hour)
+    'agg_conv': {'bucket': 3600, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip')],
+                 'attrs': [('service', 'LowCardinality(String)'), ('country', 'LowCardinality(String)'), ('city', 'LowCardinality(String)')]},
     'agg_iface': {'bucket': 300, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('service', 'LowCardinality(String)', 'service')],
                   'attrs': []},
     'agg_iface_host': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('int_ip', 'String', 'int_ip'),
@@ -378,7 +382,10 @@ def ready_from(name=None):
 
 
 # smallest first; a table added later goes after those that hold the same columns, so their queries stay where they are
-PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_iface', 'agg_host', 'agg_host_svc', 'agg_iface_host', 'agg_ext', 'agg_iface_ext']
+PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_iface', 'agg_host', 'agg_host_svc', 'agg_iface_host', 'agg_ext', 'agg_iface_ext', 'agg_conv']
+# (1.16.2) only for a query that groups by the pair, or by its key columns alone (exact) — never for an attribute (a
+# service per pair and hour is any() of them) because a filter needs both ends
+PAIR_ONLY = {'agg_conv'}
 RAW_EXPR = {'has_ll': 'lat != 0', 'peer_ip': "if(dir IN ('internal', 'internal_back'), ext_ip, '')",
             'out_ip': "if(dir IN ('up', 'down'), ext_ip, '')"}       # rollup key columns that are expressions over the records
 _TYPES = {c: t for r in ROLLUPS.values() for c, t, *_ in r['keys'] + r['attrs']}
@@ -390,15 +397,17 @@ def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
     bucket divides it). -> (sql, rollup name or None). Rows have ts, exporter, dir, `cols`, the filter columns,
     bytes, packets and flows (records), so a query sums `flows` instead of count(). The period is inside; the
     filters stay with the caller. `table`: what the records are read from (api.host_view for a chosen host)."""
+    asked = set(cols)
     cols = list(dict.fromkeys(list(cols) + [c for c in flt_cols]))
     rcols = ', '.join(['ts', 'exporter', 'dir'] + [f'{RAW_EXPR[c]} AS {c}' if c in RAW_EXPR else c for c in cols if c not in ('exporter', 'dir')])
     raw = lambda cond: f"SELECT {rcols}, bytes, packets, toUInt64(1) AS flows FROM {table} WHERE {cond}"   # noqa: E731
     end = f' AND ts < toDateTime({int(t1)})' if t1 else ''
     whole = '(' + raw(f'ts >= toDateTime({int(t0)}){end}') + ')'
-    if not use:
+    if not use or table != 'flows':      # (1.16.2) a chosen host's turned records (api.host_view) are not in any rollup
         return whole, None
     need = set(flt_cols) | {'exporter', 'dir'}
     name = next((n for n in PREFER if set(cols) <= COLUMNS[n] | ATTRS[n] and need <= COLUMNS[n]
+                 and (n not in PAIR_ONLY or {'int_ip', 'ext_ip'} <= asked or asked <= COLUMNS[n])
                  and not (step and step % ROLLUPS[n]['bucket'])), None)
     rf = ready_from(name) if name else None
     if rf is None:

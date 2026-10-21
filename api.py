@@ -604,9 +604,11 @@ def api_top(q):
         # a busy day has millions of host-peer pairs: they are grouped by the pair's 64-bit hash (8 bytes instead of
         # two address strings; a collision among 10 million pairs has a chance of about 1 in 300,000), then the pairs
         # shown are read exactly with what they are
-        sums = """sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, count() AS fl, sum(packets) AS pk"""
+        # (1.16.2) whole hours from the conversations per hour (agg_conv), the edges from the records
+        sums = """sumIf(bytes, dir IN ('up', 'internal')) AS up, sumIf(bytes, dir NOT IN ('up', 'internal')) AS dn, sum(flows) AS fl, sum(packets) AS pk"""
+        pairs = src(p, ['int_ip', 'ext_ip', 'service', 'country', 'city'])
         try:
-            top, tb = ch_totals(f"""SELECT cityHash64(int_ip, ext_ip) AS h, sum(bytes) AS b FROM {p['_flows']} WHERE {where}
+            top, tb = ch_totals(f"""SELECT cityHash64(int_ip, ext_ip) AS h, sum(bytes) AS b FROM {pairs}
                 GROUP BY h WITH TOTALS ORDER BY b DESC LIMIT {{lim:UInt32}}""", p,      # beyond its memory share: on disk
                 settings={'max_memory_usage': CH_QUERY_MEMORY, 'max_bytes_before_external_group_by': CH_QUERY_MEMORY * 2 // 5})
             p['hs'], totals = [int(r['h']) for r in top], {'up': tb.get('b', 0), 'dn': 0}
@@ -616,10 +618,10 @@ def api_top(q):
             # still out of memory (other panels loading at the same time): the heaviest candidates by a bounded-memory
             # count (Space-Saving), many times the rows asked for, so the order of those shown is right
             p['k'] = min(max(200, p['lim'] * 20), 5000)
-            cand = ch(f"SELECT topKWeighted({{k:UInt16}})(cityHash64(int_ip, ext_ip), bytes) AS t, sum(bytes) AS b FROM {p['_flows']} WHERE {where}", p, fmt='JSON')[0]
+            cand = ch(f"SELECT topKWeighted({{k:UInt16}})(cityHash64(int_ip, ext_ip), bytes) AS t, sum(bytes) AS b FROM {pairs}", p, fmt='JSON')[0]
             p['hs'], totals = [int(h) for h in cand['t']], {'up': cand['b'], 'dn': 0}
-        rows = ch(f"""SELECT int_ip, ext_ip, {sums}, any(service) AS service, any(country) AS country, any(city) AS city FROM {p['_flows']}
-            WHERE {where} AND cityHash64(int_ip, ext_ip) IN {{hs:Array(UInt64)}}
+        rows = ch(f"""SELECT int_ip, ext_ip, {sums}, any(service) AS service, any(country) AS country, any(city) AS city FROM {pairs}
+            AND cityHash64(int_ip, ext_ip) IN {{hs:Array(UInt64)}}
             GROUP BY int_ip, ext_ip ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p, fmt='JSON') if p['hs'] else []
         for r in rows:
             r['name'] = name_of(r['int_ip'])
@@ -776,18 +778,27 @@ def api_river(q):
     p['n'] = max(3, min(q1(q, 'top', '10', int), 20))
     where, live = live_window(q, where, p)
     win = p.get('win', 0)
+    # (1.16.2) a whole period reads the rollups (inside hosts, outside addresses, their pairs per hour) for its whole
+    # buckets; the live window (minutes) the records
+    if live:
+        metric = metric.replace('flows', '1')
+        F_l = F_r = F_lr = F_info = f"{p['_flows']} WHERE {where}"
+    else:
+        metric = {'1': 'flows'}.get(metric, metric)
+        F_l, F_r, F_lr = src(p, ['int_ip']), src(p, ['ext_ip']), src(p, ['int_ip', 'ext_ip', 'service', 'country', 'city'])
+        F_info = src(p, ['ext_ip', 'service', 'country', 'city'])
     tops = ch(f"""SELECT
-            (SELECT groupArray(k) FROM (SELECT int_ip AS k FROM {p['_flows']} WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS l,
-            (SELECT groupArray(k) FROM (SELECT ext_ip AS k FROM {p['_flows']} WHERE {where} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS r,
-            (SELECT uniqExact(cityHash64(int_ip)) FROM {p['_flows']} WHERE {where}) AS nl, (SELECT uniqExact(cityHash64(ext_ip)) FROM {p['_flows']} WHERE {where}) AS nr""", p, fmt='JSON')[0]
+            (SELECT groupArray(k) FROM (SELECT int_ip AS k FROM {F_l} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS l,
+            (SELECT groupArray(k) FROM (SELECT ext_ip AS k FROM {F_r} GROUP BY k ORDER BY sum({metric}) DESC LIMIT {{n:UInt8}})) AS r,
+            (SELECT uniqExact(cityHash64(int_ip)) FROM {F_l}) AS nl, (SELECT uniqExact(cityHash64(ext_ip)) FROM {F_r}) AS nr""", p, fmt='JSON')[0]
     left, right = tops['l'], tops['r']
     p['L'], p['R'] = left, right
     links = ch(f"""SELECT if(has({{L:Array(String)}}, int_ip), int_ip, '__other') AS l, if(has({{R:Array(String)}}, ext_ip), ext_ip, '__other') AS r,
             sumIf({metric}, dir IN ('up', 'internal')) AS up, sumIf({metric}, dir NOT IN ('up', 'internal')) AS dn, toUnixTimestamp(max(ts)) AS t
-        FROM {p['_flows']} WHERE {where} GROUP BY l, r""", p, fmt='JSON')
+        FROM {F_lr} GROUP BY l, r""", p, fmt='JSON')
     info = {}
     if right:
-        for r in ch(f"SELECT ext_ip, any(service) AS service, any(country) AS country, any(city) AS city FROM {p['_flows']} WHERE {where} AND has({{R:Array(String)}}, ext_ip) GROUP BY ext_ip", p, fmt='JSON'):
+        for r in ch(f"SELECT ext_ip, any(service) AS service, any(country) AS country, any(city) AS city FROM {F_info} AND has({{R:Array(String)}}, ext_ip) GROUP BY ext_ip", p, fmt='JSON'):
             info[r['ext_ip']] = r
     more_l, more_r = int(tops['nl']) > len(left), int(tops['nr']) > len(right)
     out = [{'l': x['l'], 'r': x['r'], 'up': float(x['up']), 'dn': float(x['dn']), 't': int(x['t'])} for x in links
@@ -2830,8 +2841,9 @@ def _cancel(prefix):
 
 
 def web_settings(path, q):
+    # (1.16.2) a query whose caller is gone (the browser left, the API gave up) stops instead of running on
     return {'max_execution_time': WEB_SECONDS, 'timeout_overflow_mode': 'throw', 'max_memory_usage': WEB_MEMORY,
-            'priority': 1 if _is_live(path, q) else 5}
+            'priority': 1 if _is_live(path, q) else 5, 'cancel_http_readonly_queries_on_client_close': 1}
 
 
 def ch_error_answer(e):

@@ -3,6 +3,15 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+- **A busy network's Flows page over days**: *Top conversations* and the river of a whole period read the new
+  conversations per hour (inside host × outside address) instead of every record — on 2,200 records/s the heaviest
+  query of a day went from 25 s to under 1 s. The table fills its history by itself after the upgrade, newest day first.
+- **«database error» on long periods**: the web service gave up on a query after 30 s while ClickHouse was let run it
+  for 2 minutes — a slow page failed with that error while the query went on loading the server. The service now
+  waits as long as ClickHouse may run it, and a query whose page is gone stops.
+
 ## 1.16.1 — 2026-10-21
 
 - **Events, visual first**: cards with the number of events and of each priority (a card picks the priority of the

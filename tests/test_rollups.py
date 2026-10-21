@@ -61,13 +61,26 @@ class Source(unittest.TestCase):
 
     def test_columns_filters_and_steps_the_rollup_lacks(self):
         self.state(**{n: 0 for n in rollups.ROLLUPS})
-        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [])[1])    # conversations
+        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, ['ext_port'])[1])    # a filter agg_conv lacks
         self.assertIsNone(rollups.source(['service'], NOW - DAY, None, ['ext_port', 'int_ip'])[1])
         self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['ext_port'])[1], 'agg_ports')
         self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, [], step=300)[1], 'agg_host')
         self.assertIsNone(rollups.source(['ext_ip'], NOW - DAY, None, [], step=300)[1])     # hourly table, 5-min step
         self.assertEqual(rollups.source(['ext_ip'], NOW - DAY, None, [], step=3600)[1], 'agg_ext')
         self.assertIsNone(rollups.source(['service'], NOW - DAY, None, [], use=False)[1])
+
+    def test_conversations_1162(self):
+        """(1.16.2) agg_conv serves the pairs (Top conversations, the river of a period) and key-only queries with a
+        filter on either end; never an attribute grouped under a host filter (service per pair and hour is any()) nor
+        a chosen host's turned records"""
+        self.state(**{n: 0 for n in rollups.ROLLUPS})
+        self.assertEqual(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [])[1], 'agg_conv')
+        self.assertEqual(rollups.source(['int_ip', 'ext_ip', 'service', 'country', 'city'], NOW - DAY, None, [])[1], 'agg_conv')
+        self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, ['ext_ip'])[1], 'agg_conv')
+        self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, [])[1], 'agg_host')        # the smaller table first
+        self.assertIsNone(rollups.source(['service'], NOW - DAY, None, ['int_ip', 'ext_ip'])[1])
+        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [], table='(SELECT * FROM flows)')[1])
+        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [], step=300)[1])  # hourly table
 
     def test_old_or_missing_state_means_records_only(self):
         rollups._cache.update(st={}, t=float('inf'))

@@ -391,6 +391,10 @@ def ch(query, params=None, data=None, fmt=None, timeout=30, raw=False, settings=
         qs['query_id'] = f'{tag}-{os.urandom(5).hex()}'
         qs.update({k: str(v) for k, v in (_WEB.settings or {}).items()})
     qs.update({k: str(v) for k, v in (settings or {}).items()})
+    # (1.16.2) wait as long as ClickHouse is let run the query (and a little more for its answer): before, a page's query
+    # that took over 30 s was given up here as «database error» while ClickHouse went on with it for up to 2 minutes
+    if 'max_execution_time' in qs:
+        timeout = max(timeout, int(float(qs['max_execution_time'])) + 15)
     for k, v in (params or {}).items():
         if k.startswith('_'):                # the caller's own notes (api.scope), not query parameters
             continue
