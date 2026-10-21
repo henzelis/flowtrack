@@ -274,7 +274,7 @@ def collect(r, t0, t1, call):
         if name in sec:
             d[name] = call('/api/top', q(dim=dim, limit=n))
     if 'events' in sec:
-        d['events'] = call('/api/alerts', q())['alerts']
+        d['events'] = call('/api/alerts', q(tz=r['tz']))['alerts']
     if 'devices' in sec:
         d['devices'] = call('/api/devices', {})['devices']
     if 'capacity' in sec:          # (1.13.0) whole days up to now in the report's zone: at least 30 for a trend
@@ -288,6 +288,12 @@ INK, INK2, INK3 = '#1C2333', '#5B6478', '#8A93A8'
 NAVY, BLUE, HAIR, PANEL = '#0B1736', '#2F7BFF', '#E3E8F2', '#F4F6FA'
 DOWN, UP = '#16B5D8', '#FF9F43'          # the page's cyan is too pale on paper; the same hue, deeper
 SEV = {'crit': '#E5484D', 'warn': '#F5A524', 'info': '#3E8ED0'}
+# (1.17.0) a colour per kind of event, as on the Events page (web/app.js EV_COLOR); the yellows and the lime deeper
+# for paper
+EV_COLORS = {'port_scan': '#FF9F43', 'brute_force': '#FF5C7A', 'probes': '#6E9BFF', 'heavy_client': '#E0B03C', 'ddos': '#E8384F',
+             'inside_scan': '#C77DFF', 'lateral_scan': '#8B5CFF', 'link_load': '#16B5D8', 'malware_contact': '#FF4FA0',
+             'listed_contact': '#E98BB2', 'listed_inbound': '#2F7BFF', 'sustained_upload': '#1FBF83', 'burst': '#2FB3A0',
+             'new_country': '#84C11F'}
 _fonts = []
 
 
@@ -347,6 +353,82 @@ def delta(cur, prev):
     if abs(p) < 0.5:
         return '= 0%'
     return f"{'↑' if p > 0 else '↓'} {abs(p):.0f}%"
+
+
+def events_charts(ev, t0, t1, tz_name, W, tz):
+    """(1.17.0) The events' two charts for the report: stacked bars of how many began in each step, by kind (left),
+    and a ring of each kind's share (right); a note when some began before the period."""
+    from reportlab.graphics.shapes import Drawing, Line, Rect, String, Wedge
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import ParagraphStyle
+    C = colors.HexColor
+    st = detect.stats(ev, t0, t1, tz_name)
+    s, kinds = st['series'], sorted(st['kinds'].items(), key=lambda kv: -kv[1]['n'])
+    step, start = s['step'], s['from']
+    n_steps = max(1, -(-(s['to'] - start) // step))
+    col = {}
+    for b, k, n in s['rows']:
+        col.setdefault(b, {})[k] = n
+    # the bars
+    bw, bh, lm, bm = W * 0.64, 46 * mm, 8 * mm, 6 * mm
+    d = Drawing(bw, bh + bm + 4)
+    pw, ph = bw - lm - 2, bh
+    top = max([sum(v.values()) for v in col.values()] or [1])
+    tick = next(t for t in (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 10 ** 9) if top <= t * 4)
+    ymax = tick * max(1, -(-top // tick))
+    y = lambda v: bm + ph * v / ymax                         # noqa: E731
+    v = 0
+    while v <= ymax:
+        d.add(Line(lm, y(v), lm + pw, y(v), strokeColor=C(HAIR), strokeWidth=0.5))
+        d.add(String(lm - 2, y(v) - 2.3, f'{v:g}', fontName='FT', fontSize=6.3, fillColor=C(INK3), textAnchor='end'))
+        v += tick
+    slot = pw / n_steps
+    w = max(min(slot * 0.74, 9 * mm), 0.8)
+    for i in range(n_steps):
+        b, base = start + i * step, 0
+        for k, _ in kinds:
+            n = col.get(b, {}).get(k, 0)
+            if n:
+                d.add(Rect(lm + i * slot + (slot - w) / 2, y(base), w, y(base + n) - y(base), fillColor=C(EV_COLORS.get(k, INK3)), strokeColor=None))
+                base += n
+    d.add(Line(lm, bm, lm + pw, bm, strokeColor=C(INK3), strokeWidth=0.6))
+    fmt = '%d.%m' if step >= 86400 else '%d.%m %H:%M' if t1 - t0 > 86400 + 3600 else '%H:%M'
+    every = max(1, -(-n_steps // 7))
+    for i in range(0, n_steps, every):
+        t = start + i * step
+        d.add(String(lm + i * slot + slot / 2, 0.5, datetime.datetime.fromtimestamp(max(t, t0), tz).strftime(fmt), fontName='FT', fontSize=6.1,
+                     fillColor=C(INK3), textAnchor='middle'))
+    # the ring
+    rw = W - bw
+    R, r0 = 20 * mm, 13 * mm
+    p = Drawing(rw, bh + bm + 4)
+    cx, cy, a = rw / 2, (bh + bm + 4) / 2, 90.0
+    for k, v in kinds:
+        sweep = 360.0 * v['n'] / max(st['total'], 1)
+        if sweep >= 359.99:
+            p.add(Wedge(cx, cy, R, 0, 359.99, radius1=r0, fillColor=C(EV_COLORS.get(k, INK3)), strokeColor=colors.white, strokeWidth=0))
+        elif sweep > 0:
+            p.add(Wedge(cx, cy, R, a - sweep, a, radius1=r0, fillColor=C(EV_COLORS.get(k, INK3)), strokeColor=colors.white, strokeWidth=1))
+        a -= sweep
+    p.add(String(cx, cy + 0.5, f"{st['total']:,}".replace(',', '\u00a0'), fontName='FT-Black', fontSize=14, fillColor=C(INK), textAnchor='middle'))
+    p.add(String(cx, cy - 8, tr('events'), fontName='FT', fontSize=7, fillColor=C(INK2), textAnchor='middle'))
+    head = ParagraphStyle('evh', fontName='FT-Bold', fontSize=7.4, leading=9, textColor=C(INK2))
+    step_txt = tr('a day') if step >= 86400 else trn(step // 3600, '{n} hour', '{n} hours') if step >= 3600 else trn(step // 60, '{n} minute', '{n} minutes')
+    t = Table([[Paragraph(esc_x(tr('EVENTS OVER TIME · ONE BAR = {step}', step=step_txt.upper())), head), Paragraph(esc_x(tr('BY KIND')), head)], [d, p]],
+              colWidths=[bw, rw])
+    t.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('RIGHTPADDING', (0, 0), (-1, -1), 0), ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
+                           ('ALIGN', (1, 0), (1, -1), 'CENTER'), ('BOTTOMPADDING', (0, 0), (-1, 0), 2)]))
+    out = [t, Spacer(0, 2 * mm)]
+    if st['before']:
+        out += [Paragraph(esc_x(trn(st['before'], '{n} event began before the period and is not drawn here.', '{n} events began before the period and are not drawn here.')),
+                          ParagraphStyle('evb', fontName='FT', fontSize=7, leading=9, textColor=C(INK3))), Spacer(0, 1.5 * mm)]
+    return out
+
+
+def esc_x(s):
+    return html.escape(str(s))
 
 
 def render(r, data, t0, t1, version='', now=None):
@@ -647,8 +729,11 @@ def render(r, data, t0, t1, version='', now=None):
                 k['n'] += 1
                 if list(SEV).index(e['sev']) < list(SEV).index(k['sev']):
                     k['sev'] = e['sev']
-            order = sorted(kinds.values(), key=lambda v: (list(SEV).index(v['sev']), -v['n']))
-            cells = [x for v in order for x in (dot(SEV[v['sev']]), Paragraph(f'{esc(v["title"])} <b>{v["n"]}</b>', P))]
+            order = sorted(kinds.items(), key=lambda kv: (list(SEV).index(kv[1]['sev']), -kv[1]['n']))
+            # (1.17.0) how many began in each step, by kind, and the share of each kind — the Events page's two charts
+            graphs = events_charts(ev, t0, t1, r['tz'], W, tz)
+            cells = [x for k, v in order for x in (dot(EV_COLORS.get(k, INK3)), Paragraph(f'{esc(v["title"])} <b>{v["n"]}</b> '
+                                                                                       f'<font color="{INK3}" size="7">{100 * v["n"] / len(ev):.0f}%</font>', P))]
             cells += [''] * (-len(cells) % 6)
             chips = Table([cells[i:i + 6] for i in range(0, len(cells), 6)], colWidths=[5 * mm, W / 3 - 5 * mm] * 3)
             chips.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('TOPPADDING', (0, 0), (-1, -1), 1.5),
@@ -660,7 +745,7 @@ def render(r, data, t0, t1, version='', now=None):
                              Paragraph(f'<font color="{INK2}" size="7.4">{esc(e.get("last") or e.get("when", ""))}</font>', PR)])
             note = trn(len(ev), '{n} event in this period.', '{n} events in this period.') + \
                 (' ' + tr('The 15 most important are shown; all of them are in FlowTrack → Events.') if len(ev) > 15 else '')
-            section(tr('Security events'), chips, Spacer(0, 2 * mm),
+            section(tr('Security events'), *graphs, chips, Spacer(0, 2 * mm),
                     table(['', tr('Event'), tr('Last seen')], body, [6 * mm, W - 6 * mm - 30 * mm, 30 * mm], right=(2,)), note=note)
 
     # ---- devices
@@ -885,9 +970,9 @@ def note_sent(r, label, n, now=None):
             _write(STATE, st)
 
 
-def status():
-    """Per report: when it was last sent, the error of the last try, the next sending."""
-    st, now, out, cfg = load_state(), time.time(), {}, notify.load()
+def status(now=None):
+    """Per report: when it was last sent, the error of the last try, the next sending (after `now`, for the tests)."""
+    st, now, out, cfg = load_state(), now or time.time(), {}, notify.load()
     for r in load():
         s = st.get(r['id'], {})
         out[r['id']] = {'blocked': mail_problem(r, cfg), 'sent': s.get('sent', 0), 'sent_period': s.get('sent_period', ''), 'to': s.get('to', 0),

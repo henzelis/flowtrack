@@ -221,7 +221,7 @@ class Schedule(unittest.TestCase):
         self.assertTrue(pdf.get_payload(decode=True).startswith(b'%PDF'))
         self.assertIn('2026-10-18', msg['Subject'])
         self.assertEqual({q['from'][0] for p, q in log if 'from' in q}, {str(ts(2026, 10, 18))})
-        st = reports.status()[r['id']]
+        st = reports.status(now=ts(2026, 10, 19, 7, 5))[r['id']]
         self.assertEqual(st['sent_period'], '2026-10-18')
         self.assertEqual(st['next'], ts(2026, 10, 20, 7, 0))
 

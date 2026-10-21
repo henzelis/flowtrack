@@ -1929,8 +1929,9 @@ def api_alerts(q):
     out = _alerts_now(kinds) if t1 >= time.time() - 600 else []
     exc = detect.Exclude(cfg.get('exclude'))
     out = [a for a in out if (not a.get('ip') or (a['ip'], 0) not in ign) and not exc(a['kind'], a.get('src') or a.get('ip'), a.get('dst', ''), a.get('port', 0))]
+    meta = {}
     try:
-        out += detect.recent(cfg, t0, t1)
+        out += detect.recent(cfg, t0, t1, meta)
     except CHError as e:           # before the collector of 1.6 created the table
         if 'UNKNOWN_TABLE' not in str(e):
             raise
@@ -1950,8 +1951,23 @@ def api_alerts(q):
     for a in out:
         a.pop('addrs', None)
         a.pop('ports', None)
-    return {'alerts': out, 'watch': {k: v for k, v in kinds.items()},
-            'unfiltered': sorted({f.get('k') for f in flt if f.get('k') not in EVENT_FILTERS})}
+    res = {'watch': {k: v for k, v in kinds.items()}, 'unfiltered': sorted({f.get('k') for f in flt if f.get('k') not in EVENT_FILTERS}),
+           'stats': {**detect.stats(out, t0, t1, _tz(q)), 'truncated': meta.get('truncated', False)}}
+    # (1.17.0) the page asks for a part: the newest first, of one priority / kind, matching a text; without `limit`
+    # every event as before (reports, older clients)
+    if 'limit' not in q:
+        res['alerts'] = out
+        return res
+    sev, kind, text = q1(q, 'sev', ''), q1(q, 'kind', ''), q1(q, 'q', '').strip().lower()
+    sel = [a for a in out if (not sev or a['sev'] == sev) and (not kind or a['kind'] == kind)
+           and (not text or text in f"{a.get('title', '')} {a.get('text', '')} {a.get('src', '')} {a.get('dst', '')} {a.get('ip', '')}".lower())]
+    sel.sort(key=lambda a: detect.ev_time(a.get('last') or a.get('when')) or t1, reverse=True)
+    try:
+        limit, offset = max(0, min(int(q1(q, 'limit', '30')), 500)), max(0, int(q1(q, 'offset', '0')))
+    except ValueError:
+        raise BadRequest('bad limit / offset')
+    res.update(alerts=sel[offset:offset + limit], matched=len(sel), offset=offset)
+    return res
 
 
 def get_events_config():

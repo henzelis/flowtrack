@@ -17,11 +17,13 @@ calls to the services that are open.
 Settings (on/off, priority, thresholds per kind; addresses, networks and ASNs to ignore; which services are public
 or sensitive) live in STATE_DIR/events.json, written by the web UI."""
 import calendar
+import datetime
 import ipaddress
 import json
 import os
 import threading
 import time
+from zoneinfo import ZoneInfo
 
 import notify
 import reputation
@@ -839,13 +841,20 @@ class Detector:
 
 
 # ---------------------------------------------------------------- reading (web API)
-def recent(cfg, since, until=None):
-    """Stored events active in [since, until], with their texts; ignored sources and disabled kinds left out."""
+RECENT_LIMIT = 5000      # (1.17.0) the stored events one request reads at most; the page says when it is reached
+
+
+def recent(cfg, since, until=None, meta=None):
+    """Stored events active in [since, until], with their texts; ignored sources and disabled kinds left out.
+    `meta` (a dict) learns whether RECENT_LIMIT cut the list (1.17.0)."""
     ign, exc = Ignore(cfg['ignore']), Exclude(cfg.get('exclude'))
     out = []
-    for r in ch("""SELECT kind, key, first_seen, last_seen, hits, exporter, src, dst, port, proto, value, info FROM events FINAL
-            WHERE last_seen >= {since:DateTime} AND first_seen <= {until:DateTime} ORDER BY last_seen DESC LIMIT 5000""",
-                {'since': int(since), 'until': int(until or time.time())}, fmt='JSON'):
+    rows = ch("""SELECT kind, key, first_seen, last_seen, hits, exporter, src, dst, port, proto, value, info FROM events FINAL
+            WHERE last_seen >= {since:DateTime} AND first_seen <= {until:DateTime} ORDER BY last_seen DESC LIMIT {lim:UInt32}""",
+                {'since': int(since), 'until': int(until or time.time()), 'lim': RECENT_LIMIT}, fmt='JSON')
+    if meta is not None:
+        meta['truncated'] = len(rows) >= RECENT_LIMIT
+    for r in rows:
         k = cfg['kinds'].get(r['kind'])
         if not k or not k['on']:
             continue
@@ -1004,3 +1013,40 @@ def _describe(r):
         return (title, tr('{src} called port {port} on {n} addresses, mostly without an answer. Check the device.',
                           src=r['src'], port=port, n=f"{int(r['value']):,}"))
     return kind, ''
+
+
+def ev_time(s):
+    """An event's stored time ('YYYY-MM-DD hh:mm:ss', UTC) -> unix seconds; None for the live ones' words ('last hour')."""
+    try:
+        return int(datetime.datetime.strptime(str(s)[:19], '%Y-%m-%d %H:%M:%S').replace(tzinfo=datetime.timezone.utc).timestamp())
+    except ValueError:
+        return None
+
+
+SEV_RANK = {'crit': 0, 'warn': 1, 'info': 2}
+EV_STEPS = (300, 600, 1800, 3600, 3 * 3600, 6 * 3600, 86400)
+
+
+def stats(out, t0, t1, tz):
+    """(1.17.0) What the Events page and the reports draw: events by priority and by kind, and how many began in each
+    step of the period, by kind (≤ 48 steps; whole local days for long periods). An event that began before the period
+    is counted in `before`, not in its first step; the live ones without a time (the collector's health) at the end."""
+    step = next((s for s in EV_STEPS if (t1 - t0) / s <= 48), 86400)
+    off = int(ZoneInfo(tz).utcoffset(datetime.datetime.fromtimestamp(t1, datetime.timezone.utc)).total_seconds()) if step >= 86400 else 0
+    floor = lambda t: (t + off) // step * step - off             # noqa: E731
+    sevs, by_kind, rows, before = {'crit': 0, 'warn': 0, 'info': 0}, {}, {}, 0
+    for a in out:
+        sevs[a['sev']] = sevs.get(a['sev'], 0) + 1
+        k = by_kind.setdefault(a['kind'], {'n': 0, 'sev': a['sev'],
+                                           'title': tr(NAMES[a['kind']]) if a['kind'] in NAMES else a.get('title', a['kind'])})
+        k['n'] += 1
+        if SEV_RANK.get(a['sev'], 3) < SEV_RANK.get(k['sev'], 3):      # a kind takes its highest priority
+            k['sev'] = a['sev']
+        t = ev_time(a.get('first') or a.get('when'))
+        if t is not None and t < t0:
+            before += 1
+            continue
+        b = floor(min(t if t is not None else t1 - 1, t1 - 1))
+        rows[(b, a['kind'])] = rows.get((b, a['kind']), 0) + 1
+    return {'total': len(out), 'sev': sevs, 'kinds': by_kind, 'before': before,
+            'series': {'from': floor(t0), 'to': t1, 'step': step, 'rows': sorted([b, k, n] for (b, k), n in rows.items())}}

@@ -717,3 +717,37 @@ td.nowrap{white-space:nowrap}
 .qbar i{display:block;height:100%}
 .qsvc{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px 22px}
 .qsvc h5{margin:0 0 8px;font-size:13px;display:flex;gap:8px;align-items:center}
+
+/* (1.17.0) Events: cards that switch the priority, a colour per kind, the newest 30, All events with pages */
+button.kcard.evcard{font:inherit;color:inherit;text-align:left;cursor:pointer;border:1px solid var(--hair);transition:border-color .15s,box-shadow .15s}
+button.kcard.evcard:hover{border-color:rgba(110,165,255,.45)}
+button.kcard.evcard.on{border-color:rgba(110,165,255,.8);box-shadow:0 0 0 1px rgba(110,165,255,.5) inset,0 0 22px rgba(47,123,255,.18)}
+.evkind{display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c);box-shadow:0 0 8px var(--c);vertical-align:1px;margin-left:4px}
+.watch b .evkind{margin:0 8px 0 0}
+.evleg{margin-top:6px}
+.evleg .link.on{border-bottom-style:solid;color:var(--ink);font-weight:700}
+.fchip.evsel{padding:0 3px 0 8px;font-size:11.5px;vertical-align:1px}
+.fchip.evsel button{all:unset;cursor:pointer;padding:0 5px;color:var(--ink2)}
+.evmore{display:flex;justify-content:center;margin-top:12px}
+.evbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 12px}
+.evbar select,.evbar input{min-width:0}
+.evbar input{flex:1 1 220px;max-width:360px}
+.evbar #evCount{margin-left:auto}
+.evpager{display:flex;gap:14px;align-items:center;justify-content:center;margin-top:14px}
+.evpager:empty{display:none}
+.evbar input,.evbar select{border:1px solid var(--edge);border-radius:10px;padding:7px 12px;background:rgba(0,0,0,.3);font:inherit;font-size:13px;color:var(--ink);outline:none}
+.evbar input:focus,.evbar select:focus{border-color:var(--blue-hi)}
+/* a dense list: priority, time and buttons on one line at the right, the event in two lines at most */
+@media (min-width:901px){
+  .alerts.dense{gap:6px}
+  .alerts.dense .alert{padding:8px 12px;align-items:center}
+  .alerts.dense .alert .sev{width:20px;height:20px;font-size:11px}
+  .alerts.dense .alert .body p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:none}
+  .alerts.dense .alert .meta{grid-auto-flow:column;grid-template-columns:auto 86px 118px;align-items:center;gap:10px}   /* priority and time in columns at the right edge, the buttons before them */
+  .alerts.dense .alert .meta .pill{justify-self:center}
+  .alerts.dense .alert .meta .mono{text-align:right;justify-self:end}
+  .alerts.dense .alert .meta .acts{order:-1;flex-wrap:nowrap}
+}
+/* the chart takes the height of the row (the kind list beside it may be long) */
+section.evfill{display:flex;flex-direction:column}
+section.evfill > #evChart{flex:1 1 auto;min-height:320px;height:auto!important}

@@ -2520,35 +2520,146 @@ const exText = r => `${({up:'↑', down:'↓'})[r.dir] || '⇅'} ${r.src || T('a
 const UPLOAD_KINDS = ['sustained_upload', 'inside_scan', 'lateral_scan', 'malware_contact', 'listed_contact', 'new_country', 'burst'];
 const exOf = x => (x.src || x.ip) && (x.dst || x.port) ? {dir:UPLOAD_KINDS.includes(x.kind) ? 'up' : 'down', src:x.src || x.ip, dst:x.dst || '', port:x.port || 0} : null;
 const evFilter = x => x.fk && x.fv ? [x.fk, x.fv] : x.ip ? ['ip', x.ip] : x.device ? ['device', x.device] : null;
+// (1.17.0) one colour per kind, the same on the page and in the PDF reports (reports.EV_COLORS); the collector's
+// health, the license and the reports share the grey
+const EV_COLOR = {port_scan:'#FF9F43', brute_force:'#FF5C7A', probes:'#6E9BFF', heavy_client:'#FFD166', ddos:'#E8384F', inside_scan:'#C77DFF',
+  lateral_scan:'#8B5CFF', link_load:'#27D3F5', malware_contact:'#FF4FA0', listed_contact:'#F7A1C4', listed_inbound:'#2F7BFF',
+  sustained_upload:'#2EE59D', burst:'#3FC8B4', new_country:'#A3E635'};
+const evColor = k => EV_COLOR[k] || C.other;
+const cap1 = s => String(s).charAt(0).toUpperCase() + String(s).slice(1);
+// one event as a card: what happened, priority, when, and its buttons (Filter / Exclude / Ignore)
+function evRow(x, sevs){
+  return `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b> <span class="evkind" style="--c:${evColor(x.kind)}"></span><p>${esc(x.text)}</p></div>
+      <div class="meta"><span class="pill ${x.sev}">${sevs[x.sev] || x.sev}</span><span class="mono">${x.stored && x.first !== x.last ? esc(evRange(x.first, x.last)) : esc(evTime(x.when))}</span>
+        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter')}</button>` : ''}${exOf(x) && isAdmin() ? `<button class="btn" data-exc="${esc(JSON.stringify(exOf(x)))}" title="${esc(T('Do not show events of this connection in this direction') + ': ' + exText(exOf(x)))}">${T('Exclude')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address')}">${T('Ignore')}</button>` : ''}</span></div></div>`;
+}
+// the Exclude / Ignore buttons of a list; `again` shows the page anew after a change
+function wireEvActs(root, again){
+  root.querySelectorAll('[data-exc]').forEach(b => b.onclick = async () => { const r = JSON.parse(b.dataset.exc);
+    if (!confirm(T('Exclude {rule}? Such events will no longer be shown or notified. You can change it in Settings → Events.', {rule: exText(r)}))) return;
+    try { await apiPost('events/exclude', r); again(); } catch (e) { alert(e.message); } });
+  root.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => {
+    if (!confirm(T('Ignore {addr}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.', {addr: b.dataset.ign}))) return;
+    try { await apiPost('events/ignore', {value:b.dataset.ign}); again(); } catch (e) { alert(e.message); } });
+}
+// the page's own choice of priority / kind (not a filter of the other pages): what the list and «All events» show
+const evQuery = (extra = {}) => ({tz:capTz(), ...(state.evSev && state.evSev !== 'all' ? {sev:state.evSev} : {}), ...(state.evKind ? {kind:state.evKind} : {}), ...extra});
+const evSkip = res => { const skip = (res.unfiltered || []).map(k => FILTER_LABEL[k] || k); return skip.length ? `<p class="note evskip">${T('Not applied to events')}: ${esc(skip.join(', '))}</p>` : ''; };
+const evCut = res => res.stats.truncated ? T('The period has more events than are read at once ({n}): the oldest are left out — choose a shorter period.', {n:fmtN(res.stats.total)}) : '';
+// (1.17.0) Events: visual first — cards, how the number changes over time by kind, the share of each kind; then the
+// newest 30 and «All events» for the rest. A period that ends now refreshes every minute.
 function vThreats(){
-  const v = document.getElementById('view');
-  v.innerHTML = `<div class="grid"><section class="glass panel s8">${ph('shield', T('Events and anomalies'), T('in the chosen period and filters · scans, password guessing and floods are checked every 10 minutes'))}<div id="alBox" class="loading"></div></section>
+  const v = document.getElementById('view'), sevs = SEV(), kinds = EV_KINDS();
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s12 caphead">${ph('shield', T('Events and anomalies'), T('in the chosen period and filters · scans, password guessing and floods are checked every 10 minutes'), `<button class="btn" id="evAllTop">${T('All events')} →</button>`, true)}</section>
+    <div id="evKpi" style="display:contents"></div>
+    <section class="glass panel s8 evfill">${ph('chart', T('Events over time'), `<span id="evChartSub">${T('how many began, by kind · click a kind to show only it')}</span>`)}<div id="evChart" class="loading" style="height:320px"></div><p class="note" id="evChartNote" hidden></p></section>
+    <section class="glass panel s4">${ph('pie', T('By kind'), `<span id="evPieSub">${T('of the events in the period')}</span>`)}<div id="evPie" class="loading"></div></section>
+    <section class="glass panel s8">${ph('list', T('Latest events'), `<span id="evListSub">${T('the newest 30')}</span>`)}<div id="alBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('search', T('What is watched'), '', isAdmin() ? `<button class="btn" id="evCfg">${T('Configure')}</button>` : '')}<div id="watchBox" class="loading"></div></section></div>`;
   if (isAdmin()) document.getElementById('evCfg').onclick = () => { state.view = 'settings'; state.setTab = 'events'; render(); };
-  const sevs = SEV(), kinds = EV_KINDS();
-  section('alBox', async () => { const res = await api('alerts'), all = res.alerts, cur = state.evSev || 'all';
-    const W = document.getElementById('watchBox');
-    if (W) { W.classList.remove('loading'); W.innerHTML = `<div class="watch">${Object.entries(kinds).map(([k, [name, desc]]) => { const c = (res.watch || {})[k] || {};
-      return `<div class="${c.on === false ? 'off' : ''}"><b>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
-      <div><b>${T('Export and collector health')}</b><span class="pill warn">${sevs.warn}</span><p>${T('lost packets, a collector falling behind, the edition limit, the license')}</p></div></div>`; }
-    const skip = (res.unfiltered || []).map(k => FILTER_LABEL[k] || k), note = skip.length ? `<p class="note evskip">${T('Not applied to events')}: ${esc(skip.join(', '))}</p>` : '';
-    if (!all.length) return note + `<div class="empty">${state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`;
-    const n = s => all.filter(x => x.sev === s).length, a = cur === 'all' ? all : all.filter(x => x.sev === cur);
-    setTimeout(() => {
-      document.querySelectorAll('#evSeg button').forEach(b => b.onclick = () => { state.evSev = b.dataset.v; vThreats(); });
-      document.querySelectorAll('[data-exc]').forEach(b => b.onclick = async () => { const r = JSON.parse(b.dataset.exc);
-        if (!confirm(T('Exclude {rule}? Such events will no longer be shown or notified. You can change it in Settings → Events.', {rule: exText(r)}))) return;
-        try { await apiPost('events/exclude', r); vThreats(); } catch (e) { alert(e.message); } });
-      document.querySelectorAll('[data-ign]').forEach(b => b.onclick = async () => {
-        if (!confirm(T('Ignore {addr}? Its events will no longer be recorded or shown. You can undo it in Settings → Events.', {addr: b.dataset.ign}))) return;
-        try { await apiPost('events/ignore', {value:b.dataset.ign}); vThreats(); } catch (e) { alert(e.message); } });
-    });
-    return `<div class="seg evseg" id="evSeg" role="group">${[['all', T('All'), all.length], ['crit', sevs.crit, n('crit')], ['warn', sevs.warn, n('warn')], ['info', sevs.info, n('info')]].map(([k, l, c]) =>
-      `<button data-v="${k}" aria-pressed="${cur === k}">${l} <span class="mono">${c}</span></button>`).join('')}</div>` + note +
-      (a.length ? '<div class="alerts">' + a.map(x => `<div class="alert ${x.sev}"><span class="sev">${x.sev === 'info' ? 'i' : '!'}</span><div class="body"><b>${esc(x.title)}</b><p>${esc(x.text)}</p></div>
-      <div class="meta"><span class="pill ${x.sev}">${sevs[x.sev] || x.sev}</span><span class="mono">${x.stored && x.first !== x.last ? esc(evRange(x.first, x.last)) : esc(evTime(x.when))}</span>
-        <span class="acts">${evFilter(x) ? `<button class="btn" data-f="${evFilter(x)[0]}" data-v="${esc(evFilter(x)[1])}" title="${esc(`${FILTER_LABEL[evFilter(x)[0]] || evFilter(x)[0]}: ${evFilter(x)[1]}`)}">${T('Filter')}</button>` : ''}${exOf(x) && isAdmin() ? `<button class="btn" data-exc="${esc(JSON.stringify(exOf(x)))}" title="${esc(T('Do not show events of this connection in this direction') + ': ' + exText(exOf(x)))}">${T('Exclude')}</button>` : ''}${x.stored && x.src && isAdmin() ? `<button class="btn" data-ign="${esc(x.src)}" title="${T('Do not record or show events of this address')}">${T('Ignore')}</button>` : ''}</span></div></div>`).join('') + '</div>'
-        : `<div class="empty">${T('No events of this priority')}</div>`); });
+  document.getElementById('evAllTop').onclick = () => { state.view = 'events'; state.evPage = 0; render(); };
+  const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
+  let chart = null, pie = null, first = true;
+  const draw = res => {
+    const st = res.stats, all = st.total, cur = state.evSev || 'all', kind = state.evKind && st.kinds[state.evKind] ? state.evKind : '';
+    if (first) { first = false; const W = document.getElementById('watchBox');
+      if (W) { W.classList.remove('loading'); W.innerHTML = `<div class="watch">${Object.entries(kinds).map(([k, [name, desc]]) => { const c = (res.watch || {})[k] || {};
+        return `<div class="${c.on === false ? 'off' : ''}"><b><i class="evkind" style="--c:${evColor(k)}"></i>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
+        <div><b>${T('Export and collector health')}</b><span class="pill warn">${sevs.warn}</span><p>${T('lost packets, a collector falling behind, the edition limit, the license')}</p></div></div>`; } }
+    // the cards: all, then each priority — a card is also the priority switch of the list
+    const order = Object.entries(st.kinds).sort((a, b) => b[1].n - a[1].n), most = order[0];
+    const kc = (k, ic, label, val, sub, col) => `<button class="glass panel kcard s3 evcard${cur === k ? ' on' : ''}" data-sev="${k}" aria-pressed="${cur === k}" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${label}</span><span class="v"${col ? ` style="color:${col}"` : ''}>${val}</span><span class="nat" style="grid-column:2">${sub}</span></button>`;
+    fill('evKpi', kc('all', 'shield', T('Events'), fmtN(all), all ? (most ? T('most often: {kind}', {kind:esc(most[1].title)}) : '') : T('No events — all quiet'), all ? '' : 'var(--ok)')
+      + kc('crit', 'pulse', cap1(sevs.crit), fmtN(st.sev.crit || 0), T('need attention now'), st.sev.crit ? 'var(--crit)' : 'var(--ink3)')
+      + kc('warn', 'search', cap1(sevs.warn), fmtN(st.sev.warn || 0), T('worth a look'), st.sev.warn ? 'var(--warn)' : 'var(--ink3)')
+      + kc('info', 'list', cap1(sevs.info), fmtN(st.sev.info || 0), T('for the record'), st.sev.info ? 'var(--down)' : 'var(--ink3)'));
+    document.querySelectorAll('#evKpi [data-sev]').forEach(b => b.onclick = () => { state.evSev = b.dataset.sev; reload(); });
+    // over time: stacked bars of the events that began in each step, a colour per kind
+    const s = st.series, ts = []; for (let t = s.from; t < s.to; t += s.step) ts.push(t);
+    const m = new Map(s.rows.map(r => [r[0] + ':' + r[1], r[2]]));
+    const cel = document.getElementById('evChart'); cel.classList.remove('loading');
+    if (!chart) { chart = mkChart(cel); zoomable(chart);
+      chart.on('click', p => { if (p.seriesId) setTimeout(() => { state.evKind = state.evKind === p.seriesId ? '' : p.seriesId; reload(); }); });
+      chart.on('legendselectchanged', p => { chart.dispatchAction({type:'legendSelect', name:p.name}); const k = order.find(o => o[1].title === p.name);
+        if (k) setTimeout(() => { state.evKind = state.evKind === k[0] ? '' : k[0]; reload(); }); }); }
+    const stepTxt = s.step >= 86400 ? T('a day') : s.step >= 3600 ? Tn(s.step / 3600, '{n} hour', '{n} hours') : Tn(s.step / 60, '{n} minute', '{n} minutes');
+    chart.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true},
+      legend:{top:0, left:0, type:'scroll', icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}, pageTextStyle:{color:C.ink2}, pageIconColor:C.ink2},
+      tooltip:{...tipBase(), trigger:'axis', axisPointer:{type:'shadow'}, order:'valueDesc',
+        formatter:ps => { const n = ps.reduce((a, p) => a + (p.value[1] || 0), 0); if (!ps.length) return '';
+          const t0 = ps[0].value[0] / 1000 - s.step / 2, lbl = s.step >= 86400 ? new Date(t0 * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'}) : `${s.to - s.from > 86400 ? dmy(t0) + ' ' : ''}${hhmm(t0)} – ${hhmm(t0 + s.step)}`;
+          return `${esc(lbl)} · <b>${Tn(n, '{n} event', '{n} events')}</b><br>` + ps.filter(p => p.value[1]).map(p => `${p.marker}${esc(p.seriesName)} <b>${p.value[1]}</b>`).join('<br>'); }},
+      xAxis:{...axisX(ts), min:s.from * 1000, max:(ts.length ? ts[ts.length - 1] + s.step : s.to) * 1000},
+      yAxis:{...axisY(v => fmtN(v)), minInterval:1},
+      series:order.map(([k, o]) => ({id:k, name:o.title, type:'bar', stack:'e', barMaxWidth:26, barCategoryGap:'22%', itemStyle:{color:evColor(k), opacity:kind && kind !== k ? .22 : 1, borderRadius:0},
+        emphasis:{focus:'series'}, data:ts.map(t => [(t + s.step / 2) * 1000, m.get(t + ':' + k) || 0])}))}, {notMerge:true});
+    fill('evChartSub', `${T('how many began, by kind · one bar = {step} · click a kind to show only it', {step:stepTxt})}`);
+    const cn = document.getElementById('evChartNote'), cnt = [st.before ? Tn(st.before, '{n} event began before the period and is not drawn here.', '{n} events began before the period and are not drawn here.') : '', evCut(res)].filter(Boolean);
+    cn.hidden = !cnt.length; cn.innerHTML = cnt.join(' ');
+    // the share of each kind
+    const pel = document.getElementById('evPie'); pel.classList.remove('loading');
+    if (!all) { pie = null; pel.innerHTML = `<div class="empty">${state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`; }
+    else {
+      if (!pie || !pel.querySelector('.evpie')) { pel.innerHTML = `<div class="chart evpie" style="height:230px"></div><div class="dl evleg"></div>`; pie = mkChart(pel.querySelector('.evpie'));
+        pie.on('click', p => setTimeout(() => { state.evKind = state.evKind === p.data.id ? '' : p.data.id; reload(); })); }
+      pie.setOption({animation:false, tooltip:{...tipBase(), formatter:p => `${esc(p.name)}<br><b>${Tn(p.value, '{n} event', '{n} events')}</b> · ${p.percent}%`},
+        title:{text:fmtN(kind ? st.kinds[kind].n : all), subtext:kind ? st.kinds[kind].title : T('events'), left:'center', top:'38%', textStyle:{color:C.ink, fontFamily:'JetBrains Mono', fontSize:18, fontWeight:700}, subtextStyle:{color:C.ink2, fontFamily:'Manrope', fontSize:11.5, width:120, overflow:'truncate'}},
+        series:[{type:'pie', radius:['64%', '86%'], padAngle:2, itemStyle:{borderRadius:5}, label:{show:false}, emphasis:{scale:true, scaleSize:4},
+          data:order.map(([k, o]) => ({id:k, name:o.title, value:o.n, itemStyle:{color:evColor(k), opacity:kind && kind !== k ? .25 : 1, shadowBlur:12, shadowColor:evColor(k)}}))}]}, {notMerge:true});
+      pel.querySelector('.evleg').innerHTML = order.map(([k, o]) => `<i class="idot" style="background:${evColor(k)}"></i><button class="link${kind === k ? ' on' : ''}" data-kind="${k}">${esc(o.title)}</button><span class="p">${pct(o.n, all)}</span><span class="t">${fmtN(o.n)}</span>`).join('');
+      pel.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { state.evKind = state.evKind === b.dataset.kind ? '' : b.dataset.kind; reload(); });
+    }
+    // the newest events of the chosen priority / kind
+    const what = [cur !== 'all' ? sevs[cur] : '', kind ? st.kinds[kind].title : ''].filter(Boolean);
+    fill('evListSub', (res.matched > res.alerts.length ? T('the newest {n} of {all}', {n:res.alerts.length, all:fmtN(res.matched)}) : Tn(res.matched, '{n} event', '{n} events'))
+      + (what.length ? ` · <span class="fchip evsel"><span>${esc(what.join(' · '))}</span><button id="evSelX" aria-label="${T('Show all')}" title="${T('Show all')}">×</button></span>` : ''));
+    const x = document.getElementById('evSelX'); if (x) x.onclick = () => { state.evSev = 'all'; state.evKind = ''; reload(); };
+    const box = done('alBox', evSkip(res) + (!all ? `<div class="empty">${state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`
+      : !res.alerts.length ? `<div class="empty">${T('No events of this priority')}</div>`
+      : '<div class="alerts dense">' + res.alerts.map(e => evRow(e, sevs)).join('') + '</div>'
+        + (res.matched > res.alerts.length ? `<div class="evmore"><button class="btn primary" id="evAll">${T('All events ({n})', {n:fmtN(res.matched)})} →</button></div>` : '')));
+    if (box) { wireFilters(box); wireEvActs(box, reload); const b = document.getElementById('evAll'); if (b) b.onclick = () => { state.view = 'events'; state.evPage = 0; render(); }; }
+  };
+  const load = () => api('alerts', evQuery({limit:30}));
+  const reload = () => load().then(r => { if (seq === renderSeq) draw(r); }).catch(e => fill('alBox', errBox(e)));
+  load().then(r => { if (seq === renderSeq) draw(r); }).catch(e => { ['evChart', 'evPie', 'alBox'].forEach(id => done(id, errBox(e))); });
+  if (!isCustom()) every(60000, reload);
+}
+// (1.17.0) every event of the period, a page of 50 at a time: priority, kind, a text search; the newest first
+const EV_PAGE = 50;
+function vEvents(){
+  const v = document.getElementById('view'), sevs = SEV(), cur = state.evSev || 'all';
+  v.innerHTML = `<div class="grid"><section class="glass panel s12">${ph('list', T('All events'), T('in the chosen period and filters · the newest first'), `<button class="btn" id="evBack">← ${T('Events')}</button>`, true)}
+    <div class="evbar"><div id="evSevBox"></div><select id="evKindSel" aria-label="${T('Kind')}"><option value="">${T('All kinds')}</option></select>
+      <input id="evQ" type="search" placeholder="${T('Search: address, text …')}" value="${esc(state.evQ || '')}" autocomplete="off"><span class="note" id="evCount"></span></div>
+    <div id="evNote" hidden></div><div id="evList" class="loading"></div><div class="evpager" id="evPager"></div></section></div>`;
+  document.getElementById('evBack').onclick = () => { state.view = 'threats'; render(); };
+  const seq = renderSeq;
+  const load = () => {
+    const page = state.evPage || 0;
+    return api('alerts', evQuery({limit:EV_PAGE, offset:page * EV_PAGE, ...(state.evQ ? {q:state.evQ} : {})})).then(res => { if (seq !== renderSeq) return;
+      const st = res.stats, kinds = Object.entries(st.kinds).sort((a, b) => b[1].n - a[1].n);
+      fill('evSevBox', seg('evSev', [['all', `${T('All')} <span class="mono">${st.total}</span>`], ...['crit', 'warn', 'info'].map(k => [k, `${cap1(sevs[k])} <span class="mono">${st.sev[k] || 0}</span>`])], cur));
+      wireSeg('evSev', k => { state.evSev = k; state.evPage = 0; render(); });
+      const ks = document.getElementById('evKindSel');
+      ks.innerHTML = `<option value="">${T('All kinds')}</option>` + kinds.map(([k, o]) => `<option value="${k}">${esc(o.title)} (${o.n})</option>`).join('');
+      ks.value = state.evKind && st.kinds[state.evKind] ? state.evKind : '';
+      const nb = document.getElementById('evNote'), notes = evSkip(res) + (evCut(res) ? `<p class="note">${evCut(res)}</p>` : ''); nb.hidden = !notes; nb.innerHTML = notes;
+      const n = res.matched, a = res.offset + 1, b = res.offset + res.alerts.length;
+      fill('evCount', n ? T('{a}–{b} of {n}', {a, b, n:fmtN(n)}) : '');
+      const box = fill('evList', n ? '<div class="alerts dense">' + res.alerts.map(e => evRow(e, sevs)).join('') + '</div>'
+        : `<div class="empty">${st.total ? T('No events match') : state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`);
+      if (box) { box.classList.remove('loading'); wireFilters(box); wireEvActs(box, load); }
+      const pages = Math.ceil(n / EV_PAGE);
+      fill('evPager', pages > 1 ? `<button class="btn" data-p="${page - 1}" ${page ? '' : 'disabled'}>← ${T('Newer')}</button><span class="mono">${T('page {p} of {n}', {p:page + 1, n:pages})}</span><button class="btn" data-p="${page + 1}" ${page + 1 < pages ? '' : 'disabled'}>${T('Older')} →</button>` : '');
+      document.querySelectorAll('#evPager [data-p]').forEach(x => x.onclick = () => { state.evPage = +x.dataset.p; load().then(() => document.getElementById('view').scrollIntoView({block:'start'})); });
+    }).catch(e => { const el = fill('evList', errBox(e)); if (el) el.classList.remove('loading'); });
+  };
+  document.getElementById('evKindSel').onchange = e => { state.evKind = e.target.value; state.evPage = 0; load(); };
+  let qt = 0; document.getElementById('evQ').oninput = e => { clearTimeout(qt); qt = setTimeout(() => { state.evQ = e.target.value.trim(); state.evPage = 0; load(); }, 300); };
+  load();
+  if (!isCustom()) every(60000, () => { if (!(state.evPage || 0)) load(); });      // a later page stays still while read
 }
 // Settings → Events (administrators): detections on/off, priority, thresholds; roles of our services; exceptions
 function vEventsCfg(){
@@ -4192,9 +4303,9 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, qos:vQos, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, settings:vSettings};
+const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, qos:vQos, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, events:vEvents, settings:vSettings};
 function renderShell(){
-  document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
+  document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k || (k === 'threats' && state.view === 'events') ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });
   // on narrow screens the menu is a scrolling row: keep the current page in sight
   const cur = document.querySelector('#nav [aria-current="page"]'), navEl = document.getElementById('nav');
@@ -4491,8 +4602,8 @@ async function health(){
     document.getElementById('ingV').innerHTML = T('{rps} <small>rec/s</small>', {rps: rps.toFixed(1)});
     document.getElementById('ingM').style.width = Math.max(2, Math.min(100, 100 * rps / 2000)).toFixed(1) + '%';
     const max = Math.max(...ingHist, 1); document.getElementById('ingS').innerHTML = `<polyline points="${ingHist.map((x, i) => `${(i / 39 * 200).toFixed(1)},${(28 - x / max * 24).toFixed(1)}`).join(' ')}" fill="none" stroke="${C.down}" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
-    const al = (await fetch('api/alerts').then(r => r.json())).alerts || [];
-    document.getElementById('bellBadge').hidden = !al.some(a => a.sev !== 'info');
+    const sv = ((await fetch('api/alerts?limit=0').then(r => r.json())).stats || {}).sev || {};      // (1.17.0) the counts, not every event
+    document.getElementById('bellBadge').hidden = !(sv.crit || sv.warn);
   } catch (e) { document.getElementById('collState').textContent = T('API unavailable'); document.getElementById('collDot').className = 'dot crit'; }
 }
 
