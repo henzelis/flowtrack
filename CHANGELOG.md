@@ -12,6 +12,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   minute.
 - The page lists the **newest 30** events instead of every one; **All events** shows the rest 50 at a time (newest
   first) with the priority, the kind and a search by address or text.
+- The chosen priority and kind apply to **Events over time** and to the ring as well as to the list: a priority keeps
+  the kinds that have it, a kind only its own bars; the scale follows.
+- Hovering the chart brings the kind under the pointer forward after a short pause and fades the others smoothly
+  instead of darkening the whole chart at once on every bar crossed; a refresh moves the bars to their new heights.
 - **Reports**: *Security events* draws the same two charts — events over time by kind and the share of each kind —
   above the list, each kind in the colour it has on the page.
 - The notification bell asks the server for the counts only, not for every event of the day.

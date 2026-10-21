@@ -2561,8 +2561,22 @@ function vThreats(){
   document.getElementById('evAllTop').onclick = () => { state.view = 'events'; state.evPage = 0; render(); };
   const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
   let chart = null, pie = null, first = true;
+  // (1.16.1) the kind under the pointer is brought forward after a short pause and the others fade over 0.3 s — the
+  // built-in focus of ECharts darkened the whole chart at once on every segment the pointer crossed
+  // (ECharts does not animate a changed opacity, so the fade is stepped here, frame by frame)
+  let curOrder = [], hoverK = '', hoverT = 0, fadeF = 0, shown = {};
+  const evOp = k => !hoverK || hoverK === k ? 1 : .35;
+  const fade = () => { cancelAnimationFrame(fadeF); if (!chart || chart.isDisposed()) return;
+    const from = {...shown}, t0 = performance.now(), D = REDUCED.matches ? 0 : 300;
+    const step = now => { if (chart.isDisposed()) return; const u = D ? Math.min(1, (now - t0) / D) : 1, e = 1 - Math.pow(1 - u, 3);
+      chart.setOption({series:curOrder.map(([id]) => { const a = from[id] ?? 1, v = a + (evOp(id) - a) * e; shown[id] = v; return {id, itemStyle:{opacity:v}}; })}, {lazyUpdate:false, silent:true});
+      if (u < 1) fadeF = requestAnimationFrame(step); };
+    fadeF = requestAnimationFrame(step); };
+  const focusTo = k => { clearTimeout(hoverT); hoverT = setTimeout(() => { if (hoverK === k) return; hoverK = k; fade(); }, k ? 140 : 240); };
+  onCleanup(() => { clearTimeout(hoverT); cancelAnimationFrame(fadeF); });
   const draw = res => {
-    const st = res.stats, all = st.total, cur = state.evSev || 'all', kind = state.evKind && st.kinds[state.evKind] ? state.evKind : '';
+    const st = res.stats, all = st.total, cur = state.evSev || 'all';
+    let kind = state.evKind && st.kinds[state.evKind] ? state.evKind : '';
     if (first) { first = false; const W = document.getElementById('watchBox');
       if (W) { W.classList.remove('loading'); W.innerHTML = `<div class="watch">${Object.entries(kinds).map(([k, [name, desc]]) => { const c = (res.watch || {})[k] || {};
         return `<div class="${c.on === false ? 'off' : ''}"><b><i class="evkind" style="--c:${evColor(k)}"></i>${name}</b><span class="pill ${c.on === false ? '' : c.sev}">${c.on === false ? T('off') : sevs[c.sev] || ''}</span><p>${desc}</p></div>`; }).join('')}
@@ -2581,33 +2595,46 @@ function vThreats(){
     const cel = document.getElementById('evChart'); cel.classList.remove('loading');
     if (!chart) { chart = mkChart(cel); zoomable(chart);
       chart.on('click', p => { if (p.seriesId) setTimeout(() => { state.evKind = state.evKind === p.seriesId ? '' : p.seriesId; reload(); }); });
-      chart.on('legendselectchanged', p => { chart.dispatchAction({type:'legendSelect', name:p.name}); const k = order.find(o => o[1].title === p.name);
+      chart.on('mouseover', p => { if (p.componentType === 'series') focusTo(p.seriesId); });
+      chart.on('mouseout', p => { if (p.componentType === 'series') focusTo(''); });
+      chart.on('globalout', () => focusTo(''));
+      chart.on('legendselectchanged', p => { chart.dispatchAction({type:'legendSelect', name:p.name}); const k = curOrder.find(o => o[1].title === p.name);
         if (k) setTimeout(() => { state.evKind = state.evKind === k[0] ? '' : k[0]; reload(); }); }); }
     const stepTxt = s.step >= 86400 ? T('a day') : s.step >= 3600 ? Tn(s.step / 3600, '{n} hour', '{n} hours') : Tn(s.step / 60, '{n} minute', '{n} minutes');
-    chart.setOption({animation:false, grid:{left:14, right:10, top:36, bottom:4, containLabel:true},
+    // (1.16.1) the chosen priority and kind apply to the chart too: a priority keeps the kinds that have it (a kind has
+    // one priority, set in Settings → Events), a kind only its own bars; the ring offers the kinds of the priority
+    const pri = cur === 'all' ? order : order.filter(([, o]) => o.sev === cur), priN = pri.reduce((a, [, o]) => a + o.n, 0);
+    if (kind && !pri.some(([k]) => k === kind)) { kind = ''; state.evKind = ''; }
+    const vis = kind ? pri.filter(([k]) => k === kind) : pri, chosen = kind ? st.kinds[kind].title : cur !== 'all' ? cap1(sevs[cur]) : '';
+    curOrder = vis; cancelAnimationFrame(fadeF); hoverK = ''; shown = Object.fromEntries(vis.map(([k]) => [k, 1]));
+    chart.setOption({animation:!REDUCED.matches, animationDuration:450, animationEasing:'cubicOut', animationDurationUpdate:320, animationEasingUpdate:'cubicOut',
+      grid:{left:14, right:10, top:36, bottom:4, containLabel:true},
       legend:{top:0, left:0, type:'scroll', icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}, pageTextStyle:{color:C.ink2}, pageIconColor:C.ink2},
-      tooltip:{...tipBase(), trigger:'axis', axisPointer:{type:'shadow'}, order:'valueDesc',
-        formatter:ps => { const n = ps.reduce((a, p) => a + (p.value[1] || 0), 0); if (!ps.length) return '';
+      tooltip:{...tipBase(), trigger:'axis', axisPointer:{type:'shadow', shadowStyle:{color:'rgba(120,160,255,.07)'}}, order:'valueDesc', transitionDuration:.25,
+        formatter:ps => { const n = ps.reduce((a, p) => a + (p.value[1] || 0), 0); if (!n) return '';      // an empty step: no box
           const t0 = ps[0].value[0] / 1000 - s.step / 2, lbl = s.step >= 86400 ? new Date(t0 * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'}) : `${s.to - s.from > 86400 ? dmy(t0) + ' ' : ''}${hhmm(t0)} – ${hhmm(t0 + s.step)}`;
           return `${esc(lbl)} · <b>${Tn(n, '{n} event', '{n} events')}</b><br>` + ps.filter(p => p.value[1]).map(p => `${p.marker}${esc(p.seriesName)} <b>${p.value[1]}</b>`).join('<br>'); }},
       xAxis:{...axisX(ts), min:s.from * 1000, max:(ts.length ? ts[ts.length - 1] + s.step : s.to) * 1000},
       yAxis:{...axisY(v => fmtN(v)), minInterval:1},
-      series:order.map(([k, o]) => ({id:k, name:o.title, type:'bar', stack:'e', barMaxWidth:26, barCategoryGap:'22%', itemStyle:{color:evColor(k), opacity:kind && kind !== k ? .22 : 1, borderRadius:0},
-        emphasis:{focus:'series'}, data:ts.map(t => [(t + s.step / 2) * 1000, m.get(t + ':' + k) || 0])}))}, {notMerge:true});
-    fill('evChartSub', `${T('how many began, by kind · one bar = {step} · click a kind to show only it', {step:stepTxt})}`);
+      graphic:[{id:'evNone', type:'text', left:'center', top:'middle', silent:true, style:{text:all && !priN ? T('No events of this priority') : '', fill:C.ink3, font:'13px Manrope'}}],
+      series:vis.map(([k, o]) => ({id:k, name:o.title, type:'bar', stack:'e', barMaxWidth:26, barCategoryGap:'22%', itemStyle:{color:evColor(k), opacity:evOp(k), borderRadius:0},
+        emphasis:{focus:'none', itemStyle:{shadowBlur:14, shadowColor:evColor(k)}}, data:ts.map(t => [(t + s.step / 2) * 1000, m.get(t + ':' + k) || 0])}))},
+      {replaceMerge:['series']});        // a refresh moves the bars to their new heights instead of drawing them anew
+    fill('evChartSub', `${T('how many began, by kind · one bar = {step} · click a kind to show only it', {step:stepTxt})}${chosen ? ` · <b class="evwhat">${esc(chosen)}</b>` : ''}`);
     const cn = document.getElementById('evChartNote'), cnt = [st.before ? Tn(st.before, '{n} event began before the period and is not drawn here.', '{n} events began before the period and are not drawn here.') : '', evCut(res)].filter(Boolean);
     cn.hidden = !cnt.length; cn.innerHTML = cnt.join(' ');
     // the share of each kind
     const pel = document.getElementById('evPie'); pel.classList.remove('loading');
-    if (!all) { pie = null; pel.innerHTML = `<div class="empty">${state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`; }
+    fill('evPieSub', T('of the events in the period') + (chosen && !kind ? ` · <b class="evwhat">${esc(chosen)}</b>` : ''));
+    if (!priN) { if (pie && !pie.isDisposed()) pie.dispose(); pie = null; pel.innerHTML = `<div class="empty evnone">${all ? T('No events of this priority') : state.filters.length ? T('No events for these filters in this period') : T('No events — all quiet')}</div>`; }
     else {
       if (!pie || !pel.querySelector('.evpie')) { pel.innerHTML = `<div class="chart evpie" style="height:230px"></div><div class="dl evleg"></div>`; pie = mkChart(pel.querySelector('.evpie'));
         pie.on('click', p => setTimeout(() => { state.evKind = state.evKind === p.data.id ? '' : p.data.id; reload(); })); }
       pie.setOption({animation:false, tooltip:{...tipBase(), formatter:p => `${esc(p.name)}<br><b>${Tn(p.value, '{n} event', '{n} events')}</b> · ${p.percent}%`},
-        title:{text:fmtN(kind ? st.kinds[kind].n : all), subtext:kind ? st.kinds[kind].title : T('events'), left:'center', top:'38%', textStyle:{color:C.ink, fontFamily:'JetBrains Mono', fontSize:18, fontWeight:700}, subtextStyle:{color:C.ink2, fontFamily:'Manrope', fontSize:11.5, width:120, overflow:'truncate'}},
+        title:{text:fmtN(kind ? st.kinds[kind].n : priN), subtext:chosen || T('events'), left:'center', top:'38%', textStyle:{color:C.ink, fontFamily:'JetBrains Mono', fontSize:18, fontWeight:700}, subtextStyle:{color:C.ink2, fontFamily:'Manrope', fontSize:11.5, width:120, overflow:'truncate'}},
         series:[{type:'pie', radius:['64%', '86%'], padAngle:2, itemStyle:{borderRadius:5}, label:{show:false}, emphasis:{scale:true, scaleSize:4},
-          data:order.map(([k, o]) => ({id:k, name:o.title, value:o.n, itemStyle:{color:evColor(k), opacity:kind && kind !== k ? .25 : 1, shadowBlur:12, shadowColor:evColor(k)}}))}]}, {notMerge:true});
-      pel.querySelector('.evleg').innerHTML = order.map(([k, o]) => `<i class="idot" style="background:${evColor(k)}"></i><button class="link${kind === k ? ' on' : ''}" data-kind="${k}">${esc(o.title)}</button><span class="p">${pct(o.n, all)}</span><span class="t">${fmtN(o.n)}</span>`).join('');
+          data:pri.map(([k, o]) => ({id:k, name:o.title, value:o.n, itemStyle:{color:evColor(k), opacity:kind && kind !== k ? .25 : 1, shadowBlur:12, shadowColor:evColor(k)}}))}]}, {notMerge:true});
+      pel.querySelector('.evleg').innerHTML = pri.map(([k, o]) => `<i class="idot" style="background:${evColor(k)}"></i><button class="link${kind === k ? ' on' : ''}" data-kind="${k}">${esc(o.title)}</button><span class="p">${pct(o.n, priN)}</span><span class="t">${fmtN(o.n)}</span>`).join('');
       pel.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { state.evKind = state.evKind === b.dataset.kind ? '' : b.dataset.kind; reload(); });
     }
     // the newest events of the chosen priority / kind

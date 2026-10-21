@@ -751,3 +751,6 @@ button.kcard.evcard.on{border-color:rgba(110,165,255,.8);box-shadow:0 0 0 1px rg
 /* the chart takes the height of the row (the kind list beside it may be long) */
 section.evfill{display:flex;flex-direction:column}
 section.evfill > #evChart{flex:1 1 auto;min-height:320px;height:auto!important}
+/* (1.16.1) the chosen priority / kind named in the subtitles; an empty ring keeps the panel's height, the note centred */
+.sub .evwhat{color:var(--ink);font-weight:700}
+#evPie .empty.evnone{min-height:300px;display:grid;place-items:center}
