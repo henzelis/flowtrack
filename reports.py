@@ -734,8 +734,8 @@ def render(r, data, t0, t1, version='', now=None):
             graphs = events_charts(ev, t0, t1, r['tz'], W, tz)
             cells = [x for k, v in order for x in (dot(EV_COLORS.get(k, INK3)), Paragraph(f'{esc(v["title"])} <b>{v["n"]}</b> '
                                                                                        f'<font color="{INK3}" size="7">{100 * v["n"] / len(ev):.0f}%</font>', P))]
-            cells += [''] * (-len(cells) % 6)
-            chips = Table([cells[i:i + 6] for i in range(0, len(cells), 6)], colWidths=[5 * mm, W / 3 - 5 * mm] * 3)
+            cells += [''] * (-len(cells) % 4)          # (1.16.1) two columns: long names of kinds stay on one line
+            chips = Table([cells[i:i + 4] for i in range(0, len(cells), 4)], colWidths=[5 * mm, W / 2 - 5 * mm] * 2)
             chips.setStyle(TableStyle([('LEFTPADDING', (0, 0), (-1, -1), 0), ('TOPPADDING', (0, 0), (-1, -1), 1.5),
                                        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5), ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
             body = []

@@ -153,7 +153,9 @@ function every(ms, fn){ const t = setInterval(() => { if (!document.hidden) fn()
 // ===================== chart helpers =====================
 // the axis spans the whole period even without data, so an empty chart still maps a drag to real times
 const axisX = ts => ({type:'time', ...(ts && ts.length ? {min:ts[0] * 1000, max:ts[ts.length - 1] * 1000} : {}), axisLine:{lineStyle:{color:C.hair}}, axisTick:{show:false}, splitLine:{show:false},
-  axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, hideOverlap:true, formatter:v => rangeSecs() > 86400 ? dmy(v / 1000) : hhmm(v / 1000)}});
+  axisLabel:{color:C.ink3, fontFamily:'JetBrains Mono', fontSize:11, hideOverlap:true,
+    // (1.16.1) a period of 1–4 days has ticks within a day: the date alone repeated itself (20/10, 20/10 …)
+    formatter:v => rangeSecs() > 4 * 86400 ? dmy(v / 1000) : rangeSecs() > 86400 ? `${dmy(v / 1000)} ${hhmm(v / 1000)}` : hhmm(v / 1000)}});
 // drag across a time chart to look at that stretch of time (custom period for every page)
 function zoomable(c){
   const zr = c.getZr(), gridRect = () => c.getModel().getComponent('grid').coordinateSystem.getRect();
@@ -2608,7 +2610,7 @@ function vThreats(){
     const vis = kind ? pri.filter(([k]) => k === kind) : pri, chosen = kind ? st.kinds[kind].title : cur !== 'all' ? cap1(sevs[cur]) : '';
     curOrder = vis; cancelAnimationFrame(fadeF); hoverK = ''; shown = Object.fromEntries(vis.map(([k]) => [k, 1]));
     chart.setOption({animation:!REDUCED.matches, animationDuration:450, animationEasing:'cubicOut', animationDurationUpdate:320, animationEasingUpdate:'cubicOut',
-      grid:{left:14, right:10, top:36, bottom:4, containLabel:true},
+      grid:{left:30, right:10, top:36, bottom:4, containLabel:true},     // room for the first time label (date + time)
       legend:{top:0, left:0, type:'scroll', icon:'roundRect', itemWidth:10, itemHeight:10, textStyle:{color:C.ink2, fontFamily:'Manrope'}, pageTextStyle:{color:C.ink2}, pageIconColor:C.ink2},
       tooltip:{...tipBase(), trigger:'axis', axisPointer:{type:'shadow', shadowStyle:{color:'rgba(120,160,255,.07)'}}, order:'valueDesc', transitionDuration:.25,
         formatter:ps => { const n = ps.reduce((a, p) => a + (p.value[1] || 0), 0); if (!n) return '';      // an empty step: no box

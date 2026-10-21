@@ -162,7 +162,15 @@ and exporter health. FlowTrack works out who opened each connection and which of
 web sites stay quiet. New events go to Telegram (your own bot), e-mail, webhooks (Slack, Mattermost, Discord or your
 own system) and your SIEM as syslog (CEF or JSON).
 
-<p align="center"><img src="docs/media/en/events.webp" alt="Events page: port scan, password guessing, link near capacity, with Filter / Exclude / Ignore" width="100%"></p>
+The page shows the picture first: how many events of each priority, how their number changes over the period by kind,
+and the share of each kind. Pick a priority or a kind and the chart, the ring and the list follow it. Below — the newest
+30 events with Filter / Exclude / Ignore; **All events** pages through the rest with a search by address or text.
+
+<p align="center"><img src="docs/media/en/events.webp" alt="Events page: cards by priority, events over time by kind, the share of each kind, the newest events with Filter / Exclude / Ignore" width="100%"></p>
+
+The same two charts open the *Security events* part of every PDF report:
+
+<p align="center"><img src="docs/media/en/report-events.webp" alt="Security events in a PDF report: events over time by kind and the share of each kind" width="80%"></p>
 
 
 ### Reports — by e-mail, on schedule or for any period

@@ -23,7 +23,8 @@ JSON over HTTP — with the session cookie of the UI, or with an **API token** (
 | `GET /api/paths`, `GET /api/devmap` | traffic through one device (the `device` filter): interface pairs, hosts behind them |
 | `GET /api/topology?pov=&depth=` | layer-3 neighbours of a device, links with what each end sent and received |
 | `GET /api/path?src=&dst=` | the hops from a source to a destination (address or network) across the devices |
-| `GET /api/devices`, `GET /api/alerts`, `GET /api/meta` | exporters and interfaces; detections; metadata |
+| `GET /api/alerts` | events of the period and filters: `alerts` (every event, priority first) and `stats` — `total`, `sev` {crit, warn, info}, `kinds` {kind: {n, sev, title}}, `series` {from, to, step, rows [[t, kind, n]] = events that began in each step}, `before` (began before the period), `truncated`; (1.16.1) with `limit` (0–500) a part instead: the newest first, `offset`, `sev`, `kind`, `q` (text / address), `matched`; `tz` (IANA zone) for whole local days |
+| `GET /api/devices`, `GET /api/meta` | exporters and interfaces; metadata |
 | `GET /api/top?dim=net`, `GET /api/series?by=net` | traffic by your named networks |
 | `GET /api/networks`, `GET /api/hosts/names`, `GET /api/ports` | your names of networks, hosts and ports |
 | `GET /api/backups` | backups, their schedule and the last result |

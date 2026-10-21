@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.16.1 — 2026-10-21
 
 - **Events, visual first**: cards with the number of events and of each priority (a card picks the priority of the
   list), **Events over time** — how many began in each step of the period (≤ 48 bars: 5 minutes for an hour, half an
@@ -19,6 +19,7 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **Reports**: *Security events* draws the same two charts — events over time by kind and the share of each kind —
   above the list, each kind in the colour it has on the page.
 - The notification bell asks the server for the counts only, not for every event of the day.
+- Charts of a custom period of 1–4 days label their time axis with the date and the hour (the date alone repeated).
 
 ## 1.16.0 — 2026-10-19
 
