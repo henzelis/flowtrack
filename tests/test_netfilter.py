@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import api  # noqa: E402
 
 
-def scope(flt):
-    return api.scope({'f': [json.dumps(flt)], 'range': ['24h']})
+def scope(flt, t='all'):
+    return api.scope({'f': [json.dumps(flt)], 'range': ['24h'], 't': [t]})
 
 
 class Networks(unittest.TestCase):
@@ -24,6 +24,16 @@ class Networks(unittest.TestCase):
         self.assertIn("isIPAddressInRange(int_ip, {hn0:String})", p['_flows'])
         self.assertIn('isIPAddressInRange(int_ip, {f0:String})', where)
         self.assertIn(' OR ', where)                                                  # either of them
+
+    def test_internet_reads_int_ip_without_the_host_view(self):
+        """(1.17.0) between inside and outside the host is int_ip of every record: no turned records, the rollups
+        that hold int_ip answer"""
+        where, p, _, _ = scope([{'k': 'ip', 'v': '172.16.0.77/24'}, {'k': 'ip', 'v': '10.0.0.5'}], t='internet')
+        self.assertNotIn('hv', p)
+        self.assertEqual(p['_flows'], 'flows')
+        self.assertIn('int_ip', p['_fcols'])
+        self.assertNotIn('ext_ip', p['_fcols'])
+        self.assertIn('isIPAddressInRange(int_ip, {f0:String})', where)
 
     def test_outside_and_excluded(self):
         where, p, _, _ = scope([{'k': 'dst', 'v': '203.0.113.0/24'}, {'k': 'ip', 'v': '10.0.0.0/8', 'neg': True}])

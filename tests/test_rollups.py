@@ -78,8 +78,25 @@ class Source(unittest.TestCase):
         self.assertEqual(rollups.source(['int_ip', 'ext_ip', 'service', 'country', 'city'], NOW - DAY, None, [])[1], 'agg_conv')
         self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, ['ext_ip'])[1], 'agg_conv')
         self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, [])[1], 'agg_host')        # the smaller table first
-        self.assertIsNone(rollups.source(['service'], NOW - DAY, None, ['int_ip', 'ext_ip'])[1])
+        # (1.17.0) service / country / city are keys of agg_conv: exact under a filter on both ends too
+        self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['int_ip', 'ext_ip'])[1], 'agg_conv')
         self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [], table='(SELECT * FROM flows)')[1])
+
+    def test_qos_ports_and_keys_1170(self):
+        """(1.17.0) the QoS tables are read (they were built but never chosen); hosts / addresses of a port come from
+        the per-port tables; what an address is (service, country) filters the per-address tables exactly"""
+        self.state(**{n: 0 for n in rollups.ROLLUPS})
+        self.assertEqual(rollups.source(['dscp'], NOW - DAY, None, [])[1], 'agg_dscp')
+        self.assertEqual(rollups.source(['in_if', 'out_if', 'dscp', 'dscp_out'], NOW - DAY, None, [])[1], 'agg_dscp')
+        self.assertEqual(rollups.source(['dscp', 'service'], NOW - DAY, None, [])[1], 'agg_dscp_svc')
+        self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, ['dscp'])[1], 'agg_dscp_svc')
+        self.assertEqual(rollups.source(['in_if', 'out_if'], NOW - DAY, None, [])[1], 'agg_iface')      # not the QoS one
+        self.assertEqual(rollups.source(['ext_port', 'proto', 'int_ip'], NOW - DAY, None, [])[1], 'agg_port_host')
+        self.assertEqual(rollups.source(['ext_port', 'proto', 'ext_ip'], NOW - DAY, None, [])[1], 'agg_port_peer')
+        self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, ['ext_port'])[1], 'agg_port_host')
+        self.assertEqual(rollups.source(['ext_port'], NOW - DAY, None, [])[1], 'agg_ports')            # the small one first
+        self.assertEqual(rollups.source(['ext_ip'], NOW - DAY, None, ['service'])[1], 'agg_ext')
+        self.assertEqual(rollups.source(['in_if', 'out_if', 'out_ip'], NOW - DAY, None, ['country'])[1], 'agg_iface_ext')
         self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [], step=300)[1])  # hourly table
 
     def test_old_or_missing_state_means_records_only(self):

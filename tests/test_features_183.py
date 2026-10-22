@@ -34,7 +34,8 @@ class AnyOf(unittest.TestCase):
         self.assertNotIn(' OR exporter', where)
 
     def test_two_hosts_are_read_from_their_point_of_view(self):
-        where, p, _, _ = scope([{'k': 'ip', 'v': '10.0.0.5'}, {'k': 'ip', 'v': '10.0.0.6'}])
+        # (1.17.0) inside <-> inside (here: all traffic); between inside and outside int_ip is the host already
+        where, p, _, _ = api.scope({'f': [json.dumps([{'k': 'ip', 'v': '10.0.0.5'}, {'k': 'ip', 'v': '10.0.0.6'}])], 'range': ['24h'], 't': ['all']})
         self.assertEqual(p['hv'], ['10.0.0.5', '10.0.0.6'])
         self.assertIn('int_ip IN {hv:Array(String)}', p['_flows'])
         self.assertIn('(int_ip = {f0:String} OR int_ip = {f1:String})', where)

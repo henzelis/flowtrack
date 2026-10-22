@@ -39,9 +39,11 @@ ROLLUPS = {
                      ('l7', 'LowCardinality(String)', 'l7'), ('proto', 'UInt8', 'proto')],
                      'attrs': []},
     # hundreds of thousands of outside addresses a day: they repeat within an hour, hardly within 5 minutes
-    'agg_ext': {'bucket': 3600, 'keys': [('ext_ip', 'String', 'ext_ip')],
-                'attrs': [('service', 'LowCardinality(String)'), ('country', 'LowCardinality(String)'), ('city', 'LowCardinality(String)'),
-                          ('asn', 'UInt32'), ('as_org', 'LowCardinality(String)')]},
+    # (1.17.0, v2) what an address is (service, country, city, AS) is part of the key, not any() of it: a filter on it is
+    # exact and needs no records; an address is nearly always one of each, so the rows hardly grow
+    'agg_ext': {'bucket': 3600, 'v': 2, 'keys': [('ext_ip', 'String', 'ext_ip'), ('service', 'LowCardinality(String)', 'service'),
+                ('country', 'LowCardinality(String)', 'country'), ('city', 'LowCardinality(String)', 'city'), ('asn', 'UInt32', 'asn'),
+                ('as_org', 'LowCardinality(String)', 'as_org')], 'attrs': []},
     # Through device and Path analysis (1.8.1): the paths through each device (input -> output interface); per hour the
     # inside hosts on them (and, between inside hosts, the other end) and the outside addresses beyond them
     # (1.16.0) QoS: traffic per DSCP class through each device (in -> out interface, the marking in and out), and per
@@ -52,15 +54,24 @@ ROLLUPS = {
                      ('l7', 'LowCardinality(String)', 'l7'), ('int_ip', 'String', 'int_ip')], 'attrs': []},
     # (1.16.2) Flows: the conversations (inside host x outside address) per hour, for Top conversations and the river of
     # a whole period — a busy network repeats its pairs within the hour (200F: ~8 M records, ~130 k pairs an hour)
-    'agg_conv': {'bucket': 3600, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip')],
-                 'attrs': [('service', 'LowCardinality(String)'), ('country', 'LowCardinality(String)'), ('city', 'LowCardinality(String)')]},
+    # (1.17.0, v2) service / country / city in the key, as in agg_ext
+    'agg_conv': {'bucket': 3600, 'v': 2, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
+                 ('service', 'LowCardinality(String)', 'service'), ('country', 'LowCardinality(String)', 'country'),
+                 ('city', 'LowCardinality(String)', 'city')], 'attrs': []},
+    # (1.17.0) Ports: the inside hosts and the outside addresses of each port, exact (an approximate count would need
+    # far less room, but Yegor's rule: numbers are exact) — scanners hitting thousands of ports make these the big ones
+    'agg_port_host': {'bucket': 3600, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('int_ip', 'String', 'int_ip')],
+                      'attrs': []},
+    'agg_port_peer': {'bucket': 3600, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('ext_ip', 'String', 'ext_ip')],
+                      'attrs': []},
     'agg_iface': {'bucket': 300, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('service', 'LowCardinality(String)', 'service')],
                   'attrs': []},
     'agg_iface_host': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('int_ip', 'String', 'int_ip'),
                        ('peer_ip', 'String', "if(dir IN ('internal', 'internal_back'), ext_ip, '')")],
                        'attrs': []},
-    'agg_iface_ext': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('out_ip', 'String', "if(dir IN ('up', 'down'), ext_ip, '')")],
-                      'attrs': [('service', 'LowCardinality(String)'), ('country', 'LowCardinality(String)'), ('city', 'LowCardinality(String)')]},
+    'agg_iface_ext': {'bucket': 3600, 'v': 2, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('out_ip', 'String', "if(dir IN ('up', 'down'), ext_ip, '')"),
+                      ('service', 'LowCardinality(String)', 'service'), ('country', 'LowCardinality(String)', 'country'),
+                      ('city', 'LowCardinality(String)', 'city')], 'attrs': []},
 }
 CUT = max(r['bucket'] for r in ROLLUPS.values())    # the longest bucket (a day is a multiple of every bucket)
 LATE = 2 * 3600     # records may reach the collector this late (a multiple of every bucket): see _late()
@@ -119,14 +130,22 @@ def ensure(log=print):
             ch(f'DROP TABLE IF EXISTS {name}')
         ch('TRUNCATE TABLE agg_state')
         st = {}
+    # (1.17.0) a table whose own definition changed ('v') is built again alone: the others keep their history
+    redo = [name for name, r in ROLLUPS.items() if f'cutover:{name}' in st and st.get(f'def:{name}', 1) != r.get('v', 1)]
+    if redo and st.get('version') == VERSION:
+        log(f"rollups: {', '.join(redo)}: definition changed, building again")
+        keys = [f'{k}:{name}' for name in redo for k in ('cutover', 'ready_from', 'late', 'def')]
+        ch('ALTER TABLE agg_state DELETE WHERE k IN {k:Array(String)}', {'k': keys}, settings={'mutations_sync': 2})
+        st = _get_state()
     if st.get('version') == VERSION and all(f'cutover:{name}' in st for name in ROLLUPS):
         for name, r in ROLLUPS.items():          # a table lost by hand: recreated (its history is filled again)
             ch(_ddl(name, r))
         return st
-    now = int(time.time())
+    now, made = int(time.time()), []
     for name, r in ROLLUPS.items():
         if f'cutover:{name}' in st:
             continue
+        made.append(name)
         cut = (now // r['bucket'] + 1) * r['bucket']    # the table's own next bucket boundary
         ch(f'DROP VIEW IF EXISTS {name}_mv')
         ch(f'DROP TABLE IF EXISTS {name}')       # left by an interrupted first start: its rows would be counted twice
@@ -134,10 +153,12 @@ def ensure(log=print):
         ch(f'CREATE MATERIALIZED VIEW {name}_mv TO {name} AS ' + _select(r, f'ts >= toDateTime({cut})'))
         _set(f'cutover:{name}', cut)
         _set(f'ready_from:{name}', cut)        # complete from the cutover on; history is filled by backfill()
+        _set(f'def:{name}', r.get('v', 1))
     _set('version', VERSION)
-    cut = min(v for k, v in _get_state().items() if k.startswith('cutover:'))
-    log(f"rollups: created, filled from {time.strftime('%Y-%m-%d %H:%M', time.gmtime(cut))} UTC on")
-    return _get_state()
+    st = _get_state()
+    cut = min(st[f'cutover:{name}'] for name in made)
+    log(f"rollups: {', '.join(made)} created, filled from {time.strftime('%Y-%m-%d %H:%M', time.gmtime(cut))} UTC on")
+    return st
 
 
 def _wait(until, stop):
@@ -382,10 +403,10 @@ def ready_from(name=None):
 
 
 # smallest first; a table added later goes after those that hold the same columns, so their queries stay where they are
-PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_iface', 'agg_host', 'agg_host_svc', 'agg_iface_host', 'agg_ext', 'agg_iface_ext', 'agg_conv']
-# (1.16.2) only for a query that groups by the pair, or by its key columns alone (exact) — never for an attribute (a
-# service per pair and hour is any() of them) because a filter needs both ends
-PAIR_ONLY = {'agg_conv'}
+# (1.17.0) the QoS tables (built since 1.16.0 but never read) and the per-port tables go last: they hold columns no
+# other table has, and only queries that need those land on them
+PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_iface', 'agg_host', 'agg_host_svc', 'agg_iface_host', 'agg_ext', 'agg_iface_ext', 'agg_conv',
+          'agg_dscp', 'agg_dscp_svc', 'agg_port_host', 'agg_port_peer']
 RAW_EXPR = {'has_ll': 'lat != 0', 'peer_ip': "if(dir IN ('internal', 'internal_back'), ext_ip, '')",
             'out_ip': "if(dir IN ('up', 'down'), ext_ip, '')"}       # rollup key columns that are expressions over the records
 _TYPES = {c: t for r in ROLLUPS.values() for c, t, *_ in r['keys'] + r['attrs']}
@@ -397,7 +418,6 @@ def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
     bucket divides it). -> (sql, rollup name or None). Rows have ts, exporter, dir, `cols`, the filter columns,
     bytes, packets and flows (records), so a query sums `flows` instead of count(). The period is inside; the
     filters stay with the caller. `table`: what the records are read from (api.host_view for a chosen host)."""
-    asked = set(cols)
     cols = list(dict.fromkeys(list(cols) + [c for c in flt_cols]))
     rcols = ', '.join(['ts', 'exporter', 'dir'] + [f'{RAW_EXPR[c]} AS {c}' if c in RAW_EXPR else c for c in cols if c not in ('exporter', 'dir')])
     raw = lambda cond: f"SELECT {rcols}, bytes, packets, toUInt64(1) AS flows FROM {table} WHERE {cond}"   # noqa: E731
@@ -407,14 +427,15 @@ def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
         return whole, None
     need = set(flt_cols) | {'exporter', 'dir'}
     name = next((n for n in PREFER if set(cols) <= COLUMNS[n] | ATTRS[n] and need <= COLUMNS[n]
-                 and (n not in PAIR_ONLY or {'int_ip', 'ext_ip'} <= asked or asked <= COLUMNS[n])
                  and not (step and step % ROLLUPS[n]['bucket'])), None)
     rf = ready_from(name) if name else None
     if rf is None:
         return whole, None
     B = ROLLUPS[name]['bucket']
     a = max(-(-int(t0) // B) * B, rf)                         # first whole bucket the rollup holds
-    b = (int(t1) if t1 else int(time.time())) // B * B       # end of the last whole bucket (the current one is raw)
+    # end of the last whole bucket; (1.17.0) a period that ends now takes the current bucket too: the view adds every
+    # record to it as it is written, so it holds exactly the records of it so far
+    b = int(t1) // B * B if t1 else -(-int(time.time()) // B) * B
     if b - a < B:
         return whole, None
     # the rollup's columns as plain types (SimpleAggregateFunction(...) would not unite with the records' columns)
