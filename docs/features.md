@@ -150,7 +150,8 @@
 - *Events*: port scans, password guessing on SSH / RDP / management ports, a daily summary of who probes them,
   aggressive web clients, DDoS (floods of a service, inbound volume, UDP reflection — against the network's own
   usual peak), inside hosts that scan the internet or the LAN, contact with addresses on IP reputation lists
-  (botnet controllers, malware hosts, criminal netblocks, attackers — eight free public lists plus your own); plus
+  (botnet controllers, malware hosts, criminal netblocks, attackers — eight free public lists plus your own; ThreatFox
+  asks for abuse.ch's free Auth-Key, entered in Settings → Events → IP reputation, where any list can get a key); plus
   sustained upload, bursts, new countries, export health, links near their capacity, and scheduled reports that could
   not be sent. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
