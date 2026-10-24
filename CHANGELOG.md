@@ -15,6 +15,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
   (which now also keep each device's interfaces and the address after NAT) instead of every record of the period;
   only its first and last partial hours and live windows read the records. The hops show the same bytes, records
   and conversations (inside host × outside address, as on Flows) — counted exactly.
+- **Detections learn without reading the history again**: every hour the detector re-learned the services of the
+  last day and the DDoS baselines of the last week from every record (at 5,000 records/s ~3 billion records an
+  hour). It now keeps what it needs as it looks at each 10-minute window — the minutes of traffic per device and per
+  service, and the candidates of services per hour — in small tables, and learns from those; the first start after
+  the upgrade fills them once from the records. The baselines are now exact (before: an approximate percentile that
+  differed a little from run to run).
 - **The summary tables are filled ~5× faster and come out smaller**: filling the history after an upgrade summed the
   records up per second instead of per 5 minutes / per hour — every number was right, but the tables held many
   more rows than needed (the 5-minute ones up to 300×) until ClickHouse merged them. Now each bucket is one row, and on

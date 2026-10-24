@@ -120,6 +120,57 @@ ENGINE = ReplacingMergeTree(updated)
 ORDER BY (kind, ip, port, proto)
 TTL updated + INTERVAL 2 DAY;
 
+-- (1.17.0) What the detector learns from, kept as each 10-minute window is looked at (detect.keep_window), so the
+-- hourly learning reads these small tables instead of a day and a week of records again every hour.
+-- The candidates of learned services, per hour: L = our address:port called from outside (the outside addresses and
+-- their ports), R = an outside address:port we call (our ports, and those of them that are well-known). uniq() states
+-- merge into exactly what uniq() over all the records gives.
+CREATE TABLE IF NOT EXISTS ev_learn_l
+(
+    ts      DateTime,
+    ip      String,
+    port    UInt16,
+    proto   UInt8,
+    s_peers AggregateFunction(uniq, String),
+    s_ports AggregateFunction(uniq, UInt16)
+)
+ENGINE = AggregatingMergeTree
+PARTITION BY toYYYYMMDD(ts)
+ORDER BY (ts, ip, port, proto)
+TTL ts + INTERVAL 2 DAY;
+
+CREATE TABLE IF NOT EXISTS ev_learn_r
+(
+    ts      DateTime,
+    ip      String,
+    port    UInt16,
+    proto   UInt8,
+    s_peers AggregateFunction(uniq, UInt16),
+    s_low   AggregateFunction(uniqIf, UInt16, UInt8)
+)
+ENGINE = AggregatingMergeTree
+PARTITION BY toYYYYMMDD(ts)
+ORDER BY (ts, ip, port, proto)
+TTL ts + INTERVAL 2 DAY;
+
+-- Each minute of the windows: sessions to each learned service of ours (svc), inbound bit/s per device (wan) and from
+-- amplifier ports (refl) — the DDoS baselines are their 99th percentile over a week. A window looked at again
+-- writes the same rows: read with FINAL.
+CREATE TABLE IF NOT EXISTS ev_minute
+(
+    m        DateTime,
+    kind     Enum8('svc' = 1, 'wan' = 2, 'refl' = 3),
+    exporter LowCardinality(String),
+    ip       String,
+    port     UInt16,
+    proto    UInt8,
+    v        Float64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMMDD(m)
+ORDER BY (kind, exporter, ip, port, proto, m)
+TTL m + INTERVAL 8 DAY;
+
 -- One row per event (kind + key: the source, or the service); a window that sees it again writes a newer version
 -- (ver) with last_seen, hits and info updated. Read with FINAL.
 CREATE TABLE IF NOT EXISTS events

@@ -343,45 +343,98 @@ def _arr(nums):
 
 
 # ---------------------------------------------------------------- learning
+_LEARNED_L = "SELECT ip, port, proto FROM ev_services WHERE kind = 'L' AND updated > now() - INTERVAL 1 DAY"
+
+
+def _candidates(t0, t1):
+    """INSERT ... SELECT of the records [t0, t1) into the per-hour candidates of learned services (ev_learn_l/_r).
+    L: our address:port called by outside addresses from varying, not well-known ports. Answers to our own calls come
+    from 443, 53 ... and are left out before grouping (on a busy network they are nearly all records); a PAT port reused
+    towards several servers is thereby no service either. R: an outside address:port we call from many ports of ours,
+    none well-known (only such ports need learning: well-known ones count as servers anyway)."""
+    known, w = _arr(KNOWN), f'ts >= toDateTime({int(t0)}) AND ts < toDateTime({int(t1)})'
+    return [f"""INSERT INTO ev_learn_l SELECT toStartOfHour(ts) AS h, int_ip, int_port, proto, uniqState(ext_ip), uniqState(ext_port) FROM flows
+                WHERE {w} AND dir = 'down' AND proto IN (6, 17) AND ext_port >= 1024 AND NOT has({known}, ext_port)
+                GROUP BY h, int_ip, int_port, proto""",
+            f"""INSERT INTO ev_learn_r SELECT toStartOfHour(ts) AS h, ext_ip, ext_port, proto, uniqState(int_port),
+                    uniqIfState(int_port, toUInt8(int_port < 1024 OR has({known}, int_port))) FROM flows
+                WHERE {w} AND dir = 'up' AND proto IN (6, 17) AND ext_port >= 1024 AND NOT has({known}, ext_port)
+                GROUP BY h, ext_ip, ext_port, proto"""]
+
+
+def _minutes_sql(srcs=True):
+    """The window's {t0}..{t1} minutes: sessions to each learned service of ours, inbound bit/s per device, the same
+    from amplifier ports; `srcs`: with the distinct sources of each minute (the events show them)"""
+    u = ', uniqExact(ext_ip) AS srcs' if srcs else ''
+    w = 'ts >= {t0:DateTime} AND ts < {t1:DateTime}'
+    return (f"""SELECT int_ip, int_port, proto, any(exporter) AS ex, toStartOfMinute(ts) AS m, count() AS n{u} FROM flows
+                WHERE {w} AND dir = 'down' AND (int_ip, int_port, proto) IN ({_LEARNED_L}) GROUP BY int_ip, int_port, proto, m""",
+            f"SELECT exporter AS ex, toStartOfMinute(ts) AS m, sum(bytes) * 8 / 60 AS bps{u} FROM flows WHERE {w} AND dir = 'down' GROUP BY ex, m",
+            f"""SELECT exporter AS ex, toStartOfMinute(ts) AS m, sum(bytes) * 8 / 60 AS bps{u}{', groupUniqArray(5)(ext_port) AS plist' if srcs else ''}
+                FROM flows WHERE {w} AND dir = 'down' AND proto = 17 AND has({_arr(AMPLIFIERS)}, ext_port) GROUP BY ex, m""")
+
+
+def minutes(p):
+    """(1.17.0) {'svc': rows, 'wan': rows, 'refl': rows} of the window p (t0, t1): what ddos() compares with the
+    baselines and keep_window() keeps for learn()"""
+    return dict(zip(('svc', 'wan', 'refl'), (ch(q, p, fmt='JSON', settings=HEAVY) for q in _minutes_sql())))
+
+
+def keep_window(t0, t1, mins):
+    """(1.17.0) What the learning needs from the window [t0, t1): its candidates of services and its minutes `mins`"""
+    for q in _candidates(t0, t1):
+        ch(q, settings=HEAVY, timeout=600)
+    rows = [{'m': r['m'], 'kind': 'svc', 'exporter': '', 'ip': r['int_ip'], 'port': int(r['int_port']), 'proto': int(r['proto']), 'v': int(r['n'])}
+            for r in mins['svc']]
+    rows += [{'m': r['m'], 'kind': k, 'exporter': r['ex'], 'ip': '', 'port': 0, 'proto': 0, 'v': float(r['bps'])} for k in ('wan', 'refl') for r in mins[k]]
+    if rows:
+        ch('INSERT INTO ev_minute FORMAT JSONEachRow', data='\n'.join(json.dumps(r) for r in rows).encode())
+
+
+def seed(log=print, now=None):
+    """(1.17.0) The first start with keep_window(): its tables filled once from the records — the candidates of the
+    last day an hour at a time, then (with the services that gives) the minutes of the last week a day at a time — so
+    the baselines are a week's at once, not empty (a busy service would look like a flood) until a week has passed."""
+    now, t = int(now or time.time()), time.time()
+    hour = now // 3600 * 3600
+    for h in range(hour - 86400, hour + 3600, 3600):
+        for q in _candidates(h, min(h + 3600, now)):
+            ch(q, settings=HEAVY, timeout=600)
+    learn_services()
+    svc, wan, refl = _minutes_sql(srcs=False)
+    for d in range((now - 7 * 86400) // 60 * 60, now, 86400):     # whole minutes: a minute in two parts would keep one (FINAL)
+        p = {'t0': d, 't1': min(d + 86400, now)}
+        ch(f"INSERT INTO ev_minute (m, kind, exporter, ip, port, proto, v) SELECT m, 'svc', '', int_ip, int_port, proto, n FROM ({svc})", p, settings=HEAVY, timeout=600)
+        for k, q in (('wan', wan), ('refl', refl)):
+            ch(f"INSERT INTO ev_minute (m, kind, exporter, ip, port, proto, v) SELECT m, '{k}', ex, '', 0, 0, bps FROM ({q})", p, settings=HEAVY, timeout=600)
+    log(f'detections: the services of the last day and the baselines of the last week read once ({time.time() - t:.0f} s)')
+
+
+def learn_services():
+    """Services on our side (L) and outside servers we call (R) over the last day, from the candidates per hour"""
+    ch("""INSERT INTO ev_services (kind, ip, port, proto, peers, updated)
+        SELECT 'L', ip, port, proto, uniqMerge(s_peers) AS np, now() FROM ev_learn_l WHERE ts >= toStartOfHour(now() - INTERVAL 1 DAY)
+        GROUP BY ip, port, proto HAVING np >= 5 AND uniqMerge(s_ports) >= 5""", settings=HEAVY, timeout=600)
+    ch("""INSERT INTO ev_services (kind, ip, port, proto, peers, updated)
+        SELECT 'R', ip, port, proto, uniqMerge(s_peers) AS np, now() FROM ev_learn_r WHERE ts >= toStartOfHour(now() - INTERVAL 1 DAY)
+        GROUP BY ip, port, proto HAVING np >= 5 AND uniqIfMerge(s_low) < 0.1 * np""", settings=HEAVY, timeout=600)
+
+
 def learn(log=print):
-    """Services on our side (L) and outside servers we call (R) over the last day; DDoS baselines."""
-    known = _arr(KNOWN)
-    # our address:port called by many outside addresses from varying, not well-known ports. Answers to our own calls
-    # come from 443, 53 ... and are left out before grouping (on a busy network they are nearly all records); a PAT
-    # port reused towards several servers is thereby no service either.
-    ch(f"""INSERT INTO ev_services (kind, ip, port, proto, peers, updated)
-        SELECT 'L', int_ip, int_port, proto, uniq(ext_ip) AS peers, now() FROM flows
-        WHERE ts >= now() - INTERVAL 1 DAY AND dir = 'down' AND proto IN (6, 17) AND ext_port >= 1024 AND NOT has({known}, ext_port)
-        GROUP BY int_ip, int_port, proto
-        HAVING peers >= 5 AND uniq(ext_port) >= 5""", settings=HEAVY, timeout=600)
-    # an outside address:port we call from many ports of ours, none well-known (only such ports need learning:
-    # well-known ones count as servers anyway)
-    ch(f"""INSERT INTO ev_services (kind, ip, port, proto, peers, updated)
-        SELECT 'R', ext_ip, ext_port, proto, uniq(int_port) AS peers, now() FROM flows
-        WHERE ts >= now() - INTERVAL 1 DAY AND dir = 'up' AND proto IN (6, 17) AND ext_port >= 1024 AND NOT has({known}, ext_port)
-        GROUP BY ext_ip, ext_port, proto
-        HAVING peers >= 5 AND uniqIf(int_port, int_port < 1024 OR has({known}, int_port)) < 0.1 * peers""", settings=HEAVY, timeout=600)
+    """Services on our side (L) and outside servers we call (R) over the last day; DDoS baselines: sessions a minute to
+    each of our services (one inbound record per session) and inbound bits/s per device, their 99th percentile over a
+    week. (1.17.0) From what keep_window() kept of each window: before, a day and a week of records were read again
+    every hour (at 5,000 records/s ~3 billion records an hour). A week is ~10,000 minutes: the percentile is exact."""
+    learn_services()
     base = {'svc': {}, 'wan': {}, 'refl': {}}
-    # sessions a minute to each of our services (one inbound record per session) and inbound bits/s per device:
-    # their 99th percentile over a week
-    for r in ch(f"""SELECT ip, port, proto, quantile(0.99)(n) AS p99 FROM
-            (SELECT int_ip AS ip, int_port AS port, proto, toStartOfMinute(ts) AS m, count() AS n FROM flows
-             WHERE ts >= now() - INTERVAL 7 DAY AND ts < now() - INTERVAL 1 HOUR AND dir = 'down'
-               AND (int_ip, int_port, proto) IN (SELECT ip, port, proto FROM ev_services WHERE kind = 'L' AND updated > now() - INTERVAL 1 DAY)
-             GROUP BY ip, port, proto, m)
-            GROUP BY ip, port, proto""", fmt='JSON', settings=HEAVY, timeout=600):
+    week = "m >= now() - INTERVAL 7 DAY AND m < now() - INTERVAL 1 HOUR"
+    for r in ch(f"""SELECT ip, port, proto, quantileExact(0.99)(v) AS p99 FROM ev_minute FINAL WHERE kind = 'svc' AND {week}
+            AND (ip, port, proto) IN ({_LEARNED_L}) GROUP BY ip, port, proto""", fmt='JSON', settings=HEAVY, timeout=600):
         base['svc'][(r['ip'], int(r['port']), int(r['proto']))] = float(r['p99'])
-    for r in ch("""SELECT exporter, quantile(0.99)(bps) AS p99 FROM
-            (SELECT exporter, toStartOfMinute(ts) AS m, sum(bytes) * 8 / 60 AS bps FROM flows
-             WHERE ts >= now() - INTERVAL 7 DAY AND ts < now() - INTERVAL 1 HOUR AND dir = 'down' GROUP BY exporter, m)
-            GROUP BY exporter""", fmt='JSON', settings=HEAVY, timeout=600):
-        base['wan'][r['exporter']] = float(r['p99'])
-    for r in ch(f"""SELECT exporter, quantile(0.99)(bps) AS p99 FROM
-            (SELECT exporter, toStartOfMinute(ts) AS m, sum(bytes) * 8 / 60 AS bps FROM flows
-             WHERE ts >= now() - INTERVAL 7 DAY AND ts < now() - INTERVAL 1 HOUR AND dir = 'down' AND proto = 17 AND has({_arr(AMPLIFIERS)}, ext_port)
-             GROUP BY exporter, m)
-            GROUP BY exporter""", fmt='JSON', settings=HEAVY, timeout=600):
-        base['refl'][r['exporter']] = float(r['p99'])
+    for k in ('wan', 'refl'):
+        for r in ch(f"SELECT exporter, quantileExact(0.99)(v) AS p99 FROM ev_minute FINAL WHERE kind = '{k}' AND {week} GROUP BY exporter",
+                    fmt='JSON', settings=HEAVY, timeout=600):
+            base[k][r['exporter']] = float(r['p99'])
     return base
 
 
@@ -440,9 +493,9 @@ def _sarr(items):
     return "CAST([" + ','.join("'" + str(x).replace('\\', '').replace("'", '') + "'" for x in items) + "] AS Array(String))"
 
 
-def rules(cfg, base, t0, t1, rep=None):
+def rules(cfg, base, t0, t1, rep=None, mins=None):
     """Hits of every enabled rule in the window [t0, t1): dicts kind, key, exporter, src, dst, port, proto, value, info.
-    rep: a reputation.Index (None: no reputation checks)."""
+    rep: a reputation.Index (None: no reputation checks). mins: minutes() of the window (for ddos)."""
     K, ign = cfg['kinds'], Ignore(cfg['ignore'])
     p = dict(ign.params(), t0=t0, t1=t1)
     X = _sessions(cfg)
@@ -504,7 +557,7 @@ def rules(cfg, base, t0, t1, rep=None):
     if K['lateral_scan']['on']:
         hits += lateral(K['lateral_scan'], p)
     if K['ddos']['on']:
-        hits += ddos(K['ddos'], base, p)
+        hits += ddos(K['ddos'], base, p, mins)
     if K['link_load']['on']:
         hits += link_load(K['link_load'], t1)
     if rep is not None and rep.size:
@@ -580,16 +633,14 @@ def lateral(k, p):
     return hits
 
 
-def ddos(k, base, p):
+def ddos(k, base, p, mins=None):
     """Floods: a minute far above the service's (or the device's) own 99th percentile and above an absolute floor,
-    in at least `minutes` minutes of the window; the same for UDP from amplifier ports (reflection)."""
+    in at least `minutes` minutes of the window; the same for UDP from amplifier ports (reflection). mins: minutes()
+    of the window (read here when not given)."""
     hits = []
-    rows = ch(f"""SELECT int_ip, int_port, proto, any(exporter) AS ex, toStartOfMinute(ts) AS m, count() AS n, uniqExact(ext_ip) AS srcs
-        FROM flows WHERE ts >= {{t0:DateTime}} AND ts < {{t1:DateTime}} AND dir = 'down'
-          AND (int_ip, int_port, proto) IN (SELECT ip, port, proto FROM ev_services WHERE kind = 'L' AND updated > now() - INTERVAL 1 DAY)
-        GROUP BY int_ip, int_port, proto, m""", p, fmt='JSON')
+    mins = mins or minutes(p)
     per = {}
-    for r in rows:
+    for r in mins['svc']:
         key = (r['int_ip'], int(r['int_port']), int(r['proto']))
         limit = max(k['factor'] * base['svc'].get(key, 0), k['min_sessions'])
         if int(r['n']) >= limit:
@@ -601,8 +652,7 @@ def ddos(k, base, p):
                              info={'how': 'sessions', 'per_minute': int(top['n']), 'srcs': int(top['srcs']), 'minutes': len(ms),
                                    'baseline': round(base['svc'].get((ip, port, proto), 0), 1)}))
     per = {}
-    for r in ch("""SELECT exporter AS ex, toStartOfMinute(ts) AS m, sum(bytes) * 8 / 60 AS bps, uniqExact(ext_ip) AS srcs FROM flows
-            WHERE ts >= {t0:DateTime} AND ts < {t1:DateTime} AND dir = 'down' GROUP BY ex, m""", p, fmt='JSON'):
+    for r in mins['wan']:
         if float(r['bps']) >= max(k['factor'] * base['wan'].get(r['ex'], 0), k['min_mbps'] * 1e6):
             per.setdefault(r['ex'], []).append(r)
     for ex, ms in per.items():
@@ -614,10 +664,7 @@ def ddos(k, base, p):
     # reflection: inbound UDP from amplifier ports far above its own usual peak (answers to our own lookups are in
     # that peak; counting records, not pairs, keeps it right on devices that export one direction only)
     per = {}
-    for r in ch(f"""SELECT exporter AS ex, toStartOfMinute(ts) AS m, sum(bytes) * 8 / 60 AS bps, uniqExact(ext_ip) AS srcs,
-            groupUniqArray(5)(ext_port) AS plist FROM flows
-            WHERE ts >= {{t0:DateTime}} AND ts < {{t1:DateTime}} AND dir = 'down' AND proto = 17 AND has({_arr(AMPLIFIERS)}, ext_port)
-            GROUP BY ex, m""", p, fmt='JSON'):
+    for r in mins['refl']:
         if float(r['bps']) >= max(k['factor'] * base['refl'].get(r['ex'], 0), k['refl_mbps'] * 1e6) and int(r['srcs']) >= 20:
             per.setdefault(r['ex'], []).append(r)
     for ex, ms in per.items():
@@ -781,15 +828,19 @@ class Detector:
         except (FileNotFoundError, ValueError):
             return {}
 
-    def save_state(self, done):
+    def save_state(self, done, **more):
+        st = {**self.state(), **more, 'done': done}
         tmp = STATE + '.tmp'
         with open(tmp, 'w') as f:
-            json.dump({'done': done}, f)
+            json.dump(st, f)
         os.replace(tmp, STATE)
 
     def tick(self, now=None):
         now = int(now or time.time())
         if now - self.learned >= LEARN_EVERY:
+            if not self.state().get('seeded'):           # (1.17.0) the first start that keeps what it learns from
+                seed(self.log, now)
+                self.save_state(self.state().get('done'), seeded=now)
             self.base, self.learned = learn(self.log), now
         cfg = load_config()
         lists = [n for n, on in cfg['lists'].items() if on]
@@ -800,8 +851,9 @@ class Detector:
             if self.rep.build(lists, cfg['own_list']):      # a list downloaded meanwhile (only file times are compared)
                 self.log(f'reputation: {self.rep.size:,} networks from {len(lists)} list{"s" if len(lists) != 1 else ""}'
                          + (f" + {len(cfg['own_list']):,} own" if cfg['own_list'] else ''))
-            new = []
-            found += store(rules(cfg, self.base, done, done + WINDOW, self.rep), done, done + WINDOW, new)
+            new, mins = [], minutes({'t0': done, 't1': done + WINDOW})
+            found += store(rules(cfg, self.base, done, done + WINDOW, self.rep, mins), done, done + WINDOW, new)
+            keep_window(done, done + WINDOW, mins)
             exc = Exclude(cfg.get('exclude'))
             on = [r for r in new if cfg['kinds'].get(r['kind'], {}).get('on') and (r['src'], r['info'].get('asn')) not in Ignore(cfg['ignore'])
                   and not exc(r['kind'], r['src'], r['dst'], r['port'])]

@@ -3254,6 +3254,13 @@ class Server(ThreadingHTTPServer):
         self.server_activate()
         self.ctx = ctx
 
+    def handle_error(self, request, client_address):
+        # (1.17.0) a browser that closed the page while its answer was being sent is no error of ours (a traceback in
+        # the log for every closed tab before); anything else is still logged in full
+        if isinstance(sys.exc_info()[1], (ConnectionError, ssl.SSLEOFError, ssl.SSLZeroReturnError)):
+            return
+        super().handle_error(request, client_address)
+
     def finish_request(self, request, client_address):
         if not self.ctx:
             return super().finish_request(request, client_address)
