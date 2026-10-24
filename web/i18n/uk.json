@@ -1905,5 +1905,13 @@
  "{n} events": {"one": "{n} подія", "few": "{n} події", "many": "{n} подій", "other": "{n} події"},
  "{n} events began before the period and are not drawn here.": {"one": "{n} подія почалася до періоду і тут не показана.", "few": "{n} події почалися до періоду і тут не показані.", "many": "{n} подій почалися до періоду і тут не показані.", "other": "{n} події почалися до періоду і тут не показані."},
  "{n} hours": {"one": "{n} година", "few": "{n} години", "many": "{n} годин", "other": "{n} години"},
- "{n} minutes": {"one": "{n} хвилина", "few": "{n} хвилини", "many": "{n} хвилин", "other": "{n} хвилини"}
+ "{n} minutes": {"one": "{n} хвилина", "few": "{n} хвилини", "many": "{n} хвилин", "other": "{n} хвилини"},
+ "Key for {list}": "Ключ для {list}",
+ "needed — paste the key": "потрібен — вставте ключ",
+ "only if the publisher asks": "лише якщо видавець вимагає",
+ "Remove": "Прибрати",
+ "Get a free key": "Отримати безкоштовний ключ",
+ "needs a key": "потрібен ключ",
+ "the key was refused": "ключ відхилено",
+ "Key (Auth-Key)": "Ключ (Auth-Key)"
 }

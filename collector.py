@@ -858,6 +858,7 @@ class Receiver:
         threading.Thread(target=self.port_names, name='port-names', daemon=True).start()
         threading.Thread(target=detect.Detector(log).run, name='detect', daemon=True).start()   # scans, floods ... (detect.py)
         ifcounters.start(log)          # (1.14.0) interface counters over SNMP every minute (ifcounters.py)
+        ifcounters.start_rates(log)    # (1.16.2) their rates in 5-minute buckets for Capacity
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:

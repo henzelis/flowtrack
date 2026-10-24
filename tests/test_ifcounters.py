@@ -70,6 +70,59 @@ class Read(unittest.TestCase):
         self.assertFalse(ifcounters.load_status()['192.0.2.1']['ok'])
 
 
+class Rates(unittest.TestCase):
+    """(1.16.2) the counters' rates in 5-minute buckets: whole buckets only, the new ones every pass, the history a day
+    at a time newest first, then complete; Capacity reads them once the period is in"""
+    def run_rates(self, passes, now, oldest):
+        state, made = {}, []
+
+        def ch(sql, params=None, **kw):
+            if sql.startswith('INSERT INTO if_rate5'):
+                made.append((params['t0'], params['t1']))
+                return ''
+            if 'min(ts)' in sql:
+                return [{'t': oldest, 'n': int(oldest < params['rf'])}]
+            raise AssertionError(sql)
+        with mock.patch.object(ifcounters, 'ch', ch), mock.patch.object(ifcounters.rollups, '_get_state', lambda: dict(state)), \
+                mock.patch.object(ifcounters.rollups, '_set', lambda k, v: state.__setitem__(k, int(v))):
+            r = ifcounters.Rates(lambda *a: None)
+            for k in range(passes):
+                r.once(now + 60 * k)
+        return state, made
+
+    def test_history_then_complete(self):
+        now = 1792400000 + 123
+        state, made = self.run_rates(12, now, now - 2 * 86400 - 7777)       # 12 passes a minute apart: new buckets too
+        cut = (now - ifcounters.RATE_LAG) // 300 * 300
+        self.assertEqual(made[0], (cut - 86400, cut))                     # first pass: the newest day of history
+        self.assertEqual(made[1], (cut - 2 * 86400, cut - 86400))
+        self.assertEqual(made[2], ((now - 2 * 86400 - 7777) // 300 * 300, cut - 2 * 86400))
+        self.assertEqual(state['ifrate:ready_from'], 0)
+        for a, b in made:
+            self.assertEqual((a % 300, b % 300), (0, 0))                     # whole buckets: a bucket made again is the same row
+        live = [m for m in made if m[0] >= cut]
+        self.assertTrue(live and all(a < b for a, b in live))
+        self.assertEqual(state['ifrate:done'], max(b for a, b in live))
+
+    def test_capacity_reads_the_buckets_once_the_period_is_in(self):
+        import api
+        p = {'_t0': 1792300000 // 86400 * 86400, 't1': 1792400000, 'tz': 'UTC'}
+        sqls = []
+
+        def ch(sql, params=None, **kw):
+            sqls.append(sql)
+            return []
+        with mock.patch.object(api, 'ch', ch):
+            with mock.patch.object(ifcounters, 'rates_state', lambda: (1792399800, 0)):
+                api.counter_days(dict(p))
+            self.assertTrue(all('FROM if_rate5 FINAL' in q for q in sqls))
+            self.assertTrue(all('t5 < toDateTime({rdn:UInt32})' in q for q in sqls))          # + the minutes since, from the reads
+            sqls.clear()
+            with mock.patch.object(ifcounters, 'rates_state', lambda: (1792399800, p['_t0'] + 86400)):   # history not in yet
+                api.counter_days(dict(p))
+            self.assertTrue(sqls and not any('if_rate5' in q for q in sqls))
+
+
 if __name__ == '__main__':
     unittest.main()
 
@@ -87,7 +140,7 @@ class FlowsSeen(unittest.TestCase):
             asked.append(params)
             return [{'exporter': '192.0.2.1', 'i': 1, 'd': 0, 'b': flows_b}] if 'delta' not in sql else \
                 [{'exporter': '192.0.2.1', 'i': 1, 'src': 'snmp', 'd': 0, 'b': ctr_b}]
-        with mock.patch.object(api, 'ch', ch), mock.patch('time.time', lambda: now):
+        with mock.patch.object(api, 'ch', ch), mock.patch('time.time', lambda: now), mock.patch.object(ifcounters, 'rates_state', lambda: None):
             p = {'_t0': now - 30 * 86400, '_t1': None, '_fcols': set(), '_filt': '1', '_step': 300}
             return api.flows_seen(p, cper), asked
 
@@ -98,4 +151,5 @@ class FlowsSeen(unittest.TestCase):
     def test_after_three_hours(self):
         r, asked = self.seen(4, 48_000_000, 100_000_000)
         self.assertEqual(r, {('192.0.2.1', 1, 0): 48.0})
-        self.assertEqual(asked[0]['ct0'], 1792400000 - 4 * 3600 + 600)            # from the first read + 10 minutes
+        # from the first read + 10 minutes, (1.16.2) up to the next 5-minute bucket (the flows side counts whole ones)
+        self.assertEqual(asked[0]['ct0'], -(-(1792400000 - 4 * 3600 + 600) // 300) * 300)

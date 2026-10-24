@@ -28,6 +28,22 @@ in Settings → General, at the bottom of every page, in the collector log and b
   cores: 100 → 21 s), each in the same memory as before. What is received after the upgrade was always summed up
   right.
 
+## 1.16.2 — 2026-10-24
+
+- **Capacity: «Not enough memory» on a firewall with many interfaces**: the interfaces' own counters (SNMP every
+  minute) were turned into rates from every read of the whole period at each opening of the page — a FortiGate with
+  hundreds of interfaces has ~21 million reads in a month, and the page ran out of memory before it had read them. The
+  rates are now made once, in 5-minute steps, as the counters come in, and Capacity reads those: measured with 500
+  interfaces over 30 days, 13 s → under 2 s and a quarter of the memory. After the upgrade the history of the counters
+  is gone through once (seconds to a minute); until then the page works as before. The numbers are the same, exactly.
+- **IP reputation: ThreatFox needs a key now**: abuse.ch stopped giving the ThreatFox list without a (free) Auth-Key —
+  the download failed with «410 Gone» everywhere. Settings → Events → IP reputation has a **Key (Auth-Key)** field
+  for every list: ThreatFox shows «needs a key» with a link to get one free, then downloads through its API (the
+  addresses of the last 7 days). Any other list can be given a key the same way if its publisher starts asking for
+  one. Keys stay on the server (a file only FlowTrack reads); the page never shows them back, an empty field keeps
+  the saved one, and a wrong key is said plainly.
+- The web service no longer fills its log with a traceback each time a browser closes a page while it is loading.
+
 ## 1.16.1 — 2026-10-21
 
 - **Events, visual first**: cards with the number of events and of each priority (a card picks the priority of the
