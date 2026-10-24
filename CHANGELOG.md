@@ -11,6 +11,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **«database error» on long periods**: the web service gave up on a query after 30 s while ClickHouse was let run it
   for 2 minutes — a slow page failed with that error while the query went on loading the server. The service now
   waits as long as ClickHouse may run it, and a query whose page is gone stops.
+- **The summary tables are filled ~5× faster and come out smaller**: filling the history after an upgrade summed the
+  records up per second instead of per 5 minutes / per hour — every number was right, but the tables held many
+  more rows than needed (the 5-minute ones up to 300×) until ClickHouse merged them. Now each bucket is one row, and on
+  a server with 6 or more cores two or three tables are filled at a time (14 tables, an hour of 8 M records on 6
+  cores: 100 → 21 s), each in the same memory as before. What is received after the upgrade was always summed up
+  right.
 
 ## 1.16.1 — 2026-10-21
 

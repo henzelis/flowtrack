@@ -10,6 +10,8 @@ The collector creates the tables and their materialized views (which fill them f
 fills the history in the background, newest day first; `ready_from()` tells the API from when on each is complete.
 Each table starts at its own next bucket boundary: the 5-minute ones are in use minutes after an upgrade, not only
 after the next full hour."""
+import concurrent.futures
+import os
 import threading
 import time
 
@@ -74,6 +76,7 @@ ROLLUPS = {
                       ('city', 'LowCardinality(String)', 'city')], 'attrs': []},
 }
 CUT = max(r['bucket'] for r in ROLLUPS.values())    # the longest bucket (a day is a multiple of every bucket)
+FILL_WORKERS = min(3, max(1, (os.cpu_count() or 1) // 3))     # (1.17.0) tables filled at a time (see _fill)
 LATE = 2 * 3600     # records may reach the collector this late (a multiple of every bucket): see _late()
 # columns a query may filter or group by in each rollup (besides ts, exporter, dir); attributes may only be shown
 COLUMNS = {name: {'exporter', 'dir'} | {k[0] for k in r['keys']} for name, r in ROLLUPS.items()}
@@ -92,8 +95,13 @@ def _ddl(name, r):
 def _select(r, where):
     keys = ', '.join(f'{k[2]} AS {k[0]}' for k in r['keys'])
     attrs = ''.join(f', any({a[0]}) AS {a[0]}' for a in r['attrs'])
-    group = ', '.join(['ts', 'exporter', 'dir'] + [k[0] for k in r['keys']])
-    return (f"SELECT toStartOfInterval(ts, toIntervalSecond({r['bucket']})) AS ts, exporter, dir, {keys}{attrs}, max(keep_days) AS keep_days, "
+    # (1.17.0) grouped by the bucket itself: ch() sends prefer_column_name_to_alias, so `GROUP BY ts` meant the record's
+    # own second — a row per second and key instead of one per bucket (an hour of 8 M records: 7.9 M rows of
+    # conversations), summed up only later by the merges, if at all; every number was right, the tables many times
+    # bigger and slower to fill and to read
+    bucket = f"toStartOfInterval(ts, toIntervalSecond({r['bucket']}))"
+    group = ', '.join([bucket, 'exporter', 'dir'] + [k[0] for k in r['keys']])
+    return (f"SELECT {bucket} AS ts, exporter, dir, {keys}{attrs}, max(keep_days) AS keep_days, "
             f"sum(bytes) AS bytes, sum(packets) AS packets, count() AS flows FROM flows WHERE {where} GROUP BY {group}")
 
 
@@ -234,32 +242,45 @@ def _fill(ready, log, stop):
         ch(f"KILL QUERY WHERE current_database = currentDatabase() AND query LIKE 'INSERT INTO {name} SELECT%' SYNC")
     first, t0, n = int(oldest[0]['t']) // 86400 * 86400, time.time(), 0
     hi, fresh = max(ready.values()), set(ready)
-    while hi > first:
-        lo = max(first, (hi - 1) // 86400 * 86400)      # a day boundary is a boundary of every bucket
-        for name, at in ready.items():
-            if at <= lo:
-                continue
-            if name in fresh:            # the first day of this run: a stop in the middle of it may have left part of it
-                fresh.discard(name)
-                part = f'ts >= toDateTime({lo}) AND ts < toDateTime({min(hi, at)})'
-                if int(ch(f'SELECT count() AS n FROM {name} WHERE {part}', fmt='JSON')[0]['n']):
-                    ch(f'ALTER TABLE {name} DELETE WHERE {part}', timeout=3600, settings={'mutations_sync': 2})
-            # an hourly table holds many more keys (outside addresses, hosts x services): a day of a busy network in one
-            # query needed ~3 GiB (seen with 2,400 records/s on 8 GB of RAM: refused, tried again every minute) —
-            # it is filled an hour at a time, newest first, and its progress kept after each
-            step = 86400 if ROLLUPS[name]['bucket'] < 3600 else ROLLUPS[name]['bucket']
-            end = min(hi, at)
-            while end > lo:
-                beg = max(lo, (end - 1) // step * step)
-                ch(f'INSERT INTO {name} ' + _select(ROLLUPS[name], f'ts >= toDateTime({beg}) AND ts < toDateTime({end})'), timeout=3600,
-                   settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000})
-                _set(f'ready_from:{name}', beg)
-                end = beg
-                if stop and stop.is_set():
-                    return False
-        hi, n = lo, n + 1
-        if stop and stop.is_set():
+
+    def day(name, lo, hi):
+        """one day (lo..hi) of one table; False when stopped"""
+        if stop and stop.is_set():       # still waiting for a worker when the collector stopped
             return False
+        at = ready[name]
+        if name in fresh:                # the first day of this run: a stop in the middle of it may have left part of it
+            fresh.discard(name)
+            part = f'ts >= toDateTime({lo}) AND ts < toDateTime({min(hi, at)})'
+            if int(ch(f'SELECT count() AS n FROM {name} WHERE {part}', fmt='JSON')[0]['n']):
+                ch(f'ALTER TABLE {name} DELETE WHERE {part}', timeout=3600, settings={'mutations_sync': 2})
+        # an hourly table holds many more keys (outside addresses, hosts x services): a day of a busy network in one
+        # query needed ~3 GiB (seen with 2,400 records/s on 8 GB of RAM: refused, tried again every minute) —
+        # it is filled an hour at a time, newest first, and its progress kept after each
+        step = 86400 if ROLLUPS[name]['bucket'] < 3600 else ROLLUPS[name]['bucket']
+        end = min(hi, at)
+        while end > lo:
+            beg = max(lo, (end - 1) // step * step)
+            ch(f'INSERT INTO {name} ' + _select(ROLLUPS[name], f'ts >= toDateTime({beg}) AND ts < toDateTime({end})'), timeout=3600,
+               settings={'max_threads': 2, 'max_bytes_before_external_group_by': 200_000_000})
+            _set(f'ready_from:{name}', beg)
+            end = beg
+            if stop and stop.is_set():
+                return False
+        return True
+
+    # (1.17.0) several tables at a time: a table's INSERT keeps ~1.3 cores busy whatever max_threads says, so on a
+    # server with cores to spare a release that adds or rebuilds tables fills them in half the time or less (14 tables,
+    # an hour of 8 M records on 6 vCPU: 35 s one at a time, 21 s two, 17 s three; ~0.4 GiB each). Reading each hour
+    # once for all the tables (a Null table with a view per rollup) was tried: no faster than this, twice the memory —
+    # the time goes into summing up, not into reading.
+    with concurrent.futures.ThreadPoolExecutor(FILL_WORKERS) as pool:
+        while hi > first:
+            lo = max(first, (hi - 1) // 86400 * 86400)      # a day boundary is a boundary of every bucket
+            names = sorted((name for name, at in ready.items() if at > lo), key=lambda name: -ROLLUPS[name]['bucket'])
+            done = [f.result() for f in [pool.submit(day, name, lo, hi) for name in names]]
+            hi, n = lo, n + 1
+            if not all(done) or (stop and stop.is_set()):
+                return False
     for name in ready:
         _set(f'ready_from:{name}', 0)
     log(f"rollups: {', '.join(ready)}: history filled ({n} days, {time.time() - t0:.0f} s)")

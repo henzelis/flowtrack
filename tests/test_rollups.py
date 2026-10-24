@@ -112,5 +112,75 @@ class Source(unittest.TestCase):
         self.assertEqual(rollups.ready_from(), (NOW // 3600 + 1) * 3600)
 
 
+class Select(unittest.TestCase):
+    def test_grouped_by_the_bucket_not_the_second_1170(self):
+        """(1.17.0) ch() sends prefer_column_name_to_alias: `GROUP BY ts` would group the history's INSERT ... SELECT by
+        each record's own second (every number right, the tables many times bigger)"""
+        for name, r in rollups.ROLLUPS.items():
+            bucket = f"toStartOfInterval(ts, toIntervalSecond({r['bucket']}))"
+            group = rollups._select(r, '1').split(' GROUP BY ')[1]
+            self.assertTrue(group.startswith(bucket + ', '), name)
+            self.assertNotIn('ts', group[len(bucket):].split(', '), name)
+
+
+class Fill(unittest.TestCase):
+    """(1.17.0) the history is filled several tables at a time: every hour of every table exactly once, newest first,
+    the progress of each table kept after each of its steps (no ClickHouse: ch() recorded)"""
+    def run_fill(self, ready, oldest, stop=None):
+        import re
+        import threading
+        calls, lock = [], threading.Lock()
+
+        def ch(q, params=None, fmt=None, **kw):
+            with lock:
+                calls.append(q)
+            if q.startswith('SELECT toUnixTimestamp(min(ts))'):
+                return [{'t': oldest, 'n': 1}]
+            if q.startswith('SELECT count()'):
+                return [{'n': 0}]
+            if q.startswith('INSERT INTO') and stop:
+                stop.set()
+            return []
+        old = rollups.ch
+        rollups.ch = ch
+        try:
+            res = rollups._fill(dict(ready), lambda *a: None, stop)
+        finally:
+            rollups.ch = old
+        ins = [(m[1], int(m[2]), int(m[3])) for q in calls
+               if (m := re.match(r'INSERT INTO (agg_\w+) SELECT .* ts >= toDateTime\((\d+)\) AND ts < toDateTime\((\d+)\)', q))]
+        prog = [(m[1], int(m[2])) for q in calls if (m := re.match(r"INSERT INTO agg_state \(k, v\) VALUES \('ready_from:(\w+)', (\d+)\)", q))]
+        return res, ins, prog
+
+    def test_every_hour_of_every_table_once(self):
+        end = NOW // 3600 * 3600
+        ready = {n: end for n in rollups.ROLLUPS}
+        ready['agg_geo'] = end - 3 * DAY // 2                  # one table further on already
+        oldest = end - 2 * DAY - 1234
+        res, ins, prog = self.run_fill(ready, oldest)
+        self.assertTrue(res)
+        first = oldest // DAY * DAY
+        for name, at in ready.items():
+            spans = sorted((b, e) for n, b, e in ins if n == name)
+            self.assertEqual(spans[0][0], first, name)
+            self.assertEqual(spans[-1][1], at, name)
+            self.assertTrue(all(a[1] == b[0] for a, b in zip(spans, spans[1:])), name)     # no gap, no overlap
+            steps = [b for n, b, e in ins if n == name]
+            self.assertEqual(steps, sorted(steps, reverse=True), name)                    # newest first
+            mine = [v for n, v in prog if n == name]
+            self.assertEqual(mine[-1], 0, name)                                           # complete
+            self.assertEqual(mine[:-1], steps, name)                                      # progress after each step
+
+    def test_stop_keeps_what_was_done(self):
+        import threading
+        end = NOW // 3600 * 3600
+        stop = threading.Event()
+        res, ins, prog = self.run_fill({n: end for n in rollups.ROLLUPS}, end - 3 * DAY, stop)
+        self.assertFalse(res)
+        self.assertLessEqual(len(ins), rollups.FILL_WORKERS)          # each running table stops after its step
+        self.assertEqual(sorted((n, b) for n, b, e in ins), sorted(prog))
+        self.assertNotIn(0, [v for n, v in prog])
+
+
 if __name__ == '__main__':
     unittest.main()
