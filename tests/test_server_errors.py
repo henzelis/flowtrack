@@ -34,5 +34,24 @@ class HandleError(unittest.TestCase):
         self.assertIn('ValueError: boom', self.logged(ValueError('boom')))
 
 
+
+class Send(unittest.TestCase):
+    def test_a_browser_gone_mid_answer_is_no_database_error(self):
+        """(1.16.2) writing the answer fails because the browser left: send() ends the request quietly, so do_GET's
+        «database error» branch (OSError) never sees it"""
+        h = api.H.__new__(api.H)
+        h.request_version, h.requestline, h.command, h.client_address = 'HTTP/1.1', 'GET /api/top HTTP/1.1', 'GET', ('192.0.2.1', 1)
+        h._headers_buffer = []
+
+        class Gone:
+            def write(self, b):
+                raise ssl.SSLEOFError(8, 'EOF occurred in violation of protocol')
+        h.wfile = Gone()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            h.send(200, b'{}', 'application/json')
+        self.assertTrue(h.close_connection)
+
+
 if __name__ == '__main__':
     unittest.main()
