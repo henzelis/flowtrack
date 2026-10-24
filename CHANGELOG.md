@@ -11,6 +11,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **«database error» on long periods**: the web service gave up on a query after 30 s while ClickHouse was let run it
   for 2 minutes — a slow page failed with that error while the query went on loading the server. The service now
   waits as long as ClickHouse may run it, and a query whose page is gone stops.
+- **Path analysis over days**: tracing a source to a destination over a period reads the conversations per hour
+  (which now also keep each device's interfaces and the address after NAT) instead of every record of the period;
+  only its first and last partial hours and live windows read the records. The hops show the same bytes, records
+  and conversations (inside host × outside address, as on Flows) — counted exactly.
 - **The summary tables are filled ~5× faster and come out smaller**: filling the history after an upgrade summed the
   records up per second instead of per 5 minutes / per hour — every number was right, but the tables held many
   more rows than needed (the 5-minute ones up to 300×) until ClickHouse merged them. Now each bucket is one row, and on

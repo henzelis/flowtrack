@@ -1092,7 +1092,12 @@ def api_path(q):
             raise BadRequest(f'bad {k}')
     s, d = net('src'), net('dst')
     topo, cfg, where, p, live, rng = network_topology(q)
-    rows = topology.path_query(ch, where, p, s, d)
+    if live:
+        rows = topology.path_query(ch, where, p, s, d)
+    else:        # (1.17.0) a period: the conversations per hour (whole hours), the records only at its edges
+        tbl, _ = rollups.source(['in_if', 'out_if', 'int_ip', 'ext_ip', 'nat_ip'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS,
+                                table=p.get('_flows', 'flows'))
+        rows = topology.path_query(ch, p['_filt'], p, s, d, table=tbl)
     out = topology.path(topo, cfg, rows)
     return {'src': s, 'dst': d, **out, 'live': live, 'window': p.get('win', rng), 'window_end': p.get('wend'), 'range': rng}
 

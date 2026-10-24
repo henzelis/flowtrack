@@ -336,15 +336,17 @@ def path(topo, cfg, rows):
     return {'hops': hops, 'complete': complete and all(h['state'] in ('observed', 'internet', 'branch') for h in hops)}
 
 
-def path_query(ch, where, p, src, dst):
+def path_query(ch, where, p, src, dst, table='flows'):
     """Rows for path(): the records of packets sent from `src` to `dst` (an address or a network each; the inside
-    source also by its address after NAT) per device and interface pair."""
+    source also by its address after NAT) per device and interface pair. `table`: the records (a live window), or
+    (1.17.0) a period from the conversations per hour (api: rollups.source; its rows count records in `flows`).
+    convs = the conversations (inside host x outside address) as on Flows — exact from either."""
     sender, receiver = "if(dir IN ('down', 'internal_back'), ext_ip, int_ip)", "if(dir IN ('down', 'internal_back'), int_ip, ext_ip)"
-    key = "cityHash64(int_ip, ext_ip, int_port, ext_port, proto)"
+    records = 'count()' if table == 'flows' else 'sum(flows)'
     p = dict(p, src=str(ipaddress.ip_network(src, strict=False)), dst=str(ipaddress.ip_network(dst, strict=False)))
-    return ch(f"""SELECT exporter, in_if, out_if, sum(bytes) AS b, count() AS records, uniq({key}) AS convs,
+    return ch(f"""SELECT exporter, in_if, out_if, sum(bytes) AS b, {records} AS records, uniqExact(int_ip, ext_ip) AS convs,
             groupUniqArray(5)(nat_ip) AS nat
-        FROM flows WHERE {where}
+        FROM {table} WHERE {where}
             AND (isIPAddressInRange({sender}, {{src:String}}) OR (dir = 'up' AND nat_ip != '' AND isIPAddressInRange(nat_ip, {{src:String}})))
             AND isIPAddressInRange({receiver}, {{dst:String}})
         GROUP BY exporter, in_if, out_if ORDER BY b DESC LIMIT 500""", p, fmt='JSON')

@@ -56,10 +56,13 @@ ROLLUPS = {
                      ('l7', 'LowCardinality(String)', 'l7'), ('int_ip', 'String', 'int_ip')], 'attrs': []},
     # (1.16.2) Flows: the conversations (inside host x outside address) per hour, for Top conversations and the river of
     # a whole period — a busy network repeats its pairs within the hour (200F: ~8 M records, ~130 k pairs an hour)
-    # (1.17.0, v2) service / country / city in the key, as in agg_ext
-    'agg_conv': {'bucket': 3600, 'v': 2, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
+    # (1.17.0, v2) service / country / city in the key, as in agg_ext; (v3) the interfaces and the address after NAT
+    # too, for Path analysis over a period — a device carries a pair through one pair of interfaces and a host leaves
+    # through one NAT address, so the rows hardly grow (a day of prod: +0.26 %)
+    'agg_conv': {'bucket': 3600, 'v': 3, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
                  ('service', 'LowCardinality(String)', 'service'), ('country', 'LowCardinality(String)', 'country'),
-                 ('city', 'LowCardinality(String)', 'city')], 'attrs': []},
+                 ('city', 'LowCardinality(String)', 'city'), ('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'),
+                 ('nat_ip', 'String', 'nat_ip')], 'attrs': []},
     # (1.17.0) Ports: the inside hosts and the outside addresses of each port, exact (an approximate count would need
     # far less room, but Yegor's rule: numbers are exact) — scanners hitting thousands of ports make these the big ones
     'agg_port_host': {'bucket': 3600, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('int_ip', 'String', 'int_ip')],

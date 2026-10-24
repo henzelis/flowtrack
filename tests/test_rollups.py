@@ -98,6 +98,9 @@ class Source(unittest.TestCase):
         self.assertEqual(rollups.source(['ext_ip'], NOW - DAY, None, ['service'])[1], 'agg_ext')
         self.assertEqual(rollups.source(['in_if', 'out_if', 'out_ip'], NOW - DAY, None, ['country'])[1], 'agg_iface_ext')
         self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [], step=300)[1])  # hourly table
+        # (1.17.0) Path analysis over a period: the conversations per hour carry the interfaces and the NAT address
+        self.assertEqual(rollups.source(['in_if', 'out_if', 'int_ip', 'ext_ip', 'nat_ip'], NOW - DAY, None, [])[1], 'agg_conv')
+        self.assertEqual(rollups.source(['in_if', 'out_if'], NOW - DAY, None, [])[1], 'agg_iface')      # still the small one
 
     def test_old_or_missing_state_means_records_only(self):
         rollups._cache.update(st={}, t=float('inf'))
