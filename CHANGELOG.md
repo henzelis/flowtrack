@@ -21,6 +21,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
   service, and the candidates of services per hour — in small tables, and learns from those; the first start after
   the upgrade fills them once from the records. The baselines are now exact (before: an approximate percentile that
   differed a little from run to run).
+- **Sustained upload without 3 hours of records a minute**: the bell and the Events page asked every minute which inside
+  hosts sent over 5 Mbit/s to one address for 45 minutes of the last 3 hours, reading all those hours of records (at
+  5,000 records/s 54 million). The detector now keeps those busy minutes as it looks at each window; only the minutes
+  since its last window are read from the records. The same events, found the same way.
 - **The summary tables are filled ~5× faster and come out smaller**: filling the history after an upgrade summed the
   records up per second instead of per 5 minutes / per hour — every number was right, but the tables held many
   more rows than needed (the 5-minute ones up to 300×) until ClickHouse merged them. Now each bucket is one row, and on

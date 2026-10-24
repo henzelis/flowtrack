@@ -1869,10 +1869,16 @@ def _alerts_now(kinds):
     """Anomalies computed from the latest flows (sustained upload, bursts, new countries) and the health of export,
     collector and license — all about now."""
     out = []
-    for r in ch("""SELECT int_ip, ext_ip, any(service) AS service, any(ext_port) AS port, count() AS mins, sum(b) * 8 / (count() * 60) AS bps, min(m) AS since
-            FROM (SELECT int_ip, ext_ip, service, ext_port, toStartOfMinute(ts) AS m, sum(bytes) AS b FROM flows
-                  WHERE ts >= now() - INTERVAL 3 HOUR AND dir = 'up' GROUP BY int_ip, ext_ip, service, ext_port, m HAVING b * 8 / 60 > 5000000)
-            GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON') if kinds['sustained_upload']['on'] else []:
+    # (1.17.0) the busy minutes the detector kept (ev_upload) and, after its last window, the records: before, 3 hours of
+    # records were read every minute (at 5,000 records/s 54 M)
+    done = detect.kept_until()
+    if done and done > time.time() - 3 * 3600:
+        busy = f"""SELECT int_ip, ext_ip, service, ext_port, m, b FROM ev_upload FINAL WHERE m >= now() - INTERVAL 3 HOUR AND m < toDateTime({done})
+            UNION ALL {detect.upload_sql(f'toDateTime({done})', 'now()')}"""
+    else:
+        busy = detect.upload_sql('now() - INTERVAL 3 HOUR', 'now()')
+    for r in ch(f"""SELECT int_ip, ext_ip, any(service) AS service, any(ext_port) AS port, count() AS mins, sum(b) * 8 / (count() * 60) AS bps, min(m) AS since
+            FROM ({busy}) GROUP BY int_ip, ext_ip HAVING mins >= 45 ORDER BY bps DESC LIMIT 5""", fmt='JSON') if kinds['sustained_upload']['on'] else []:
         out.append({'sev': kinds['sustained_upload']['sev'], 'kind': 'sustained_upload', 'ip': r['int_ip'], 'name': NAMES.get(r['int_ip']),
                     'src': r['int_ip'], 'dst': r['ext_ip'], 'port': int(r['port']),
                     'title': tr('Sustained upload'),

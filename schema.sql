@@ -171,6 +171,22 @@ PARTITION BY toYYYYMMDD(m)
 ORDER BY (kind, exporter, ip, port, proto, m)
 TTL m + INTERVAL 8 DAY;
 
+-- (1.17.0) The minutes in which an inside host sent more than 5 Mbit/s to one outside address and port (the windows
+-- keep them): «Sustained upload» reads these instead of 3 hours of records every minute.
+CREATE TABLE IF NOT EXISTS ev_upload
+(
+    m        DateTime,
+    int_ip   String,
+    ext_ip   String,
+    service  LowCardinality(String),
+    ext_port UInt16,
+    b        UInt64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMMDD(m)
+ORDER BY (m, int_ip, ext_ip, service, ext_port)
+TTL m + INTERVAL 1 DAY;
+
 -- One row per event (kind + key: the source, or the service); a window that sees it again writes a newer version
 -- (ver) with last_seen, hits and info updated. Read with FINAL.
 CREATE TABLE IF NOT EXISTS events

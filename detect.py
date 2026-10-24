@@ -380,10 +380,32 @@ def minutes(p):
     return dict(zip(('svc', 'wan', 'refl'), (ch(q, p, fmt='JSON', settings=HEAVY) for q in _minutes_sql())))
 
 
+UPLOAD_BPS = 5_000_000      # a minute of an inside host to one outside address:port above this counts towards a sustained upload
+
+
+def upload_sql(t0, t1):
+    """The minutes [t0, t1) (SQL DateTime expressions) in which an inside host sent more than UPLOAD_BPS to one outside
+    address and port: int_ip, ext_ip, service, ext_port, m, b"""
+    return f"""SELECT int_ip, ext_ip, service, ext_port, toStartOfMinute(ts) AS m, sum(bytes) AS b FROM flows
+        WHERE ts >= {t0} AND ts < {t1} AND dir = 'up' GROUP BY int_ip, ext_ip, service, ext_port, m HAVING b * 8 / 60 > {UPLOAD_BPS}"""
+
+
+def kept_until():
+    """(1.17.0) The end of the last window the detector looked at (and kept, keep_window) — None before the first"""
+    try:
+        with open(STATE) as f:
+            return int(json.load(f).get('done') or 0) or None
+    except (OSError, ValueError):
+        return None
+
+
 def keep_window(t0, t1, mins):
-    """(1.17.0) What the learning needs from the window [t0, t1): its candidates of services and its minutes `mins`"""
+    """(1.17.0) What the learning needs from the window [t0, t1): its candidates of services and its minutes `mins`;
+    and the minutes of busy uploads (api: Sustained upload)"""
     for q in _candidates(t0, t1):
         ch(q, settings=HEAVY, timeout=600)
+    ch('INSERT INTO ev_upload (int_ip, ext_ip, service, ext_port, m, b) ' + upload_sql(f'toDateTime({int(t0)})', f'toDateTime({int(t1)})'),
+       settings=HEAVY, timeout=600)
     rows = [{'m': r['m'], 'kind': 'svc', 'exporter': '', 'ip': r['int_ip'], 'port': int(r['int_port']), 'proto': int(r['proto']), 'v': int(r['n'])}
             for r in mins['svc']]
     rows += [{'m': r['m'], 'kind': k, 'exporter': r['ex'], 'ip': '', 'port': 0, 'proto': 0, 'v': float(r['bps'])} for k in ('wan', 'refl') for r in mins[k]]
@@ -401,6 +423,8 @@ def seed(log=print, now=None):
         for q in _candidates(h, min(h + 3600, now)):
             ch(q, settings=HEAVY, timeout=600)
     learn_services()
+    m3 = (now - 3 * 3600) // 60 * 60
+    ch('INSERT INTO ev_upload (int_ip, ext_ip, service, ext_port, m, b) ' + upload_sql(f'toDateTime({m3})', f'toDateTime({now})'), settings=HEAVY, timeout=600)
     svc, wan, refl = _minutes_sql(srcs=False)
     for d in range((now - 7 * 86400) // 60 * 60, now, 86400):     # whole minutes: a minute in two parts would keep one (FINAL)
         p = {'t0': d, 't1': min(d + 86400, now)}
