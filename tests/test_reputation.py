@@ -14,8 +14,11 @@ class Parsers(unittest.TestCase):
     def test_formats(self):
         self.assertEqual(list(R._lines('# c\n; x\n5.6.7.8\n\n9.9.9.0/24 ; SBL1\n')), ['5.6.7.8', '9.9.9.0/24'])
         self.assertEqual(list(R._drop('{"cidr":"5.6.0.0/16","sblid":"SBL1"}\n{"type":"metadata"}\nnot json\n')), ['5.6.0.0/16'])
-        tf = '# header\n"2026-10-12 11:41:47", "1", "5.6.7.8:36511", "ip:port", "botnet_cc"\n"x", "2", "[2a00::1]:443", "ip:port", "payload_delivery"\n'
-        self.assertEqual(list(R._threatfox(tf)), ['5.6.7.8', '2a00::1'])
+        tf = {'query_status': 'ok', 'data': [{'ioc': '5.6.7.8:36511', 'ioc_type': 'ip:port'}, {'ioc': '[2a00::1]:443', 'ioc_type': 'ip:port'},
+                                             {'ioc': 'evil.example', 'ioc_type': 'domain'}]}
+        self.assertEqual(list(R._threatfox_api(__import__('json').dumps(tf))), ['5.6.7.8', '2a00::1'])     # (1.16.2) the API
+        with self.assertRaisesRegex(ValueError, 'the key was refused'):
+            list(R._threatfox_api('{"query_status": "unknown_auth_key"}'))
         self.assertEqual(list(R._dshield('Start\tEnd\tNetblock\n5.6.7.0\t5.6.7.255\t24\t345\n#x\n')), ['5.6.7.0/24'])
 
     def test_special_ranges_never_listed(self):
@@ -83,14 +86,14 @@ class Update(unittest.TestCase):
             f.write('5.6.7.8/32\n')
         saved = R._get
         try:
-            R._get = lambda url: '<html>rate limited</html>'
+            R._get = lambda url, *a: '<html>rate limited</html>'
             self.assertEqual(R.update(['et_compromised'], log=lambda *_: None, now=1e9), [])
             self.assertEqual(open(path).read(), '5.6.7.8/32\n')
             st = R.meta()['et_compromised']
             self.assertFalse(st['ok'])
             self.assertIn('no addresses', st['error'])
             # not again before RETRY; then a good answer replaces the file
-            R._get = lambda url: '5.6.7.9\n10.0.0.1\n'
+            R._get = lambda url, *a: '5.6.7.9\n10.0.0.1\n'
             self.assertEqual(R.update(['et_compromised'], log=lambda *_: None, now=1e9 + 60), [])
             self.assertEqual(R.update(['et_compromised'], log=lambda *_: None, now=1e9 + R.RETRY), ['et_compromised'])
             self.assertEqual(open(path).read(), '5.6.7.9/32\n')
@@ -99,6 +102,65 @@ class Update(unittest.TestCase):
             self.assertEqual(R.update(['et_compromised'], log=lambda *_: None, now=1e9 + R.RETRY + 3600), [])
         finally:
             R._get = saved
+
+
+
+class Keys(unittest.TestCase):
+    """(1.16.2) a key per list: kept 0600 apart from the settings, sent as Auth-Key, a list that needs one says so"""
+    def setUp(self):
+        for f in (R.KEYS, R.META):
+            if os.path.exists(f):
+                os.remove(f)
+        self.saved = R._get
+        self.calls = []
+        R._get = lambda url, key=None, body=None: self.calls.append((url, key, body)) or '{"query_status": "ok", "data": [{"ioc": "5.6.7.8:80", "ioc_type": "ip:port"}]}'
+
+    def tearDown(self):
+        R._get = self.saved
+
+    def test_needs_a_key_then_downloads_with_it(self):
+        self.assertEqual(R.update(['threatfox'], log=lambda *a: None, now=1792400000), [])
+        self.assertEqual(self.calls, [])                                      # nothing asked without the key
+        self.assertEqual(R.meta()['threatfox']['error'], R.NO_KEY)
+        R.save_keys({'threatfox': 'k123'})
+        self.assertEqual(os.stat(R.KEYS).st_mode & 0o777, 0o600)
+        self.assertEqual(R.update(['threatfox'], log=lambda *a: None, now=1792400060), ['threatfox'])   # at once, not in an hour
+        self.assertEqual(self.calls[0][1:], ('k123', R.AUTH['threatfox']['body']))
+        self.assertEqual(R.meta()['threatfox']['count'], 1)
+
+    def test_any_list_may_have_a_key_and_lose_it(self):
+        R.save_keys({'cins': 'abc', 'nonsense': 'x'})
+        self.assertEqual(R.load_keys(), {'cins': 'abc'})
+        R.update(['cins'], log=lambda *a: None, now=1792400000)
+        self.assertEqual(self.calls[0][1:], ('abc', None))                  # a plain download with the Auth-Key header
+        R.save_keys({'cins': ''})
+        self.assertEqual(R.load_keys(), {})
+        with self.assertRaises(ValueError):
+            R.save_keys({'cins': 'two words'})
+
+    def test_the_browser_never_gets_a_key(self):
+        from unittest import mock
+        import api
+        with mock.patch.object(api.detect, 'services', lambda cfg: []):
+            api.post_events_config({'list_keys': {'threatfox': 'secret-1'}})
+            out = api.get_events_config()
+            api.post_events_config({'list_keys': {'threatfox': ''}})          # an empty field keeps it
+            kept = R.load_keys()
+            api.post_events_config({'clear_keys': ['threatfox']})
+        tf = next(x for x in out['lists'] if x['name'] == 'threatfox')
+        self.assertEqual((tf['key_set'], tf['key_need'], tf['key_link']), (True, True, 'https://auth.abuse.ch/'))
+        self.assertNotIn('secret-1', __import__('json').dumps(out))
+        self.assertEqual(kept, {'threatfox': 'secret-1'})
+        self.assertEqual(R.load_keys(), {})
+
+    def test_refused_key_said_plainly(self):
+        import urllib.error
+        from unittest import mock
+        R._get = self.saved
+        err = urllib.error.HTTPError('u', 401, 'Unauthorized', {}, None)
+        with mock.patch('urllib.request.urlopen', side_effect=err):
+            with self.assertRaisesRegex(ValueError, 'refused'):
+                R._get('https://x', 'bad')
 
 
 if __name__ == '__main__':

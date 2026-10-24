@@ -5,19 +5,19 @@ outside addresses of each 10-minute window — never on the receiving path, so i
 All lists of one IP version are merged into one sorted table of non-overlapping ranges, each with the set of lists
 that cover it: a lookup is one binary search, whatever the number of lists and however their networks nest."""
 import bisect
-import csv
 import io
 import ipaddress
 import json
 import os
 import time
+import urllib.error
 import urllib.request
 
 from common import STATE_DIR, VERSION
 
 DIR = os.path.join(STATE_DIR, 'reputation')
 META = os.path.join(DIR, 'meta.json')
-REFRESH = 86400          # a list is downloaded again after a day (ThreatFox's "recent" export: every 6 hours)
+REFRESH = 86400          # a list is downloaded again after a day (ThreatFox: every 6 hours)
 RETRY = 3600             # after a failed download
 MAX_BYTES = 32 << 20
 
@@ -37,10 +37,18 @@ def _drop(text):
             continue
 
 
-def _threatfox(text):
-    for row in csv.reader(io.StringIO(text), skipinitialspace=True):
-        if len(row) > 4 and not row[0].startswith('#'):
-            yield row[2].rsplit(':', 1)[0].strip('[]')
+def _threatfox_api(text):
+    """(1.16.2) The ThreatFox API's answer to get_iocs: the address of every ip:port IOC"""
+    d = json.loads(text)
+    if d.get('query_status') in ('no_result', 'ok') and not d.get('data'):
+        return
+    if str(d.get('query_status', '')).endswith('_auth_key'):      # unknown_auth_key: a wrong key gets HTTP 200
+        raise ValueError('the key was refused')
+    if d.get('query_status') != 'ok':
+        raise ValueError(f"ThreatFox: {d.get('query_status')}")
+    for x in d['data']:
+        if x.get('ioc_type') == 'ip:port':
+            yield str(x.get('ioc', '')).rsplit(':', 1)[0].strip('[]')
 
 
 def _dshield(text):
@@ -55,7 +63,8 @@ def _dshield(text):
 # anon = Tor exit relays. All are free to use; FlowTrack downloads them on the customer's own server.
 LISTS = {
     'feodo':          ('malware', ['https://feodotracker.abuse.ch/downloads/ipblocklist.txt'], _lines, REFRESH, 'https://feodotracker.abuse.ch/'),
-    'threatfox':      ('malware', ['https://threatfox.abuse.ch/export/csv/ip-port/recent/'], _threatfox, 6 * 3600, 'https://threatfox.abuse.ch/'),
+    # (1.16.2) the CSV export without a key is gone (410): the API, with the customer's free abuse.ch Auth-Key
+    'threatfox':      ('malware', ['https://threatfox-api.abuse.ch/api/v1/'], _threatfox_api, 6 * 3600, 'https://threatfox.abuse.ch/'),
     'spamhaus_drop':  ('drop', ['https://www.spamhaus.org/drop/drop_v4.json', 'https://www.spamhaus.org/drop/drop_v6.json'], _drop, REFRESH, 'https://www.spamhaus.org/blocklists/do-not-route-or-peer/'),
     'et_compromised': ('attack', ['https://rules.emergingthreats.net/blockrules/compromised-ips.txt'], _lines, REFRESH, 'https://rules.emergingthreats.net/'),
     'cins':           ('attack', ['https://cinsscore.com/list/ci-badguys.txt'], _lines, REFRESH, 'https://cinsscore.com/'),
@@ -67,6 +76,13 @@ TITLES = {'feodo': 'abuse.ch Feodo Tracker', 'threatfox': 'abuse.ch ThreatFox', 
           'et_compromised': 'ET compromised', 'cins': 'CINS Army', 'blocklist_de': 'blocklist.de', 'dshield': 'DShield top',
           'tor_exit': 'Tor exits', 'custom': 'own list'}
 CUSTOM = 'custom'
+# (1.16.2) Keys: a publisher may ask for one (abuse.ch: a free Auth-Key since 2025). Any list can be given a key in the
+# settings; it goes as the Auth-Key header (abuse.ch's way) unless the list says otherwise here. need = no download
+# without one; body = the request is a POST of this JSON (an API rather than a file); signup = where to get one.
+AUTH = {'threatfox': {'need': True, 'body': {'query': 'get_iocs', 'days': 7}, 'signup': 'https://auth.abuse.ch/'},
+        'feodo': {'signup': 'https://auth.abuse.ch/'}}
+KEYS = os.path.join(STATE_DIR, 'reputation_keys.json')     # {list: key}, 0600: never shown to the browser
+NO_KEY = 'needs a key'
 
 
 _SPECIAL = [ipaddress.ip_network(n) for n in ('0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16',
@@ -105,10 +121,58 @@ def _save_meta(m):
     os.replace(tmp, META)
 
 
-def _get(url):
-    req = urllib.request.Request(url, headers={'User-Agent': f'FlowTrack/{VERSION} (+https://github.com/henzelis/flowtrack)'})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = r.read(MAX_BYTES + 1)
+def load_keys():
+    try:
+        with open(KEYS) as f:
+            d = json.load(f)
+        return {k: str(v) for k, v in d.items() if k in LISTS and v} if isinstance(d, dict) else {}
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_keys(changes):
+    """(1.16.2) {list: key} — '' or None removes a list's key; lists not named keep theirs. A list whose key changed is
+    downloaded again at the next check (within 10 minutes), not after its day."""
+    keys = load_keys()
+    for name, v in changes.items():
+        if name not in LISTS:
+            continue
+        v = (v or '').strip()
+        if len(v) > 200 or any(c.isspace() or not c.isprintable() for c in v):
+            raise ValueError('bad key')
+        if v:
+            keys[name] = v
+        else:
+            keys.pop(name, None)
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = KEYS + '.tmp'
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), 'w') as f:
+        json.dump(keys, f)
+    os.replace(tmp, KEYS)
+    m = meta()
+    for name in changes:
+        if name in m:
+            m[name]['tried'] = 0
+    if m:
+        os.makedirs(DIR, exist_ok=True)
+        _save_meta(m)
+
+
+def _get(url, key=None, body=None):
+    headers = {'User-Agent': f'FlowTrack/{VERSION} (+https://github.com/henzelis/flowtrack)'}
+    if key:
+        headers['Auth-Key'] = key
+    data = None
+    if body is not None:
+        data, headers['Content-Type'] = json.dumps(body).encode(), 'application/json'
+    req = urllib.request.Request(url, data=data, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read(MAX_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403) and key:
+            raise ValueError('the key was refused') from None
+        raise
     if len(data) > MAX_BYTES:
         raise ValueError('too large')
     return data.decode('utf-8', 'replace')
@@ -117,7 +181,7 @@ def _get(url):
 def update(enabled, log=print, now=None):
     """Download the enabled lists that are due. A failed or empty download keeps the previous copy. -> names updated."""
     os.makedirs(DIR, exist_ok=True)
-    now, m, done = now or time.time(), meta(), []
+    now, m, done, keys = now or time.time(), meta(), [], load_keys()
     for name in enabled:
         if name not in LISTS:
             continue
@@ -126,8 +190,14 @@ def update(enabled, log=print, now=None):
         if now - st.get('tried', 0) < (every if st.get('ok') else RETRY):
             continue
         st['tried'] = now
+        auth = AUTH.get(name, {})
+        if auth.get('need') and not keys.get(name):        # (1.16.2) said in the settings, not a failure to log hourly
+            st.update(ok=False, error=NO_KEY)
+            m[name] = st
+            _save_meta(m)
+            continue
         try:
-            nets = networks([x for u in urls for x in parse(_get(u))])
+            nets = networks([x for u in urls for x in parse(_get(u, keys.get(name), auth.get('body')))])
             if not nets:
                 raise ValueError('no addresses in the answer')
             tmp = os.path.join(DIR, name + '.tmp')

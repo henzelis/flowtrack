@@ -11,6 +11,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
   rates are now made once, in 5-minute steps, as the counters come in, and Capacity reads those: measured with 500
   interfaces over 30 days, 13 s → under 2 s and a quarter of the memory. After the upgrade the history of the counters
   is gone through once (seconds to a minute); until then the page works as before. The numbers are the same, exactly.
+- **IP reputation: ThreatFox needs a key now**: abuse.ch stopped giving the ThreatFox list without a (free) Auth-Key —
+  the download failed with «410 Gone» everywhere. Settings → Events → IP reputation has a **Key (Auth-Key)** field
+  for every list: ThreatFox shows «needs a key» with a link to get one free, then downloads through its API (the
+  addresses of the last 7 days). Any other list can be given a key the same way if its publisher starts asking for
+  one. Keys stay on the server (a file only FlowTrack reads); the page never shows them back, an empty field keeps
+  the saved one, and a wrong key is said plainly.
 - The web service no longer fills its log with a traceback each time a browser closes a page while it is loading.
 
 ## 1.16.1 — 2026-10-21

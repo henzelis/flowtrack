@@ -1979,9 +1979,11 @@ def get_events_config():
         svcs = detect.services(cfg)
     except CHError:
         svcs = []
-    m = reputation.meta()
+    m, keys = reputation.meta(), reputation.load_keys()
+    # (1.16.2) key_set: a key is saved (the key itself never leaves the server); key_need: no download without one
     lists = [{'name': n, 'title': reputation.TITLES[n], 'category': c, 'link': link, 'on': cfg['lists'].get(n, True),
-              'count': m.get(n, {}).get('count', 0), 'updated': m.get(n, {}).get('updated', 0), 'error': m.get(n, {}).get('error', '')}
+              'count': m.get(n, {}).get('count', 0), 'updated': m.get(n, {}).get('updated', 0), 'error': m.get(n, {}).get('error', ''),
+              'key_set': n in keys, 'key_need': bool(reputation.AUTH.get(n, {}).get('need')), 'key_link': reputation.AUTH.get(n, {}).get('signup', '')}
              for n, (c, _, _, _, link) in reputation.LISTS.items()]
     return {'config': cfg, 'defaults': detect.defaults(), 'services': svcs, 'lists': lists}
 
@@ -1997,6 +1999,11 @@ def post_events_config(body):
     cur = detect.load_config()
     try:
         detect.save_config(detect.validate({**{k: cur[k] for k in SERVICE_KEYS + EXCEPTION_KEYS}, **body}))
+        # (1.16.2) list keys: {list: key} sets, clear_keys: [list] removes; an empty field keeps the saved key
+        keys = {n: v for n, v in (body.get('list_keys') or {}).items() if isinstance(v, str) and v.strip()}
+        keys.update({n: '' for n in body.get('clear_keys') or [] if isinstance(n, str)})
+        if keys:
+            reputation.save_keys(keys)
     except ValueError as e:
         raise BadRequest(str(e)) from None
     return get_events_config()

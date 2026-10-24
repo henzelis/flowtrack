@@ -754,3 +754,8 @@ section.evfill > #evChart{flex:1 1 auto;min-height:320px;height:auto!important}
 /* (1.16.1) the chosen priority / kind named in the subtitles; an empty ring keeps the panel's height, the note centred */
 .sub .evwhat{color:var(--ink);font-weight:700}
 #evPie .empty.evnone{min-height:300px;display:grid;place-items:center}
+
+/* (1.16.2) IP reputation: a key per list */
+table.evr td.evkey{min-width:190px}
+table.evr td.evkey input[type=password]{width:100%;min-width:160px}
+table.evr td.evkey .chk{margin-top:4px;font-size:12px}

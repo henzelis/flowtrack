@@ -2804,10 +2804,19 @@ function vEventsCfg(){
       try { await apiPost('notify/test', collectNotify()); say(T('Sent — check the chat.')); } catch (e) { say(e.message, true); } };
     const cats = {malware:T('malware: botnet controllers, malware hosts'), drop:T('criminal netblocks'), attack:T('hosts seen attacking'), anon:T('Tor exit relays')};
     const when = t => t ? new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'}) : '';
-    box('evrBox', `<div class="tw form"><table class="evr"><thead><tr><th>${T('On')}</th><th>${T('List')}</th><th>${T('What it holds')}</th><th class="num">${T('Entries')}</th><th>${T('Updated')}</th></tr></thead><tbody>
+    // (1.16.2) a key per list (a publisher may ask for one: abuse.ch ThreatFox since 2025); the saved key never comes back
+    const noKey = l => l.key_need && !l.key_set;
+    const keyCell = l => `<td class="evkey"><input type="password" autocomplete="new-password" data-key="${esc(l.name)}" aria-label="${esc(T('Key for {list}', {list:l.title}))}"
+        placeholder="${l.key_set ? T('saved — leave empty to keep') : l.key_need ? T('needed — paste the key') : T('only if the publisher asks')}">
+        ${l.key_set ? `<label class="chk"><input type="checkbox" data-keyx="${esc(l.name)}">${T('Remove')}</label>` : ''}
+        ${noKey(l) && l.key_link ? `<div class="note"><a href="${esc(l.key_link)}" target="_blank" rel="noopener">${T('Get a free key')}</a></div>` : ''}</td>`;
+    const state = l => l.error === 'needs a key' ? `<span class="pill warn">${T('needs a key')}</span>`
+      : l.error === 'the key was refused' ? `<span class="pill crit">${T('the key was refused')}</span> `
+      : l.error ? `<span class="pill crit" title="${esc(l.error)}">${T('failed')}</span> ` : '';
+    box('evrBox', `<div class="tw form"><table class="evr"><thead><tr><th>${T('On')}</th><th>${T('List')}</th><th>${T('What it holds')}</th><th class="num">${T('Entries')}</th><th>${T('Updated')}</th><th>${T('Key (Auth-Key)')}</th></tr></thead><tbody>
       ${res.lists.map(l => `<tr><td><label class="chk"><input type="checkbox" data-list="${esc(l.name)}" ${l.on ? 'checked' : ''} aria-label="${esc(l.title)}"></label></td>
         <td><a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.title)}</a></td><td class="note">${cats[l.category] || ''}</td><td class="num mono">${l.count ? l.count.toLocaleString(LOC) : '—'}</td>
-        <td>${l.error ? `<span class="pill crit" title="${esc(l.error)}">${T('failed')}</span> ` : ''}<span class="note">${l.updated ? when(l.updated) : l.on ? T('not yet — within 10 min') : ''}</span></td></tr>`).join('')}</tbody></table></div>
+        <td>${state(l)}<span class="note">${l.updated ? when(l.updated) : l.on && !noKey(l) ? T('not yet — within 10 min') : ''}</span></td>${keyCell(l)}</tr>`).join('')}</tbody></table></div>
       <div class="form evown"><label>${T('Own list — addresses and networks you consider malicious (one per line)')}<textarea id="evOwn" rows="3" placeholder="203.0.113.66&#10;198.51.100.0/24">${esc((cfg.own_list || []).join('\n'))}</textarea></label></div>`);
     excTables(cfg);
     mark();
@@ -2818,7 +2827,9 @@ function vEventsCfg(){
       tr.querySelectorAll('[data-x]').forEach(i => { k[i.dataset.x] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) : i.value; });
       kinds[tr.dataset.k] = k; });
     const lists = {}; document.querySelectorAll('table.evr [data-list]').forEach(i => { lists[i.dataset.list] = i.checked; });
-    return {kinds, lists, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean)};
+    const list_keys = {}; document.querySelectorAll('table.evr [data-key]').forEach(i => { if (i.value.trim()) list_keys[i.dataset.key] = i.value.trim(); });
+    const clear_keys = [...document.querySelectorAll('table.evr [data-keyx]:checked')].map(i => i.dataset.keyx);
+    return {kinds, lists, list_keys, clear_keys, own_list:document.getElementById('evOwn').value.split(/[\s,]+/).filter(Boolean)};
   };
   const collectNotify = () => { const kinds = {}, email_kinds = {}, webhook_kinds = {}, siem_kinds = {}, v = id => document.getElementById(id);
     document.querySelectorAll('table.evk [data-s]').forEach(i => { siem_kinds[i.dataset.s] = i.checked; });
