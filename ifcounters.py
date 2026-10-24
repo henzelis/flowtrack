@@ -6,7 +6,8 @@ For each device with SNMP on (Settings → Devices) the collector reads every PO
 IF-MIB ifXTable (32-bit ifTable ones where a device has no ifXTable — a 32-bit counter of a 1 Gbit/s port wraps in 34 s,
 so a wrap between two reads is undone), errors, discards and the state, and keeps them in `if_counters` with
 src = 'snmp' — the table the sFlow counter samples already go to (src = 'sflow'). Rates are the difference of two
-rows (api.counter_days); a counter that went down (a reboot, a wrap) starts again.
+rows (rates_sql); a counter that went down (a reboot, a wrap) starts again. (1.16.2) Rates thread: they are made once,
+in 5-minute buckets, into `if_rate5` — Capacity reads those.
 
 Status for the web: STATE_DIR/snmp_counters.json {device: {t, ok, interfaces, error}}."""
 import json
@@ -15,6 +16,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import rollups
 import snmp
 from common import STATE_DIR, CHError, ch
 
@@ -135,3 +137,91 @@ class Poller:
 
 def start(log=print):
     threading.Thread(target=Poller(log).run, name='snmp-counters', daemon=True).start()
+
+
+# ---------------------------------------------------------------- (1.16.2) rates in 5-minute buckets
+BUCKET = 300
+RATE_LAG = 300          # reads this recent are left for the next pass: a write may still be on its way
+MAX_GAP = 900           # two reads further apart make no rate (rates_sql): a bucket's rates need this much before it
+
+
+def rates_sql(where='', c0='c0', t1='t1'):
+    """Rates from the interface counters (SNMP every minute, sFlow counter samples): one row per read and direction
+    (d 0 = into the device through the interface, 1 = out of it) with the octets since the previous read of the same
+    source and the seconds between, for the reads from {c0} to {t1}. A 32-bit counter that wrapped is undone; a counter
+    that went down (reboot), a gap over 15 minutes or more than the port can carry is left out. (api._counter_rates
+    before 1.16.2.)"""
+    return f"""SELECT exporter, i, src, x.1 AS d, ts, if(x.2 < 0 AND wide = 0, x.2 + 4294967296, x.2) AS delta, dt FROM (
+            SELECT exporter, if_index AS i, src, ts, wide, speed, dateDiff('second', lagInFrame(ts) OVER w, ts) AS dt,
+                toInt64(in_octets) - toInt64(lagInFrame(in_octets) OVER w) AS di, toInt64(out_octets) - toInt64(lagInFrame(out_octets) OVER w) AS dout
+            FROM if_counters WHERE ts >= toDateTime({{{c0}:UInt32}}) AND ts < toDateTime({{{t1}:UInt32}}){where}
+            WINDOW w AS (PARTITION BY exporter, if_index, src ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
+        ARRAY JOIN [(0, di), (1, dout)] AS x
+        WHERE dt BETWEEN 10 AND {MAX_GAP} AND delta >= 0 AND (speed = 0 OR delta * 8 <= speed * dt * 1.1)"""
+
+
+def five_sql(t0='t0', t1='t1', c0='c0'):
+    """The 5-minute buckets of the reads from {t0} to {t1}, made from the counters ({c0} = t0 - MAX_GAP: the read before
+    the first of them)"""
+    return f"""SELECT toStartOfInterval(ts, INTERVAL {BUCKET} SECOND) AS t5, exporter, i, src, d, sum(delta) AS b, sum(dt) AS sdt,
+            max(delta * 8 / dt) AS pk FROM ({rates_sql(c0=c0, t1=t1)}) WHERE ts >= toDateTime({{{t0}:UInt32}}) GROUP BY t5, exporter, i, src, d"""
+
+
+def make_rates(t0, t1):
+    """if_rate5 for the buckets from t0 to t1 (both bucket boundaries)"""
+    ch(f'INSERT INTO if_rate5 (t5, exporter, i, src, d, b, sdt, pk) SELECT t5, exporter, i, src, d, b, sdt, pk FROM ({five_sql()})',
+       {'t0': t0, 't1': t1, 'c0': t0 - MAX_GAP}, timeout=600, settings={'max_threads': 2})
+
+
+def rates_state():
+    """(made up to, complete from): the buckets before `made up to` are in if_rate5 from `complete from` on (0: all
+    the counters there are); None before the thread first ran"""
+    st = rollups._get_state()
+    if 'ifrate:done' not in st:
+        return None
+    return st['ifrate:done'], st.get('ifrate:ready_from', 0)
+
+
+class Rates:
+    """The collector's thread: every minute the new whole buckets; after an upgrade first the history of the counters,
+    a day at a time, newest first (Capacity reads if_rate5 once the period it shows is in)."""
+    def __init__(self, log=print):
+        self.log = log
+
+    def once(self, now=None):
+        now = int(now or time.time())
+        st = rollups._get_state()
+        if 'ifrate:done' not in st:
+            cut = (now - RATE_LAG) // BUCKET * BUCKET
+            rollups._set('ifrate:ready_from', cut)
+            rollups._set('ifrate:done', cut)
+            st = {'ifrate:done': cut, 'ifrate:ready_from': cut}
+        done, rf = st['ifrate:done'], st.get('ifrate:ready_from', 0)
+        upto = (now - RATE_LAG) // BUCKET * BUCKET
+        if upto > done:
+            make_rates(done, upto)
+            rollups._set('ifrate:done', upto)
+        if rf:                          # the history: one day per pass, newest first
+            old = ch("SELECT toUnixTimestamp(min(ts)) AS t, count() AS n FROM if_counters WHERE ts < toDateTime({rf:UInt32})", {'rf': rf}, fmt='JSON')
+            if not old or not int(old[0]['n']):
+                rollups._set('ifrate:ready_from', 0)
+                self.log('interface counters: rates of the whole history in 5-minute buckets')
+                return False
+            lo = max(int(old[0]['t']) // BUCKET * BUCKET, rf - 86400)
+            make_rates(lo, rf)
+            rollups._set('ifrate:ready_from', lo)
+            return True                 # more history: the next pass at once
+        return False
+
+    def run(self):
+        while True:
+            try:
+                more = self.once()
+            except (CHError, OSError, ValueError, KeyError) as ex:
+                self.log(f'WARN interface counter rates: {str(ex)[:300]}')
+                more = False
+            time.sleep(1 if more else 60)
+
+
+def start_rates(log=print):
+    threading.Thread(target=Rates(log).run, name='counter-rates', daemon=True).start()

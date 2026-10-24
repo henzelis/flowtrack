@@ -3,6 +3,16 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## 1.16.2 — 2026-10-24
+
+- **Capacity: «Not enough memory» on a firewall with many interfaces**: the interfaces' own counters (SNMP every
+  minute) were turned into rates from every read of the whole period at each opening of the page — a FortiGate with
+  hundreds of interfaces has ~21 million reads in a month, and the page ran out of memory before it had read them. The
+  rates are now made once, in 5-minute steps, as the counters come in, and Capacity reads those: measured with 500
+  interfaces over 30 days, 13 s → under 2 s and a quarter of the memory. After the upgrade the history of the counters
+  is gone through once (seconds to a minute); until then the page works as before. The numbers are the same, exactly.
+- The web service no longer fills its log with a traceback each time a browser closes a page while it is loading.
+
 ## 1.16.1 — 2026-10-21
 
 - **Events, visual first**: cards with the number of events and of each priority (a card picks the priority of the

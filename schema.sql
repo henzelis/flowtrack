@@ -174,3 +174,24 @@ TTL ts + INTERVAL 90 DAY;
 -- the 32-bit ifTable counters of devices without ifXTable (a wrap between two reads is undone when rates are made)
 ALTER TABLE if_counters ADD COLUMN IF NOT EXISTS src LowCardinality(String) DEFAULT 'sflow';
 ALTER TABLE if_counters ADD COLUMN IF NOT EXISTS wide UInt8 DEFAULT 1;
+
+-- (1.16.2) The counters' rates in 5-minute buckets (ifcounters.Rates): Capacity reads these instead of making rates from
+-- every read of every interface over the whole period each time (a FortiGate with hundreds of interfaces read every
+-- minute: 21 M reads in a month, ~5 GB for one page). b = octets, sdt = seconds between the reads, pk = the busiest
+-- read-to-read rate (bit/s), d 0 = into the device, 1 = out. A bucket is always made whole in one pass: one made again
+-- is the same row (read with FINAL).
+CREATE TABLE IF NOT EXISTS if_rate5
+(
+    t5       DateTime,
+    exporter LowCardinality(String),
+    i        UInt32,
+    src      LowCardinality(String),
+    d        UInt8,
+    b        Int64,
+    sdt      Int64,
+    pk       Float64
+)
+ENGINE = ReplacingMergeTree
+PARTITION BY toYYYYMMDD(t5)
+ORDER BY (exporter, i, src, d, t5)
+TTL t5 + INTERVAL 90 DAY;

@@ -1467,28 +1467,24 @@ def _cap_filter(q):
     return keep, sorted({str(f.get('k')) for f in flt if f.get('k') not in ('device', 'iface')})
 
 
-def _counter_rates(where=''):
-    """(1.14.0) Rates from the interface counters (SNMP every minute, sFlow counter samples): one row per read and
-    direction (d 0 = into the device through the interface, 1 = out of it) with the octets since the previous read of
-    the same source and the seconds between. A 32-bit counter that wrapped is undone; a counter that went down
-    (reboot), a gap over 15 minutes or more than the port can carry is left out."""
-    return f"""SELECT exporter, i, src, x.1 AS d, ts, if(x.2 < 0 AND wide = 0, x.2 + 4294967296, x.2) AS delta, dt FROM (
-            SELECT exporter, if_index AS i, src, ts, wide, speed, dateDiff('second', lagInFrame(ts) OVER w, ts) AS dt,
-                toInt64(in_octets) - toInt64(lagInFrame(in_octets) OVER w) AS di, toInt64(out_octets) - toInt64(lagInFrame(out_octets) OVER w) AS dout
-            FROM if_counters WHERE ts >= toDateTime({{c0:UInt32}}) AND ts < toDateTime({{t1:UInt32}}){where}
-            WINDOW w AS (PARTITION BY exporter, if_index, src ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW))
-        ARRAY JOIN [(0, di), (1, dout)] AS x
-        WHERE dt BETWEEN 10 AND 900 AND delta >= 0 AND (speed = 0 OR delta * 8 <= speed * dt * 1.1)"""
-
-
 def counter_days(p, where=''):
     """-> ({(dev, idx, src, d, day): {...}}, {(dev, idx, src, d): {...}}): per local day and over the period — the
     95th percentile of the 5-minute rates, the busiest minute (one read to the next), the bytes and the 5-minute
     buckets seen (m)."""
     p['c0'] = p['_t0'] - 300          # the read before the period: the first rate inside it
-    five = f"""SELECT exporter, i, src, d, toUnixTimestamp(toStartOfDay(ts, {{tz:String}})) AS day, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t5,
-            sum(delta) AS b, sum(dt) AS sdt, max(delta * 8 / dt) AS pk FROM ({_counter_rates(where)}) WHERE ts >= toDateTime({{t0:UInt32}})
-            GROUP BY exporter, i, src, d, day, t5"""
+    rs = ifcounters.rates_state()
+    if rs and rs[1] <= p['_t0'] < rs[0] and not where:
+        # (1.16.2) the rates made in 5-minute buckets (ifcounters.Rates), the last minutes since then from the reads: before,
+        # every read of the period went through a window function at once — a FortiGate with hundreds of interfaces had
+        # 21 M reads in a month, ~250 bytes each: «Not enough memory» on Capacity
+        p.update(rdn=rs[0], rc0=rs[0] - ifcounters.MAX_GAP)
+        five = f"""SELECT exporter, i, src, d, toUnixTimestamp(toStartOfDay(t5, {{tz:String}})) AS day, t5, b, sdt, pk FROM (
+                SELECT t5, exporter, i, src, d, b, sdt, pk FROM if_rate5 FINAL WHERE t5 >= toDateTime({{t0:UInt32}}) AND t5 < toDateTime({{rdn:UInt32}})
+                UNION ALL {ifcounters.five_sql(t0='rdn', c0='rc0')})"""
+    else:
+        five = f"""SELECT exporter, i, src, d, toUnixTimestamp(toStartOfDay(ts, {{tz:String}})) AS day, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t5,
+                sum(delta) AS b, sum(dt) AS sdt, max(delta * 8 / dt) AS pk FROM ({ifcounters.rates_sql(where)}) WHERE ts >= toDateTime({{t0:UInt32}})
+                GROUP BY exporter, i, src, d, day, t5"""
     keys = ('exporter', 'i', 'src', 'd')
     day = {}
     for r in ch(f"""SELECT exporter, i, src, d, day, sum(b) AS bytes, count() AS m, max(pk) AS peak, quantileExact(0.95)(b * 8 / sdt) AS p95
@@ -1517,7 +1513,8 @@ def flows_seen(p, cper):
         starts[dev] = min(starts.get(dev, v['first']), v['first'])
     # (1.15.2) at most the last SEEN_DAYS: the share follows a change of the export (a sampler switched on) within days,
     # and records stored before a fix of the collector do not weigh on it for the whole period
-    starts = {dev: max(t + 600, p['_t0'], end - SEEN_DAYS * 86400) for dev, t in starts.items()}
+    # (1.16.2) whole 5-minute buckets, as the flows side always was (its buckets from the start on)
+    starts = {dev: -(-max(t + 600, p['_t0'], end - SEEN_DAYS * 86400) // 300) * 300 for dev, t in starts.items()}
     starts = {dev: t for dev, t in starts.items() if end - t >= SEEN_MIN}
     if not starts:
         return {}
@@ -1530,8 +1527,14 @@ def flows_seen(p, cper):
     flows = {(r['exporter'], int(r['i']), int(r['d'])): int(r['b']) for r in ch(f"""SELECT exporter, i, d, sum(v) AS b FROM ({_five_min(p)})
         WHERE {cond('t')} AND t < toDateTime({{cE:UInt32}}) GROUP BY exporter, i, d""", q, fmt='JSON', timeout=120, settings=CAP_SETTINGS)}
     ctr = {}
-    for r in ch(f"""SELECT exporter, i, src, d, sum(delta) AS b FROM ({_counter_rates()}) WHERE {cond('ts')} AND ts < toDateTime({{cE:UInt32}})
-            GROUP BY exporter, i, src, d""", q, fmt='JSON', timeout=120):
+    rs = ifcounters.rates_state()
+    if rs and rs[1] <= min(starts.values()) and end <= rs[0]:     # (1.16.2) from the 5-minute rates (the starts are buckets)
+        sql = f"SELECT exporter, i, src, d, sum(b) AS b FROM if_rate5 FINAL WHERE {cond('t5')} AND t5 < toDateTime({{cE:UInt32}}) GROUP BY exporter, i, src, d"
+    else:
+        q['c0'] = q.get('c0', p['_t0'] - 300)
+        sql = f"""SELECT exporter, i, src, d, sum(delta) AS b FROM ({ifcounters.rates_sql()}) WHERE {cond('ts')} AND ts < toDateTime({{cE:UInt32}})
+            GROUP BY exporter, i, src, d"""
+    for r in ch(sql, q, fmt='JSON', timeout=120):
         key = (r['exporter'], int(r['i']), int(r['d']))
         if r['src'] == 'snmp' or key not in ctr:
             ctr[key] = int(r['b'])
@@ -3166,6 +3169,13 @@ class Server(ThreadingHTTPServer):
         self.server_name, self.server_port = str(self.server_address[0]), self.server_address[1]
         self.server_activate()
         self.ctx = ctx
+
+    def handle_error(self, request, client_address):
+        # (1.16.2) a browser that closed the page while its answer was being sent is no error of ours (a traceback in
+        # the log for every closed tab before); anything else is still logged in full
+        if isinstance(sys.exc_info()[1], (ConnectionError, ssl.SSLEOFError, ssl.SSLZeroReturnError)):
+            return
+        super().handle_error(request, client_address)
 
     def finish_request(self, request, client_address):
         if not self.ctx:
