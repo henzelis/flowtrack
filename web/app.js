@@ -2810,13 +2810,13 @@ function vEventsCfg(){
         placeholder="${l.key_set ? T('saved — leave empty to keep') : l.key_need ? T('needed — paste the key') : T('only if the publisher asks')}">
         ${l.key_set ? `<label class="chk"><input type="checkbox" data-keyx="${esc(l.name)}">${T('Remove')}</label>` : ''}
         ${noKey(l) && l.key_link ? `<div class="note"><a href="${esc(l.key_link)}" target="_blank" rel="noopener">${T('Get a free key')}</a></div>` : ''}</td>`;
-    const state = l => l.error === 'needs a key' ? `<span class="pill warn">${T('needs a key')}</span>`
+    const listState = l => l.error === 'needs a key' ? `<span class="pill warn">${T('needs a key')}</span>`
       : l.error === 'the key was refused' ? `<span class="pill crit">${T('the key was refused')}</span> `
       : l.error ? `<span class="pill crit" title="${esc(l.error)}">${T('failed')}</span> ` : '';
     box('evrBox', `<div class="tw form"><table class="evr"><thead><tr><th>${T('On')}</th><th>${T('List')}</th><th>${T('What it holds')}</th><th class="num">${T('Entries')}</th><th>${T('Updated')}</th><th>${T('Key (Auth-Key)')}</th></tr></thead><tbody>
       ${res.lists.map(l => `<tr><td><label class="chk"><input type="checkbox" data-list="${esc(l.name)}" ${l.on ? 'checked' : ''} aria-label="${esc(l.title)}"></label></td>
         <td><a href="${esc(l.link)}" target="_blank" rel="noopener">${esc(l.title)}</a></td><td class="note">${cats[l.category] || ''}</td><td class="num mono">${l.count ? l.count.toLocaleString(LOC) : '—'}</td>
-        <td>${state(l)}<span class="note">${l.updated ? when(l.updated) : l.on && !noKey(l) ? T('not yet — within 10 min') : ''}</span></td>${keyCell(l)}</tr>`).join('')}</tbody></table></div>
+        <td>${listState(l)}<span class="note">${l.updated ? when(l.updated) : l.on && !l.error ? T('not yet — within 10 min') : ''}</span></td>${keyCell(l)}</tr>`).join('')}</tbody></table></div>
       <div class="form evown"><label>${T('Own list — addresses and networks you consider malicious (one per line)')}<textarea id="evOwn" rows="3" placeholder="203.0.113.66&#10;198.51.100.0/24">${esc((cfg.own_list || []).join('\n'))}</textarea></label></div>`);
     excTables(cfg);
     mark();
