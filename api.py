@@ -2657,8 +2657,14 @@ class H(BaseHTTPRequestHandler):
             self.send_header('Content-Disposition', self._disposition)
             self._disposition = None
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionError, ssl.SSLError):
+            # (1.16.2) the browser left (page closed or changed) while its answer was on the way: nothing to answer any
+            # more. Before, the error reached do_GET's «database error» branch, was logged as one, and a 502 was
+            # written into the closed connection — a second error with a traceback
+            self.close_connection = True
 
     def do_GET(self):
         u = urlparse(self.path)
