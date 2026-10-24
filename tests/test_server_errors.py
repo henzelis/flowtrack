@@ -1,4 +1,4 @@
-"""(1.17.0) The web server does not log a browser that closed the connection while its answer was sent; every other
+"""(1.16.2) The web server does not log a browser that closed the connection while its answer was sent; every other
 error of a request is still logged with its traceback."""
 import contextlib
 import io
