@@ -5,6 +5,13 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+## 1.17.1 — 2026-10-25
+
+- **The installer finishes an installation that was interrupted** (a lost SSH session, a power cut): packages left
+  unpacked but not configured are finished first (`dpkg --configure -a`) — before, apt refused to install anything —
+  and a Docker that is only partly there (the `docker` command without its engine, `docker.service`) is installed
+  again instead of failing with «Unit file docker.service does not exist». The installer says what it repairs.
+
 ## 1.17.0 — 2026-10-25
 
 **Long periods from the summary tables.** A day or more of a busy network no longer reads every record. With 216

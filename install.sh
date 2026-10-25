@@ -280,6 +280,13 @@ pkg_install() {   # installs only what is missing — never upgrades the user's 
     dnf install -yq "${missing[@]}"
   fi
 }
+# (1.17.1) an installation interrupted earlier (a lost SSH session, a power cut) leaves packages unpacked but not
+# configured: apt then refuses to install anything until they are finished
+if [ "$PKG" = apt ] && [ -n "$(dpkg --audit 2>/dev/null)" ]; then
+  say "$(t 'An earlier package installation was interrupted: finishing it first (dpkg --configure -a).' 'Попереднє встановлення пакетів було перерване: спершу його завершимо (dpkg --configure -a).')"
+  dpkg_finish() { DEBIAN_FRONTEND=noninteractive dpkg --configure -a && DEBIAN_FRONTEND=noninteractive apt-get install -f -yq; }
+  step "$(t 'Finishing the interrupted installation' 'Завершення перерваного встановлення')" dpkg_finish
+fi
 step "$(t 'Installing system packages' 'Встановлення системних пакетів')" pkg_install
 for tool in openssl curl ss tar; do
   command -v "$tool" >/dev/null 2>&1 || die "$(t "'$tool' is still missing after installing packages — install it manually and re-run." "'$tool' досі відсутній після встановлення пакетів — встановіть його вручну й запустіть ще раз.")"
@@ -288,14 +295,23 @@ PYV=$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' || die "$(t "Python 3.8+ is required, found $PYV" "Потрібен Python 3.8+, знайдено $PYV")"
 ok "Python $PYV"
 
-if ! command -v docker >/dev/null 2>&1; then
-  say ""; say "$(t 'FlowTrack stores flows in ClickHouse, which runs in Docker. Docker is not installed.' 'FlowTrack зберігає потоки в ClickHouse, який працює в Docker. Docker не встановлено.')"
+# (1.17.1) Docker is there only with its engine: the docker command alone (docker-ce-cli without docker-ce — an
+# installation interrupted half-way) has no docker.service to start
+docker_engine() { command -v docker >/dev/null 2>&1 && systemctl cat docker.service >/dev/null 2>&1; }
+if ! docker_engine; then
+  say ""
+  if command -v docker >/dev/null 2>&1; then
+    say "$(t 'Docker is only partly installed: the docker command is there, but not its engine (docker.service) — an earlier installation was probably interrupted. It will be installed again.' 'Docker встановлено лише частково: команда docker є, а її рушія (docker.service) немає — мабуть, попереднє встановлення перервали. Його буде встановлено ще раз.')"
+  else
+    say "$(t 'FlowTrack stores flows in ClickHouse, which runs in Docker. Docker is not installed.' 'FlowTrack зберігає потоки в ClickHouse, який працює в Docker. Docker не встановлено.')"
+  fi
   ask_yn want_docker "$(t 'Install Docker now (official get.docker.com script)?' 'Встановити Docker зараз (офіційний скрипт get.docker.com)?')" y FT_INSTALL_DOCKER
   [ "$want_docker" = y ] || die "$(t 'Docker is required. Install it and run this installer again.' 'Docker потрібен. Встановіть його й запустіть інсталятор ще раз.')"
   install_docker() { curl -fsSL https://get.docker.com | sh; }
   step "$(t 'Installing Docker' 'Встановлення Docker')" install_docker
 fi
-step "$(t 'Starting Docker' 'Запуск Docker')" systemctl enable --now docker
+docker_start() { systemctl daemon-reload; systemctl enable --now docker; }
+step "$(t 'Starting Docker' 'Запуск Docker')" docker_start
 docker info >/dev/null 2>&1 || die "$(t 'Docker is installed but not responding. Check: systemctl status docker' 'Docker встановлено, але він не відповідає. Перевірте: systemctl status docker')"
 ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo)"
 
