@@ -23,6 +23,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
     too: a new hourly table of the conversations per port is read only under a port filter, so the pages without one
     stay as fast as they are. The AS of a port's traffic (Services) comes from the per-port totals as well.
   - A summary table whose definition changes in an upgrade is filled again alone; the others keep their history.
+- **A chosen host (`ip:` filter) over inside or all traffic reads the summary tables too.** The sessions in which
+  the host was the server are turned round to it from the conversations per hour, exactly as from the records — on
+  216 million records a day: the totals 15 s → 1 s, Top hosts 11 s → 0.8 s, the river 20 s → 1.2 s, Through device
+  paths 14 s → 0.6 s. Ports, protocols (L7), QoS and Geolocation of a chosen host still read its records.
+- **A chosen host over inside or all traffic: the comparison with the period before** (the arrows on the totals) was
+  always missing — the host's records were cut at the start of the period on screen.
 - **Through device: the interface load of a big firewall in under a second** (was ~20 s for a day): on a firewall
   with 250 interfaces (63,000 in/out pairs) the totals came back per PAIR of interfaces, 6.4 million rows a day for
   the web service to add up; each record is now split between its two interfaces in the database. The same figures.
