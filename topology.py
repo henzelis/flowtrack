@@ -47,21 +47,36 @@ class Owners:
 
     def __init__(self):
         self.nets = []           # (network, device, interface)
+        # (1.17.0) indexed: {(version, prefixlen): {network as int: (device, interface)}} — a scan of every network for
+        # every address took 200 s for an hour of a 300-interface firewall (and the web's other requests waited on it)
+        self.by_len, self.lens, self.memo = {}, {4: [], 6: []}, {}
 
     def add(self, net, dev, iface=None):
         if net is not None:
             self.nets.append((net, dev, iface))
+            k = (net.version, net.prefixlen)
+            if k not in self.by_len:
+                self.by_len[k] = {}
+                self.lens[net.version] = sorted({*self.lens[net.version], net.prefixlen}, reverse=True)
+            self.by_len[k].setdefault(int(net.network_address), (dev, iface))     # the first added wins, as before
+            self.memo.clear()
 
     def find(self, addr):
+        hit = self.memo.get(addr, False)
+        if hit is not False:
+            return hit
         try:
             a = ipaddress.ip_address(addr)
         except ValueError:
             return None
-        best = None
-        for net, dev, iface in self.nets:
-            if a.version == net.version and a in net and (best is None or net.prefixlen > best[0].prefixlen):
-                best = (net, dev, iface)
-        return best and (best[1], best[2])
+        bits, n, best = a.max_prefixlen, int(a), None
+        for plen in self.lens[a.version]:                    # longest prefix first
+            got = self.by_len[(a.version, plen)].get(n >> (bits - plen) << (bits - plen) if plen else 0)
+            if got:
+                best = got
+                break
+        self.memo[addr] = best
+        return best
 
 
 def build(cfg, near, ifaces, exporting, pairs=()):

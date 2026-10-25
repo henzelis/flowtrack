@@ -1,5 +1,7 @@
 """Path analysis (1.4): which exporting devices topology.build() makes neighbours, through which interfaces, and the
 state of each link. Run: python -m unittest discover -s tests"""
+import ipaddress
+import random
 import os
 import sys
 import unittest
@@ -214,3 +216,45 @@ class Path(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class OwnersIndex1170(unittest.TestCase):
+    """(1.17.0) the indexed longest-prefix lookup answers exactly as the scan of every network did (ties: the first
+    added), IPv4 and IPv6, bare addresses, /0, unknown and broken addresses"""
+
+    @staticmethod
+    def scan(nets, addr):
+        try:
+            a = ipaddress.ip_address(addr)
+        except ValueError:
+            return None
+        best = None
+        for net, dev, iface in nets:
+            if a.version == net.version and a in net and (best is None or net.prefixlen > best[0].prefixlen):
+                best = (net, dev, iface)
+        return best and (best[1], best[2])
+
+    def test_same_answers_as_the_scan(self):
+        rnd = random.Random(1170)
+        o = T.Owners()
+        for i in range(600):
+            if rnd.random() < 0.15:
+                a = ipaddress.ip_address(rnd.getrandbits(128)) if rnd.random() < 0.5 else ipaddress.ip_address(rnd.getrandbits(32))
+                net = ipaddress.ip_network(f'{a}/{rnd.randint(0, a.max_prefixlen)}', strict=False)
+            else:
+                net = T._net(f'10.{rnd.randint(0, 3)}.{rnd.randint(0, 255)}.{rnd.randint(0, 255)}/{rnd.choice([8, 16, 22, 24, 24, 30, 32])}')
+            o.add(net, f'd{i % 37}', rnd.choice([None, 1, 2, 3]))
+        o.add(None, 'nobody')
+        probes = [f'10.{rnd.randint(0, 4)}.{rnd.randint(0, 255)}.{rnd.randint(0, 255)}' for _ in range(3000)]
+        probes += [str(ipaddress.ip_address(rnd.getrandbits(128))) for _ in range(300)] + ['not-an-ip', '', '192.0.2.1']
+        for addr in probes + probes[:200]:          # the second time from the memo
+            self.assertEqual(o.find(addr), self.scan(o.nets, addr), addr)
+
+    def test_a_network_added_later_is_seen(self):
+        o = T.Owners()
+        o.add(T._net('10.0.0.0/8'), 'a')
+        self.assertEqual(o.find('10.1.2.3'), ('a', None))
+        o.add(T._net('10.1.2.0/24'), 'b', 7)
+        self.assertEqual(o.find('10.1.2.3'), ('b', 7))
+        o.add(T._net('10.1.2.0/24'), 'c', 9)          # same prefix: the first one keeps it
+        self.assertEqual(o.find('10.1.2.3'), ('b', 7))

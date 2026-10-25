@@ -23,6 +23,11 @@ in Settings → General, at the bottom of every page, in the collector log and b
     too: a new hourly table of the conversations per port is read only under a port filter, so the pages without one
     stay as fast as they are. The AS of a port's traffic (Services) comes from the per-port totals as well.
   - A summary table whose definition changes in an upgrade is filled again alone; the others keep their history.
+- **Every page waited ~8 s on a firewall with many interfaces**: Path analysis works out which devices are neighbours
+  every 10 minutes in the background, and it looked each address of the last hour up in every network one by one —
+  on a 300-interface firewall at 5,000 records/s that was 1½–3 minutes of CPU, during which the web service answered
+  every page slowly (Path analysis and Through device ~8 s even for an hour). The lookup is indexed now: the same
+  hour takes about a second, with exactly the same result.
 - **«database error» on long periods**: the web service gave up on a query after 30 s while ClickHouse was let run it
   for 2 minutes — a slow page failed with that error while the query went on loading the server. The service now
   waits as long as ClickHouse may run it, and a query whose page is gone stops.
