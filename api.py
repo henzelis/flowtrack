@@ -715,12 +715,15 @@ def api_top(q):
             FROM {src(p, cols)} GROUP BY k WITH TOTALS ORDER BY up + dn DESC LIMIT {{lim:UInt32}}""", p)
         if dim == 'ext_port' and rows:
             p['ports'] = [int(r['k']) for r in rows]
-            # (1.17.0) exact, from the hosts and the addresses of each port per hour (agg_port_host / agg_port_peer)
-            hp = {}
-            for c, out in (('int_ip', 'hosts'), ('ext_ip', 'peers')):
-                for x in ch(f"""SELECT ext_port AS k, uniqExact(cityHash64({c})) AS n FROM {src(p, ['ext_port', 'proto', c])}
-                        AND ext_port IN {{ports:Array(UInt64)}} GROUP BY k""", p, fmt='JSON'):
-                    hp.setdefault(str(x['k']), {})[out] = int(x['n'])
+            # (1.17.0) exact, from the hosts and the addresses of each port per hour (agg_port_host / agg_port_peer);
+            # when neither rollup serves (a chosen host, rollups off) both counts in one pass over the records, not two
+            hp, one = {}, [('int_ip', 'hosts'), ('ext_ip', 'peers')]
+            raw = not any(rollups.source(['ext_port', 'proto', c], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS,
+                                         table=p.get('_flows', 'flows'))[1] for c, _ in one)
+            for part in ([one] if raw else [[x] for x in one]):
+                for x in ch(f"""SELECT ext_port AS k, {', '.join(f'uniqExact(cityHash64({c})) AS {out}' for c, out in part)}
+                        FROM {src(p, ['ext_port', 'proto'] + [c for c, _ in part])} AND ext_port IN {{ports:Array(UInt64)}} GROUP BY k""", p, fmt='JSON'):
+                    hp.setdefault(str(x['k']), {}).update({out: int(x[out]) for _, out in part})
             for r in rows:
                 r.update(hosts=hp.get(r['k'], {}).get('hosts', 0), peers=hp.get(r['k'], {}).get('peers', 0))
         if dim == 'ext_ip':     # 200k+ outside addresses a day: what each one is, only for those shown
@@ -1398,18 +1401,18 @@ def api_ifload(q):
     qq.update(f=[json.dumps([{'k': 'device', 'v': dev}])], t=['all'])
     where, p, rng, step = scope(qq)
     p['_step'] = 300
-    rows = ch(f"""SELECT toUnixTimestamp(toStartOfInterval(ts, INTERVAL 300 SECOND)) AS t, in_if, out_if, sum(bytes) AS b
-        FROM {src(p, ['in_if', 'out_if'], bucketed=True)} GROUP BY t, in_if, out_if""", p, fmt='JSON')
+    # (1.17.0) each record goes to its two interfaces in ClickHouse: grouped by the PAIR, a firewall with 250 VLANs
+    # (63,000 pairs) sent 6.4 M rows a day for Python to add up — 20 s against 1 s of the query
+    sql, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=300, table=p.get('_flows', 'flows'))
+    rows = ch(f"""SELECT toUnixTimestamp(toStartOfInterval(ts, INTERVAL 300 SECOND)) AS t, x.1 AS i, x.2 AS d, sum(bytes) AS b
+        FROM {sql} ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE ({p['_filt']}) AND x.1 != 0 GROUP BY t, i, d""", p, fmt='JSON')
     t0 = p['_t0'] // 300 * 300
     n = max(1, (p['t1'] - t0 + 299) // 300)
     acc = {}
     for r in rows:
         k = (int(r['t']) - t0) // 300
-        if not 0 <= k < n:
-            continue
-        for idx, d in ((int(r['in_if']), 0), (int(r['out_if']), 1)):
-            if idx:
-                acc.setdefault(idx, [[0] * n, [0] * n])[d][k] += int(r['b'])
+        if 0 <= k < n:
+            acc.setdefault(int(r['i']), [[0] * n, [0] * n])[int(r['d'])][k] += int(r['b'])
     c = exporters_cfg(raw=True).get(dev, {})
     sset, sdata = snmp.load_settings(), snmp.load_data()
     sn = sdata.get(dev) if sset.get(dev, {}).get('enabled') else None

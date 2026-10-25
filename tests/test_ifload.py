@@ -45,12 +45,16 @@ class Load(unittest.TestCase):
     def test_average_p95_peak_and_shares(self):
         t1 = int(time.time()) // 300 * 300
         t0 = t1 - 7200
-        rows = [{'t': t0 + k * 300, 'in_if': 1, 'out_if': 2, 'b': 75_000_000_000 if k == 3 else 3_750_000_000} for k in range(24)]      # 2 Gbit/s once, 100 Mbit/s otherwise
+        # 2 Gbit/s once, 100 Mbit/s otherwise, in through interface 1 and out through 2 (one row per interface and way, 1.17.0)
+        rows = [{'t': t0 + k * 300, 'i': i, 'd': d, 'b': 75_000_000_000 if k == 3 else 3_750_000_000} for k in range(24) for i, d in ((1, 0), (2, 1))]
         c = {'if_caps': {'1': [1000, 1000]}, 'if_names': {'1': 'wan'}}
-        with mock.patch.object(api, 'ch', lambda *a, **k: rows), mock.patch.object(api, 'exporters_cfg', lambda raw=False: {DEV: c}), \
+        sent = []
+        with mock.patch.object(api, 'ch', lambda q, *a, **k: sent.append(q) or rows), mock.patch.object(api, 'exporters_cfg', lambda raw=False: {DEV: c}), \
              mock.patch.object(api, 'sflow_counters', lambda: {}), mock.patch.object(api.snmp, 'load_settings', lambda: {}), \
              mock.patch.object(api, 'view_days', lambda: 30):
             d = api.api_ifload({'device': [DEV], 'from': [str(t0)], 'to': [str(t1)]})
+        # (1.17.0) the split into interfaces is ClickHouse's, before the scope's WHERE (after it is a syntax error)
+        self.assertRegex(sent[-1], r'ARRAY JOIN \[\(in_if, 0\), \(out_if, 1\)\] AS x WHERE \(')
         wan = next(i for i in d['interfaces'] if i['index'] == 1)
         self.assertEqual((wan['name'], wan['cap_in']), ('wan', 1000))
         self.assertAlmostEqual(wan['in']['peak'], 2e9)
