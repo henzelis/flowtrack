@@ -1517,7 +1517,11 @@ function vPaths(){
     const unit = state.metric === 'bytes' ? fmtB : fmtN;
     const draw = d => {
       const rows = d.rows.filter(r => r.v > 0), total = rows.reduce((a, r) => a + r.v, 0);
-      if (!rows.length) { ['pKpi', 'pTable', 'pIfs'].forEach(id => fill(id, '')); return; }
+      // (1.17.0) without traffic the tables stayed «loading» for ever: they say there is none and stop waiting
+      if (!rows.length) {
+        fill('pKpi', '');
+        ['pTable', 'pIfs'].forEach(id => { const el = fill(id, `<div class="empty">${T('No traffic through this device for the selected filters')}</div>`); if (el) el.classList.remove('loading'); });
+        return; }
       [...new Set(rows.flatMap(r => [r.in_if, r.out_if]))].sort((a, b) => a - b).forEach(ifColor);
       const ins = new Map(), outs = new Map();
       rows.forEach(r => { ins.set(r.in_if, (ins.get(r.in_if) || 0) + r.v); outs.set(r.out_if, (outs.get(r.out_if) || 0) + r.v); });

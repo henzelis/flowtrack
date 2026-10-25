@@ -26,6 +26,8 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **Through device: the interface load of a big firewall in under a second** (was ~20 s for a day): on a firewall
   with 250 interfaces (63,000 in/out pairs) the totals came back per PAIR of interfaces, 6.4 million rows a day for
   the web service to add up; each record is now split between its two interfaces in the database. The same figures.
+- **Through device: a device without traffic in the period** left *Paths* and *Interfaces* waiting for ever; they
+  now say there is no traffic, as the map does.
 - **Every page waited ~8 s on a firewall with many interfaces**: Path analysis works out which devices are neighbours
   every 10 minutes in the background, and it looked each address of the last hour up in every network one by one —
   on a 300-interface firewall at 5,000 records/s that was 1½–3 minutes of CPU, during which the web service answered
