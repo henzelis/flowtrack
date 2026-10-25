@@ -51,6 +51,22 @@ class Source(unittest.TestCase):
         self.assertIn(f'ts >= toDateTime({t0}) AND ts < toDateTime({a})', sql)
         self.assertIn(f'ts >= toDateTime({b}) AND ts < toDateTime({t1})', sql)
 
+    def test_port_filter_tables_1170(self):
+        """(1.17.0) under a port filter the conversations come from agg_conv_port and the AS from agg_ports; without
+        one agg_conv stays the table (agg_conv_port is never chosen for it)"""
+        self.state(**{n: 0 for n in rollups.ROLLUPS})
+        pair = ['int_ip', 'ext_ip', 'service', 'country', 'city']
+        self.assertEqual(rollups.source(pair, NOW - DAY, None, [])[1], 'agg_conv')
+        self.assertEqual(rollups.source(pair, NOW - DAY, None, ['ext_port'])[1], 'agg_conv_port')
+        self.assertEqual(rollups.source(pair, NOW - DAY, None, ['ext_port', 'proto'])[1], 'agg_conv_port')
+        path = ['in_if', 'out_if', 'int_ip', 'ext_ip', 'nat_ip']
+        self.assertEqual(rollups.source(path, NOW - DAY, None, [])[1], 'agg_conv')
+        self.assertEqual(rollups.source(path, NOW - DAY, None, ['ext_port'])[1], 'agg_conv_port')
+        self.assertEqual(rollups.source(['asn', 'as_org', 'country'], NOW - DAY, None, ['ext_port'])[1], 'agg_ports')
+        self.assertEqual(rollups.source(['ext_port'], NOW - DAY, None, [])[1], 'agg_ports')
+        for cols, flt in ((['int_ip'], []), (['ext_ip'], []), (['service'], []), (['int_ip'], ['ext_port'])):
+            self.assertNotEqual(rollups.source(cols, NOW - DAY, None, flt)[1], 'agg_conv_port', (cols, flt))
+
     def test_whole_buckets_read_no_records_1170(self):
         """(1.17.0) a period of whole buckets has no edges: the records are not in the query at all"""
         self.state(agg_geo=0)
@@ -72,8 +88,9 @@ class Source(unittest.TestCase):
 
     def test_columns_filters_and_steps_the_rollup_lacks(self):
         self.state(**{n: 0 for n in rollups.ROLLUPS})
-        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, ['ext_port'])[1])    # a filter agg_conv lacks
-        self.assertIsNone(rollups.source(['service'], NOW - DAY, None, ['ext_port', 'int_ip'])[1])
+        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, ['l7'])[1])    # a filter no conversations table has
+        self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['ext_port', 'int_ip'])[1], 'agg_conv_port')   # (1.17.0)
+        self.assertIsNone(rollups.source(['l7'], NOW - DAY, None, ['ext_port', 'int_ip'])[1])
         self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['ext_port'])[1], 'agg_ports')
         self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, [], step=300)[1], 'agg_host')
         self.assertIsNone(rollups.source(['ext_ip'], NOW - DAY, None, [], step=300)[1])     # hourly table, 5-min step

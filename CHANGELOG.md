@@ -19,6 +19,9 @@ in Settings → General, at the bottom of every page, in the collector log and b
     ends now takes its last minutes from the 5-minute totals.
   - The bell's «now» events (a burst from one host, a first contact with a new country) read the summary tables and
     are worked out once a minute for every open tab together, not once per tab.
+  - **A port filter** (e.g. `port:443`) keeps *Top conversations*, the river and Path analysis on the summary tables
+    too: a new hourly table of the conversations per port is read only under a port filter, so the pages without one
+    stay as fast as they are. The AS of a port's traffic (Services) comes from the per-port totals as well.
   - A summary table whose definition changes in an upgrade is filled again alone; the others keep their history.
 - **«database error» on long periods**: the web service gave up on a query after 30 s while ClickHouse was let run it
   for 2 minutes — a slow page failed with that error while the query went on loading the server. The service now

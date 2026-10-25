@@ -29,9 +29,11 @@ ROLLUPS = {
     'agg_traffic': {'bucket': 300, 'keys': [('service', 'LowCardinality(String)', 'service'), ('l7', 'LowCardinality(String)', 'l7'),
                     ('proto', 'UInt8', 'proto'), ('country', 'LowCardinality(String)', 'country'), ('asn', 'UInt32', 'asn')],
                     'attrs': [('as_org', 'LowCardinality(String)')]},
-    'agg_ports': {'bucket': 300, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('l7', 'LowCardinality(String)', 'l7'),
-                  ('service', 'LowCardinality(String)', 'service')],
-                  'attrs': []},
+    # (1.17.0) + asn (its org and country as attributes): the AS of a port's traffic (Services, a port filter) from the
+    # totals — on prod +14 % rows
+    'agg_ports': {'bucket': 300, 'v': 2, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('l7', 'LowCardinality(String)', 'l7'),
+                  ('service', 'LowCardinality(String)', 'service'), ('asn', 'UInt32', 'asn')],
+                  'attrs': [('as_org', 'LowCardinality(String)'), ('country', 'LowCardinality(String)')]},
     'agg_geo': {'bucket': 300, 'keys': [('country', 'LowCardinality(String)', 'country'), ('city', 'LowCardinality(String)', 'city'),
                 ('has_ll', 'UInt8', 'lat != 0')],
                 'attrs': [('lat', 'Float32'), ('lon', 'Float32')]},
@@ -69,6 +71,14 @@ ROLLUPS = {
                       'attrs': []},
     'agg_port_peer': {'bucket': 3600, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('ext_ip', 'String', 'ext_ip')],
                       'attrs': []},
+    # (1.17.0) the conversations of a port: agg_conv + the port, read only under a port filter (Top conversations, the
+    # river, Path analysis), so agg_conv itself stays small for every other page (Yegor's choice; on prod 8 % of the
+    # records' rows against agg_conv's 5 %)
+    'agg_conv_port': {'bucket': 3600, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
+                      ('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'),
+                      ('service', 'LowCardinality(String)', 'service'), ('country', 'LowCardinality(String)', 'country'),
+                      ('city', 'LowCardinality(String)', 'city'), ('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'),
+                      ('nat_ip', 'String', 'nat_ip')], 'attrs': []},
     'agg_iface': {'bucket': 300, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('service', 'LowCardinality(String)', 'service')],
                   'attrs': []},
     'agg_iface_host': {'bucket': 3600, 'keys': [('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'), ('int_ip', 'String', 'int_ip'),
@@ -434,7 +444,7 @@ def ready_from(name=None):
 # (1.17.0) the QoS tables (built since 1.16.0 but never read) and the per-port tables go last: they hold columns no
 # other table has, and only queries that need those land on them
 PREFER = ['agg_geo', 'agg_traffic', 'agg_ports', 'agg_iface', 'agg_host', 'agg_host_svc', 'agg_iface_host', 'agg_ext', 'agg_iface_ext', 'agg_conv',
-          'agg_dscp', 'agg_dscp_svc', 'agg_port_host', 'agg_port_peer']
+          'agg_dscp', 'agg_dscp_svc', 'agg_port_host', 'agg_port_peer', 'agg_conv_port']
 RAW_EXPR = {'has_ll': 'lat != 0', 'peer_ip': "if(dir IN ('internal', 'internal_back'), ext_ip, '')",
             'out_ip': "if(dir IN ('up', 'down'), ext_ip, '')"}       # rollup key columns that are expressions over the records
 _TYPES = {c: t for r in ROLLUPS.values() for c, t, *_ in r['keys'] + r['attrs']}
