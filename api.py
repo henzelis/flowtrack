@@ -978,7 +978,7 @@ def _topo_build(cfg):
     key = (exporters_mtime(), snmp.data_mtime())
     with _topo_lock:
         p = {'span': TOPO_SPAN}
-        near, _, exporting, pairs = topology.query(ch, 'ts >= now() - toIntervalSecond({span:UInt32})', p, _known(cfg))
+        near, _, exporting, pairs = topology.query(ch, 'ts >= now() - toIntervalSecond({span:UInt32})', p, _known(cfg), volumes=False)
         _topo.update(key=key, t=time.time(), data=(near, exporting, pairs))
         return _topo['data']
 

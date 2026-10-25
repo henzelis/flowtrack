@@ -395,25 +395,31 @@ def set_volumes(topo, ifaces):
             lk[e + '_dir'] = {k: int(v.get(k, 0)) for k in ('up', 'down', 'internal')}
 
 
-def query(ch, where, p, known):
+def query(ch, where, p, known, volumes=True):
     """Rows for build() from the records of the period: near-end addresses per interface (inside addresses and the
     devices' own `known` addresses only — outside addresses are many and say nothing about neighbours) and the
-    traffic in and out of every interface."""
+    traffic in and out of every interface. volumes=False (1.17.0): no interface volumes (the background structure
+    drops them), only which devices export."""
     src = "if(dir IN ('down', 'internal_back'), ext_ip, int_ip)"     # who sent the packet
     dst = "if(dir IN ('down', 'internal_back'), int_ip, ext_ip)"     # who received it
     p = dict(p, known=sorted(known))
-    keep = ("(has({{known:Array(String)}}, {x}) OR isIPAddressInRange({x}, '10.0.0.0/8') OR isIPAddressInRange({x}, '172.16.0.0/12')"
-            " OR isIPAddressInRange({x}, '192.168.0.0/16') OR isIPAddressInRange({x}, '100.64.0.0/10') OR isIPAddressInRange({x}, 'fc00::/7'))")
-    near = ch(f"""SELECT exporter, iface, addr, sum(n) AS records FROM (
-            SELECT exporter, in_if AS iface, {src} AS addr, count() AS n FROM flows WHERE {where} AND {keep.format(x=src)} GROUP BY exporter, iface, addr
-            UNION ALL
-            SELECT exporter, out_if AS iface, {dst} AS addr, count() AS n FROM flows WHERE {where} AND {keep.format(x=dst)} GROUP BY exporter, iface, addr)
-        GROUP BY exporter, iface, addr ORDER BY records DESC LIMIT 50000""", p, fmt='JSON')
-    ifaces = iface_volumes(ch, where, p)
-    exporting = {r['exporter'] for r in ifaces}
+    # (1.17.0) one pass over the records (each gives its in-interface and sender, its out-interface and receiver) and
+    # the private ranges as numbers: isIPAddressInRange parsed the address string again for every range — an hour of
+    # a 5,000 records/s firewall took 9 s. Ranges: 10/8, 172.16/12, 192.168/16, 100.64/10 and fc00::/7.
+    n = 'IPv4StringToNumOrDefault(e.2)'
+    keep = (f"(has({{known:Array(String)}}, e.2) OR bitAnd({n}, 4278190080) = 167772160 OR bitAnd({n}, 4293918720) = 2886729728"
+            f" OR bitAnd({n}, 4294901760) = 3232235520 OR bitAnd({n}, 4290772992) = 1681915904"
+            " OR match(lower(e.2), '^f[cd][0-9a-f]{2}:'))")
+    near = ch(f"""SELECT exporter, e.1 AS iface, e.2 AS addr, count() AS records FROM flows
+            ARRAY JOIN [(in_if, {src}), (out_if, {dst})] AS e
+        WHERE {where} AND {keep} GROUP BY exporter, iface, addr ORDER BY records DESC LIMIT 50000""", p, fmt='JSON')
+    ifaces = iface_volumes(ch, where, p) if volumes else []
+    # the devices that export and how many records there are, in one look
+    per = {r['exporter']: int(r['n']) for r in ch(f"SELECT exporter, count() AS n FROM flows WHERE {where} GROUP BY exporter", p, fmt='JSON')}
+    exporting = {r['exporter'] for r in ifaces} if volumes else set(per)
+    total = sum(per.values()) if exporting else 0
     # conversations recorded by more than one device (a busy network: a sample of them, chosen by the conversation,
     # so every device keeps all records of a conversation in the sample)
-    total = sum(1 for _ in ifaces) and int(ch(f"SELECT count() AS n FROM flows WHERE {where}", p, fmt='JSON')[0]['n'])
     # (1.8.1) half a million records are plenty to see which devices share conversations; two million took over 1 GiB
     # (the conversation key with every device's interfaces) on a network of 2,200 records/s
     p['every'] = max(1, total // 500_000)

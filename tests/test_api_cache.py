@@ -84,7 +84,7 @@ class TopoStructure(unittest.TestCase):
     new ones are worked out in the background."""
     def setUp(self):
         self.calls, self.orig = [], api.topology.query
-        def slow(ch, where, p, known):
+        def slow(ch, where, p, known, volumes=True):
             self.calls.append(time.time()); time.sleep(.5)
             return ['near%d' % len(self.calls)], [], {'1.2.3.4'}, []
         api.topology.query = slow
