@@ -73,9 +73,11 @@ ROLLUPS = {
                       'attrs': []},
     # (1.17.0) the conversations of a port: agg_conv + the port, read only under a port filter (Top conversations, the
     # river, Path analysis), so agg_conv itself stays small for every other page (Yegor's choice; on prod 8 % of the
-    # records' rows against agg_conv's 5 %)
-    'agg_conv_port': {'bucket': 3600, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
-                      ('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'),
+    # records' rows against agg_conv's 5 %). Its L7 name too (the collector names it from proto + port: no more rows),
+    # for a chosen host's protocols and services, the sessions in which it was the server turned to it (source(turn=));
+    # v2 only rebuilds it where a 1.17.0 build in progress made it without the name
+    'agg_conv_port': {'bucket': 3600, 'v': 2, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
+                      ('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('l7', 'LowCardinality(String)', 'l7'),
                       ('service', 'LowCardinality(String)', 'service'), ('country', 'LowCardinality(String)', 'country'),
                       ('city', 'LowCardinality(String)', 'city'), ('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'),
                       ('nat_ip', 'String', 'nat_ip')], 'attrs': []},

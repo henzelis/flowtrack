@@ -88,9 +88,11 @@ class Source(unittest.TestCase):
 
     def test_columns_filters_and_steps_the_rollup_lacks(self):
         self.state(**{n: 0 for n in rollups.ROLLUPS})
-        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, ['l7'])[1])    # a filter no conversations table has
+        self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, ['dscp'])[1])  # a filter no conversations table has
+        self.assertEqual(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, ['l7'])[1], 'agg_conv_port')     # (1.17.0) L7 there
         self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['ext_port', 'int_ip'])[1], 'agg_conv_port')   # (1.17.0)
-        self.assertIsNone(rollups.source(['l7'], NOW - DAY, None, ['ext_port', 'int_ip'])[1])
+        self.assertEqual(rollups.source(['l7'], NOW - DAY, None, ['ext_port', 'int_ip'])[1], 'agg_conv_port')
+        self.assertIsNone(rollups.source(['l7'], NOW - DAY, None, ['ext_port', 'int_ip', 'dscp'])[1])
         self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['ext_port'])[1], 'agg_ports')
         self.assertEqual(rollups.source(['int_ip'], NOW - DAY, None, [], step=300)[1], 'agg_host')
         self.assertIsNone(rollups.source(['ext_ip'], NOW - DAY, None, [], step=300)[1])     # hourly table, 5-min step
@@ -129,6 +131,10 @@ class Source(unittest.TestCase):
         self.assertEqual(name, 'agg_conv+agg_conv')
         self.assertIn('ext_ip AS int_ip, int_ip AS ext_ip', sql)
         # a port of a turned session is its int_port, which no rollup holds; a rollup not ready yet: the records
+        # its protocols and services (with their L7 name) from agg_conv_port, which holds the L7 name too
+        self.assertEqual(rollups.source(['l7'], NOW - DAY, NOW, {'int_ip'}, table='(host view)', turn=turn)[1], 'agg_host_svc+agg_conv_port')
+        self.assertEqual(rollups.source(['service', 'l7', 'proto'], NOW - DAY, NOW, {'int_ip'}, table='(host view)', turn=turn)[1],
+                         'agg_host_svc+agg_conv_port')
         sql, name = rollups.source(['ext_port'], NOW - DAY, NOW, {'int_ip'}, table='(host view)', turn=turn)
         self.assertIsNone(name)
         self.assertIn('FROM (host view)', sql)
