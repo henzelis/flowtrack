@@ -8,6 +8,18 @@ in Settings → General, at the bottom of every page, in the collector log and b
 - **A busy network's Flows page over days**: *Top conversations* and the river of a whole period read the new
   conversations per hour (inside host × outside address) instead of every record — on 2,200 records/s the heaviest
   query of a day went from 25 s to under 1 s. The table fills its history by itself after the upgrade, newest day first.
+- **Every page over a day or more reads the summary tables, not the records** (the rest of the same work):
+  - **QoS** reads its own totals per DSCP class — they were built since 1.16.0 but never used.
+  - **Ports**: the inside hosts and the outside addresses of each port are counted exactly from new hourly tables,
+    instead of from the records of the period.
+  - A filter by service, country, city or AS, a filter by an inside host, the inside traffic (hosts, networks, the
+    chart) and the totals at the top of a page stay on the summary tables too; before, each of them fell back to the
+    records.
+  - A period of a day or more starts and ends on a whole hour, so every summary table can answer it; a period that
+    ends now takes its last minutes from the 5-minute totals.
+  - The bell's «now» events (a burst from one host, a first contact with a new country) read the summary tables and
+    are worked out once a minute for every open tab together, not once per tab.
+  - A summary table whose definition changes in an upgrade is filled again alone; the others keep their history.
 - **«database error» on long periods**: the web service gave up on a query after 30 s while ClickHouse was let run it
   for 2 minutes — a slow page failed with that error while the query went on loading the server. The service now
   waits as long as ClickHouse may run it, and a query whose page is gone stops.
