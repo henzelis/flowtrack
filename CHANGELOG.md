@@ -7,9 +7,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## 1.17.0 — 2026-10-25
 
-**Long periods from the summary tables.** A day or more of a busy network no longer reads every record: on 216 million
-records a day the pages answer 2–3× faster overall, the slowest ones 5–20×, with the same numbers (each summary table
-checked row by row against the records).
+**Long periods from the summary tables.** A day or more of a busy network no longer reads every record. With 216
+million records in the day on screen (12 hours at 5,000 records/s) all the pages' requests together answer 4× faster,
+the slow pages 4–19× (Overview 35 s → 3 s, Flows 31 s → 3 s), with the same numbers: each summary table was checked
+row by row against the records.
 
 - **FlowTrack by TELESPHERA**: the new logo — the TELESPHERA globe, turning slowly (still when the system asks for
   less motion), with «by TELESPHERA» in the sidebar and on the sign-in page; the browser tab shows the globe too.
@@ -33,7 +34,7 @@ checked row by row against the records).
   - A summary table whose definition changes in an upgrade is filled again alone; the others keep their history.
 - **A chosen host (`ip:` filter) over inside or all traffic reads the summary tables too.** The sessions in which
   the host was the server are turned round to it from the conversations per hour, exactly as from the records — on
-  216 million records a day: **the host page 34 s → 6–8 s**, the totals 15 s → 1 s, Top hosts 11 s → 0.8 s, its
+  216 million records in a day (12 hours at 5,000 records/s): **the host page 34 s → 6–8 s**, the totals 15 s → 1 s, Top hosts 11 s → 0.8 s, its
   services 6.6 s → 0.5 s and protocols 4.2 s → 0.6 s, the river 20 s → 1.2 s, Through device paths 14 s → 0.6 s.
   Ports, QoS and Geolocation of a chosen host still read its records.
 - **A chosen host over inside or all traffic: the comparison with the period before** (the arrows on the totals) was

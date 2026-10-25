@@ -2,6 +2,29 @@
 
 [← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
+**Long periods (1.17.0).** A synthetic busy network sending 5,000 records/s (the most Community stores) for 12 hours —
+216 million records, 9.7 GiB on disk — and pages asked for the day that holds them, in a VM with 6 vCPUs of an Intel Core i5-1145G7 and 12 GB of RAM (ClickHouse ~6 GiB),
+measured on 2026-10-25 by FlowTrack's regression lab: the same data, first on 1.16.2, then upgraded to 1.17.0 and its
+new summary tables filled; 656 requests (every page × period × filter), nothing cached. A page sends its requests at
+once, so a page takes as long as its slowest one:
+
+| The day, no filter | 1.16.2 | 1.17.0 |
+|---|---|---|
+| Overview | 35.0 s | 3.0 s |
+| Flows | 30.9 s | 2.9 s |
+| Host page | 32.5 s | 8.0 s |
+| Through device | 21.4 s | 5.3 s |
+| Top hosts | 13.2 s | 1.3 s |
+| Path analysis | 11.5 s | 2.0 s |
+| QoS | 10.9 s | 0.6 s |
+| Ports | 6.2 s | 2.2 s |
+| Services | 4.8 s | 0.8 s |
+
+All 656 requests together: 2,897 s → 682 s; rows read by ClickHouse: 158 billion → 42 billion. Before the release
+every summary table was compared with the records, row by row (the same keys and sums): identical. What still reads
+the records for a day: a chosen host's ports, QoS and geolocation, the device map under a port filter (the slowest
+request left: 27 s), and live windows of a few minutes.
+
 Measured on 2026-10-08 with FlowTrack 1.3.3 in a VM with 4 vCPUs of an Intel Core i5-1145G7 (a laptop-class CPU)
 and 4 GB of RAM; ClickHouse runs in the same VM with the 2 GiB the installer gives it on such a machine.
 

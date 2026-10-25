@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner-en.webp" alt="FlowTrack — see every flow, trust every number" width="100%">
+  <img src="docs/media/banner-en.webp" alt="FlowTrack by TELESPHERA — see every flow, trust every number" width="100%">
 </p>
 
 <p align="center">
@@ -214,6 +214,17 @@ same server or on a brand-new one after a disk failure.
 
 <p align="center"><img src="docs/media/en/backups.webp" alt="Settings → Backups: a week of verified, encrypted backups kept here and on S3" width="100%"></p>
 
+### Fast on a busy network, over days
+
+A day of a busy network is hundreds of millions of flow records. FlowTrack keeps summary tables — per 5 minutes and
+per hour, filled as the records arrive — and every page over a day or more reads those instead of the records. The
+numbers stay the same: before each release every summary table is checked row by row against the records.
+
+<p align="center"><img src="docs/media/en/perf-day.svg" alt="A day on screen with 216 million records in it: Overview 35 s → 3 s, Flows 31 s → 3 s, the host page 32 s → 8 s, Through device 21 s → 5 s, QoS 11 s → 0.6 s — FlowTrack 1.16.2 against 1.17.0" width="100%"></p>
+
+Measured in FlowTrack's own test lab: a synthetic network sending 5,000 records/s (the most Community stores) for 12
+hours — 216 million records — on 6 virtual cores of a laptop-class CPU, nothing cached. All the figures: [docs/performance.md](docs/performance.md).
+
 ## Works with your equipment
 
 Ready configuration — with a **Copy** button — for each vendor and export protocol, right in *Settings → Devices*:
@@ -237,6 +248,7 @@ users and data stay.
 - **Runs on** Debian / Ubuntu and Fedora / RHEL / Rocky / Alma, x86_64 or arm64.
 - **Disk**: about 25 MB per million flow records; a small office needs a few hundred MB for 30 days.
 - **Speed**: one decoding worker handles about 40,000 records/s, four about 100,000 — on a 4-core laptop-class CPU.
+  A day on screen with 216 million records in it opens in 1–8 s ([performance](docs/performance.md)).
 
 Unattended install, upgrades, all server commands: [docs/install.md](docs/install.md).
 

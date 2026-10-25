@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 468" width="820" height="468" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="Доба на екрані, у ній 216 мільйонів записів">
+<style>.ink{fill:#1f2328}.mute{fill:#59636e}.old{fill:#eb6834}.new{fill:#2a78d6}.grid{stroke:#d1d9e0}@media (prefers-color-scheme: dark){.ink{fill:#e6edf3}.mute{fill:#9198a1}.old{fill:#d95926}.new{fill:#3987e5}.grid{stroke:#3d444d}}</style>
+<text class="ink" x="0" y="22" font-size="17" font-weight="600">Доба на екрані, у ній 216 мільйонів записів</text>
+<text class="mute" x="0" y="44" font-size="13">5 000 записів/с протягом 12 годин · секунд, доки сторінка отримає всі дані · VM на 6 vCPU · без кешу</text>
+<path class="old" d="M0,60 h10.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-10.0 z"/><text class="ink" x="20" y="71" font-size="13">FlowTrack 1.16.2</text>
+<path class="new" d="M130,60 h10.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-10.0 z"/><text class="ink" x="150" y="71" font-size="13">FlowTrack 1.17.0</text>
+<line class="grid" x1="150" y1="84" x2="150" y2="460" stroke-width="1"/>
+<text class="ink" x="140" y="108" font-size="13" text-anchor="end">Огляд</text>
+<path class="old" d="M150,92 h491.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-491.0 z"/>
+<text class="ink" x="651.0" y="102" font-size="11.5">35,0 с</text>
+<path class="new" d="M150,106 h39.2 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-39.2 z"/>
+<text class="ink" x="199.2" y="116" font-size="11.5">3,0 с</text>
+<text class="mute" x="820" y="108" font-size="12.5" text-anchor="end">у 11× швидше</text>
+<text class="ink" x="140" y="148" font-size="13" text-anchor="end">Сторінка хоста</text>
+<path class="old" d="M150,132 h455.6 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-455.6 z"/>
+<text class="ink" x="615.6" y="142" font-size="11.5">32,5 с</text>
+<path class="new" d="M150,146 h109.2 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-109.2 z"/>
+<text class="ink" x="269.2" y="156" font-size="11.5">8,0 с</text>
+<text class="mute" x="820" y="148" font-size="12.5" text-anchor="end">у 4,1× швидше</text>
+<text class="ink" x="140" y="188" font-size="13" text-anchor="end">Потоки</text>
+<path class="old" d="M150,172 h433.4 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-433.4 z"/>
+<text class="ink" x="593.4" y="182" font-size="11.5">30,9 с</text>
+<path class="new" d="M150,186 h36.6 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-36.6 z"/>
+<text class="ink" x="196.6" y="196" font-size="11.5">2,9 с</text>
+<text class="mute" x="820" y="188" font-size="12.5" text-anchor="end">у 11× швидше</text>
+<text class="ink" x="140" y="228" font-size="13" text-anchor="end">Через пристрій</text>
+<path class="old" d="M150,212 h298.4 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-298.4 z"/>
+<text class="ink" x="458.4" y="222" font-size="11.5">21,4 с</text>
+<path class="new" d="M150,226 h70.4 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-70.4 z"/>
+<text class="ink" x="230.4" y="236" font-size="11.5">5,3 с</text>
+<text class="mute" x="820" y="228" font-size="12.5" text-anchor="end">у 4,1× швидше</text>
+<text class="ink" x="140" y="268" font-size="13" text-anchor="end">Топ хостів</text>
+<path class="old" d="M150,252 h183.5 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-183.5 z"/>
+<text class="ink" x="343.5" y="262" font-size="11.5">13,2 с</text>
+<path class="new" d="M150,266 h14.7 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-14.7 z"/>
+<text class="ink" x="174.7" y="276" font-size="11.5">1,3 с</text>
+<text class="mute" x="820" y="268" font-size="12.5" text-anchor="end">у 10× швидше</text>
+<text class="ink" x="140" y="308" font-size="13" text-anchor="end">Аналіз шляху</text>
+<path class="old" d="M150,292 h158.5 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-158.5 z"/>
+<text class="ink" x="318.5" y="302" font-size="11.5">11,5 с</text>
+<path class="new" d="M150,306 h24.6 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-24.6 z"/>
+<text class="ink" x="184.6" y="316" font-size="11.5">2,0 с</text>
+<text class="mute" x="820" y="308" font-size="12.5" text-anchor="end">у 5,7× швидше</text>
+<text class="ink" x="140" y="348" font-size="13" text-anchor="end">QoS</text>
+<path class="old" d="M150,332 h150.5 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-150.5 z"/>
+<text class="ink" x="310.5" y="342" font-size="11.5">10,9 с</text>
+<path class="new" d="M150,346 h4.2 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-4.2 z"/>
+<text class="ink" x="164.2" y="356" font-size="11.5">0,6 с</text>
+<text class="mute" x="820" y="348" font-size="12.5" text-anchor="end">у 19× швидше</text>
+<text class="ink" x="140" y="388" font-size="13" text-anchor="end">Порти</text>
+<path class="old" d="M150,372 h84.4 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-84.4 z"/>
+<text class="ink" x="244.4" y="382" font-size="11.5">6,2 с</text>
+<path class="new" d="M150,386 h27.8 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-27.8 z"/>
+<text class="ink" x="187.8" y="396" font-size="11.5">2,2 с</text>
+<text class="mute" x="820" y="388" font-size="12.5" text-anchor="end">у 2,8× швидше</text>
+<text class="ink" x="140" y="428" font-size="13" text-anchor="end">Сервіси</text>
+<path class="old" d="M150,412 h63.2 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-63.2 z"/>
+<text class="ink" x="223.2" y="422" font-size="11.5">4,8 с</text>
+<path class="new" d="M150,426 h6.8 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-6.8 z"/>
+<text class="ink" x="166.8" y="436" font-size="11.5">0,8 с</text>
+<text class="mute" x="820" y="428" font-size="12.5" text-anchor="end">у 6,2× швидше</text>
+</svg>
