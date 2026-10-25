@@ -81,6 +81,10 @@ ROLLUPS = {
 CUT = max(r['bucket'] for r in ROLLUPS.values())    # the longest bucket (a day is a multiple of every bucket)
 FILL_WORKERS = min(3, max(1, (os.cpu_count() or 1) // 3))     # (1.17.0) tables filled at a time (see _fill)
 LATE = 2 * 3600     # records may reach the collector this late (a multiple of every bucket): see _late()
+# (1.17.0) test VMs only (a systemd drop-in, the installer rewrites /etc/flowtrack/env): the history is filled at
+# once instead of after each cutover + settle — right only where no records arrive meanwhile (a load VM with
+# generated history); default off
+NOWAIT = os.environ.get('FT_ROLLUP_NOWAIT') == '1'
 # columns a query may filter or group by in each rollup (besides ts, exporter, dir); attributes may only be shown
 COLUMNS = {name: {'exporter', 'dir'} | {k[0] for k in r['keys']} for name, r in ROLLUPS.items()}
 ATTRS = {name: {a[0] for a in r['attrs']} for name, r in ROLLUPS.items()}
@@ -192,7 +196,7 @@ def backfill(log=print, settle=600, stop=None, late=LATE):
     todo = {name: st[f'ready_from:{name}'] for name in ROLLUPS if st.get(f'ready_from:{name}', 0) > 0}
     mutations_checked = False
     for cut in sorted({st[f'cutover:{name}'] for name in todo}):
-        if not _wait(cut + settle, stop):
+        if not NOWAIT and not _wait(cut + settle, stop):
             return
         # the records' days may still be changing (an upgrade from before 1.3.1 raises them with an asynchronous
         # mutation): the rollups take the days over, so they wait for it (or they could expire before their records)
