@@ -11,6 +11,8 @@ in Settings → General, at the bottom of every page, in the collector log and b
 records a day the pages answer 2–3× faster overall, the slowest ones 5–20×, with the same numbers (each summary table
 checked row by row against the records).
 
+- **FlowTrack by TELESPHERA**: the new logo — the TELESPHERA globe, turning slowly (still when the system asks for
+  less motion), with «by TELESPHERA» in the sidebar and on the sign-in page; the browser tab shows the globe too.
 - **A busy network's Flows page over days**: *Top conversations* and the river of a whole period read the new
   conversations per hour (inside host × outside address) instead of every record — on 2,200 records/s the heaviest
   query of a day went from 25 s to under 1 s. The table fills its history by itself after the upgrade, newest day first.

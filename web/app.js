@@ -4296,7 +4296,8 @@ function showLogin(msg){
   document.querySelector('.app').hidden = true;
   const box = document.createElement('div'); box.className = 'login-wrap'; box.id = 'loginWrap';
   box.innerHTML = `<form class="glass login" id="loginForm">
-    <div class="brand" style="padding:0"><svg width="40" height="34" viewBox="0 0 40 34" aria-hidden="true"><path d="M3 10c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#27D3F5" stroke-width="4.5" stroke-linecap="round"/><path d="M3 22c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="#2F7BFF" stroke-width="4.5" stroke-linecap="round"/></svg><div><b>FlowTrack</b><small>${T('Sign in')}</small></div></div>
+    <div class="brand" style="padding:0"><canvas class="logo" data-logo aria-hidden="true"></canvas><div><b>FlowTrack</b><small><span class="by">by TELESPHERA</span></small></div></div>
+    <h2 class="login-h">${T('Sign in')}</h2>
     ${msg ? `<p class="note" style="margin:0">${esc(msg)}</p>` : ''}
     <label>${T('Username')}<input id="lUser" required autocomplete="username" autofocus></label>
     <label>${T('Password')}<input id="lPass" type="password" required autocomplete="current-password"></label>

@@ -759,3 +759,7 @@ section.evfill > #evChart{flex:1 1 auto;min-height:320px;height:auto!important}
 table.evr td.evkey{min-width:190px}
 table.evr td.evkey input[type=password]{width:100%;min-width:160px}
 table.evr td.evkey .chk{margin-top:4px;font-size:12px}
+/* (1.17.0) FlowTrack by TELESPHERA: the globe (brand.js) and the TELESPHERA wordmark in its own face (Michroma) */
+.brand .logo{width:38px;height:38px;flex:none;filter:drop-shadow(0 0 10px rgba(43,234,255,.24))}
+.brand small .by{font-family:'Michroma',sans-serif;font-size:9px;letter-spacing:.2em;color:var(--ink2);white-space:nowrap}
+.login .login-h{margin:0;font-size:15px;font-weight:600;color:var(--ink2)}

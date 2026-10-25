@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>FlowTrack</title>
+<title>FlowTrack by TELESPHERA</title>
 <link rel="stylesheet" href="fonts/fonts.css">
 <link rel="stylesheet" href="app.css">
 <script src="vendor/echarts.min.js"></script>
@@ -14,10 +14,8 @@
 <div class="app">
   <aside class="side">
     <div class="brand">
-      <svg width="40" height="34" viewBox="0 0 40 34" aria-hidden="true"><defs><linearGradient id="lg1" x1="0" x2="1"><stop offset="0" stop-color="#27D3F5"/><stop offset="1" stop-color="#2F7BFF"/></linearGradient></defs>
-        <path d="M3 10c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="url(#lg1)" stroke-width="4.5" stroke-linecap="round"/>
-        <path d="M3 22c6-6 11-6 17 0s11 6 17 0" fill="none" stroke="url(#lg1)" stroke-width="4.5" stroke-linecap="round" opacity=".75"/></svg>
-      <div><b>FlowTrack</b><small>NetFlow · IPFIX <button class="edbadge" id="edBadge" hidden></button></small></div>
+      <canvas class="logo" data-logo aria-hidden="true"></canvas>
+      <div><b>FlowTrack</b><small><span class="by">by TELESPHERA</span> <button class="edbadge" id="edBadge" hidden></button></small></div>
     </div>
     <nav class="nav" id="nav" aria-label="Sections" data-t-attr="aria-label"></nav>
     <div class="health">
@@ -44,6 +42,7 @@
   </main>
 </div>
 <div id="drawerRoot"></div>
+<script src="brand.js"></script>
 <script src="boot.js"></script>
 </body>
 </html>
