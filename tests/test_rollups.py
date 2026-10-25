@@ -110,6 +110,31 @@ class Source(unittest.TestCase):
         self.assertEqual(rollups.source(['service'], NOW - DAY, None, ['int_ip', 'ext_ip'])[1], 'agg_conv')
         self.assertIsNone(rollups.source(['int_ip', 'ext_ip'], NOW - DAY, None, [], table='(SELECT * FROM flows)')[1])
 
+    def test_chosen_host_turned_from_the_conversations_1170(self):
+        """(1.17.0) a chosen host over inside traffic (api.host_view): its sessions as the client from the table that
+        answers without one, those as the server from agg_conv turned round to it; the records when either has none"""
+        self.state(**{n: 0 for n in rollups.ROLLUPS})
+        turn = "(dir IN ('internal', 'internal_back') AND ext_ip = 'h' AND NOT int_ip = 'h')"
+        sql, name = rollups.source(['service'], NOW - DAY, NOW, {'dir', 'int_ip'}, table='(host view)', turn=turn)
+        self.assertEqual(name, 'agg_host_svc+agg_conv')
+        a, b = sql.split(' UNION ALL SELECT ts, exporter, CAST(', 1)
+        self.assertIn('toUInt8(0) AS turned', a)
+        self.assertIn('ext_ip AS int_ip', b)                                    # the host, the server, is int_ip now
+        self.assertIn("if(dir = 'internal', 'internal_back', 'internal')", b)  # its sent / received swapped
+        self.assertIn('toUInt8(1) AS turned', b)
+        self.assertIn(f'WHERE {turn}', b)                                      # over the record's own ends
+        self.assertNotIn('host view', sql)
+        # the both ends of each row, swapped where turned (Top hosts inside: who called whom)
+        sql, name = rollups.source(['int_ip', 'ext_ip', 'turned'], NOW - DAY, NOW, {'int_ip'}, table='(host view)', turn=turn)
+        self.assertEqual(name, 'agg_conv+agg_conv')
+        self.assertIn('ext_ip AS int_ip, int_ip AS ext_ip', sql)
+        # a port of a turned session is its int_port, which no rollup holds; a rollup not ready yet: the records
+        sql, name = rollups.source(['ext_port'], NOW - DAY, NOW, {'int_ip'}, table='(host view)', turn=turn)
+        self.assertIsNone(name)
+        self.assertIn('FROM (host view)', sql)
+        self.state(**{n: 0 for n in rollups.ROLLUPS if n != 'agg_conv'})
+        self.assertIsNone(rollups.source(['service'], NOW - DAY, NOW, {'int_ip'}, table='(host view)', turn=turn)[1])
+
     def test_qos_ports_and_keys_1170(self):
         """(1.17.0) the QoS tables are read (they were built but never chosen); hosts / addresses of a port come from
         the per-port tables; what an address is (service, country) filters the per-address tables exactly"""

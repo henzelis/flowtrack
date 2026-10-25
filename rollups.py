@@ -450,12 +450,22 @@ RAW_EXPR = {'has_ll': 'lat != 0', 'peer_ip': "if(dir IN ('internal', 'internal_b
 _TYPES = {c: t for r in ROLLUPS.values() for c, t, *_ in r['keys'] + r['attrs']}
 
 
-def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
+# (1.17.0) a chosen host's sessions as the server, turned round to it (api.host_view): each column of the turned row
+# from the column of the record (None: '' — the address beyond the internet edge, never in an inside session)
+TURN = {'int_ip': 'ext_ip', 'ext_ip': 'int_ip', 'int_port': 'ext_port', 'ext_port': 'int_port', 'peer_ip': 'int_ip', 'out_ip': None}
+
+
+def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows', turn=None):
     """FROM-expression for a query over [t0, t1) (t1 None = up to now) that groups by or shows `cols` (a rollup's
     attributes only through any()) and filters on `flt_cols`; `step`: a time series' step (a rollup only when its
     bucket divides it). -> (sql, rollup name or None). Rows have ts, exporter, dir, `cols`, the filter columns,
     bytes, packets and flows (records), so a query sums `flows` instead of count(). The period is inside; the
-    filters stay with the caller. `table`: what the records are read from (api.host_view for a chosen host)."""
+    filters stay with the caller. `table`: what the records are read from (api.host_view for a chosen host);
+    `turn`: then its condition for a record to be turned, so the rollups can answer too (see _turned)."""
+    if turn and use and table != 'flows':
+        got = _turned(cols, t0, t1, flt_cols, step, turn)
+        if got:
+            return got
     cols = list(dict.fromkeys(list(cols) + [c for c in flt_cols]))
     rcols = ', '.join(['ts', 'exporter', 'dir'] + [f'{RAW_EXPR[c]} AS {c}' if c in RAW_EXPR else c for c in cols if c not in ('exporter', 'dir')])
     raw = lambda cond: f"SELECT {rcols}, bytes, packets, toUInt64(1) AS flows FROM {table} WHERE {cond}"   # noqa: E731
@@ -486,3 +496,24 @@ def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
     if not t1 or b < int(t1):
         parts.append(raw(f'ts >= toDateTime({b}){end}'))
     return '(' + ' UNION ALL '.join(parts) + ')', name
+
+
+def _turned(cols, t0, t1, flt_cols, step, turn):
+    """(1.17.0) api.host_view from the rollups: the sessions of the chosen hosts as they are (the caller's filter keeps
+    those with a chosen int_ip) + the inside sessions in which one was the server, from a rollup that holds both ends
+    (agg_conv), turned round as host_view does — its condition `turn` is over the record's own keys, so the result is
+    exact. Rows have a `turned` column. None when either part has no rollup (then the records, as before)."""
+    out = [c for c in dict.fromkeys(list(cols) + list(flt_cols)) if c not in ('exporter', 'dir', 'turned')]
+    a_sql, a_name = source(out, t0, t1, flt_cols, True, step)
+    if not a_name:
+        return None
+    need = lambda cs: [TURN[c] if c in TURN else c for c in cs if TURN.get(c, c)]      # noqa: E731
+    b_sql, b_name = source(need(out), t0, t1, need(flt_cols) + ['int_ip', 'ext_ip'], True, step)
+    if not b_name:
+        return None
+    flipped = f"CAST(if(dir = 'internal', 'internal_back', 'internal') AS {DIR})"
+    turned = [(TURN[c] or "''") if c in TURN else c for c in out]
+    a = ', '.join(['ts', 'exporter', 'dir'] + out)
+    b = ', '.join(['ts', 'exporter', f'{flipped} AS dir'] + [f'{e} AS {c}' for e, c in zip(turned, out)])
+    return (f'(SELECT {a}, bytes, packets, flows, toUInt8(0) AS turned FROM {a_sql} UNION ALL '
+            f'SELECT {b}, bytes, packets, flows, toUInt8(1) AS turned FROM (SELECT * FROM {b_sql} WHERE {turn}))'), f'{a_name}+{b_name}'

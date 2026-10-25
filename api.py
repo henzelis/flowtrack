@@ -297,8 +297,10 @@ def scope(q):
     if (host or hnets) and traffic != 'internet':
         params['hv'] = host
         params.update({f'hn{j}': n for j, n in enumerate(hnets)})
-        params['_flows'] = host_view(' AND '.join(where[:ntime]), len(hnets))
-        fcols.add('ext_ip')          # no rollup holds both ends: the records are read
+        # (1.17.0) not the window's own start: summary compares with the window before it, which then had no records
+        # (ClickHouse moves each query's own period into the view: the same parts are read)
+        params['_flows'] = host_view(' AND '.join(['ts >= toDateTime({floor:UInt32})'] + where[2:ntime]), len(hnets))
+        params['_turn'] = turn_cond(len(hnets))     # (1.17.0) the rollups answer too: rollups.source(turn=…)
     params.update(_filt=' AND '.join(where[ntime:]) or '1', _fcols=fcols, _step=step,
                   _t0=max(t0, params['floor']), _t1=t1 if custom else None)
     return ' AND '.join(where), params, rng, step
@@ -326,15 +328,24 @@ def net_value(v):
         raise BadRequest(tr('not a network: {value}', value=str(v)[:50])) from None
 
 
+def host_of(nets=0):
+    """SQL over a column: one of the chosen hosts {hv}, or (1.8.6) an address in one of the networks {hn0} …"""
+    return lambda x: '(' + ' OR '.join([f'{x} IN {{hv:Array(String)}}'] + [f'isIPAddressInRange({x}, {{hn{j}:String}})' for j in range(nets)]) + ')'
+
+
+def turn_cond(nets=0):
+    """SQL over a record: a chosen host was the server of this inside session (and the client was not one of them —
+    a session inside a network keeps its sides): host_view turns it round, and (1.17.0) rollups.source over agg_conv"""
+    of = host_of(nets)
+    return f"(dir IN ('internal', 'internal_back') AND {of('ext_ip')} AND NOT {of('int_ip')})"
+
+
 def host_view(period, nets=0):
     """The records of the period with the hosts {hv} (a list) on the inside side. Between inside hosts int_ip is the client:
     a session in which the host is the server (ext_ip) is turned round — int_ip / int_port = the host, ext_ip /
     ext_port = its client — and its directions swapped, so for the host too 'internal' = sent, 'internal_back' =
     received (the queries count dir IN ('up', 'internal') as sent). `turned` = 1 on those records."""
-    # one of the hosts, or (1.8.6) an address in one of the networks {hn0} … — a session inside a network keeps its sides
-    def of(x):
-        return '(' + ' OR '.join([f'{x} IN {{hv:Array(String)}}'] + [f'isIPAddressInRange({x}, {{hn{j}:String}})' for j in range(nets)]) + ')'
-    r = f"(dir IN ('internal', 'internal_back') AND {of('ext_ip')} AND NOT {of('int_ip')})"
+    of, r = host_of(nets), turn_cond(nets)
     return (f"(SELECT * REPLACE (if({r}, ext_ip, int_ip) AS int_ip, if({r}, int_ip, ext_ip) AS ext_ip, "
             f"if({r}, ext_port, int_port) AS int_port, if({r}, int_port, ext_port) AS ext_port, "
             f"CAST(if({r}, if(dir = 'internal', 'internal_back', 'internal'), toString(dir)) AS {DIR_HOST}) AS dir), toUInt8({r}) AS turned "
@@ -347,7 +358,7 @@ def src(p, cols, t0=None, t1=None, bucketed=False):
     is a multiple of 5 minutes), the rest from the records. Rows have `flows` (records): sum(flows) counts them."""
     t0 = p['_t0'] if t0 is None else t0
     t1 = p['_t1'] if t1 is None and t0 == p['_t0'] else t1
-    sql, _ = rollups.source(cols, t0, t1, p['_fcols'], use=USE_ROLLUPS, step=p['_step'] if bucketed else None, table=p.get('_flows', 'flows'))
+    sql, _ = rollups.source(cols, t0, t1, p['_fcols'], use=USE_ROLLUPS, step=p['_step'] if bucketed else None, table=p.get('_flows', 'flows'), turn=p.get('_turn'))
     return f"{sql} WHERE {p['_filt']}"
 
 
@@ -557,13 +568,13 @@ def api_series(q):
         both = by in ('int_ip', 'net') and q1(q, 't', 'internet') == 'internal'     # a host is the client or the server
         dim = ['int_ip', 'ext_ip'] if both else ['int_ip' if by == 'net' else col]
         # (1.17.0) a day or more of what only hourly tables hold (outside addresses, both ends): hourly points, from them
-        has = lambda st: rollups.source(dim, p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=st, table=p['_flows'])[1]  # noqa: E731
+        has = lambda st: rollups.source(dim, p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=st, table=p['_flows'], turn=p.get('_turn'))[1]  # noqa: E731
         if rng >= LONG and step % 3600 and not has(step) and has(-(-step // 3600) * 3600):
             step = p['_step'] = p['step'] = -(-step // 3600) * 3600
         s = src(p, dim[:1], bucketed=True)
         if both:
-            # (1.17.0) both ends from the conversations per hour (agg_conv) when no host is turned (host_view)
-            pairs = f"{p['_flows']} WHERE {where}" if 'hv' in p else src(p, ['int_ip', 'ext_ip'], bucketed=True)
+            # (1.17.0) both ends from the conversations per hour (agg_conv), a chosen host's turned to it too
+            pairs = src(p, ['int_ip', 'ext_ip'], bucketed=True)
             s = (f"(SELECT ts, int_ip, bytes FROM {pairs} UNION ALL "
                  f"SELECT ts, ext_ip AS int_ip, bytes FROM {pairs})")
         rows = ch(f"""WITH (SELECT groupArray(k) FROM (SELECT toString({col}) AS k FROM {s} GROUP BY k ORDER BY sum(bytes) DESC, k LIMIT {{top:UInt8}})) AS tops
@@ -598,7 +609,7 @@ def attrs(rows, keys, what, where, p, cols=None):
     p = dict(p, **{f'a{i}': [r[k] for r in rows] for i, k in enumerate(keys)})
     cond = ' AND '.join(f'{c} IN {{a{i}:Array(String)}}' for i, c in enumerate(cols))
     s = src(p, list(cols) + what.split(', '))       # the per-address totals hold the attributes too
-    if not rollups.source(list(cols) + what.split(', '), p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, table=p.get('_flows', 'flows'))[1]:
+    if not rollups.source(list(cols) + what.split(', '), p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, table=p.get('_flows', 'flows'), turn=p.get('_turn'))[1]:
         # (1.17.0) what an address is does not depend on the filters: without them the per-address totals answer
         # instead of every record of the period (a host's outside addresses: a filter no per-address table holds)
         s = src(dict(p, _filt='1', _fcols=set(), _flows='flows'), list(cols) + what.split(', '))
@@ -671,8 +682,8 @@ def api_top(q):
     elif dim in ('net', 'net_svc') and q1(q, 't', 'internet') == 'internal':
         # (1.8.7) inside <-> inside: a network sends from its client hosts and from its servers
         nl, nr = net_expr('int_ip', p), net_expr('ext_ip', p)
-        pairs = f"{p['_flows']} WHERE {where}" if 'hv' in p else src(p, ['int_ip', 'ext_ip'])     # (1.17.0) see int_ip below
-        flows = '1' if 'hv' in p else 'flows'
+        pairs = src(p, ['int_ip', 'ext_ip'])     # (1.17.0) see int_ip below
+        flows = 'flows'
         rows = ch(f"""SELECT k, sum(u) AS up, sum(d) AS dn, sum(f) AS fl, 0 AS pk, uniqExact(h) AS hosts FROM (
                 SELECT {nl} AS k, cityHash64(int_ip) AS h, if(dir = 'internal', bytes, 0) AS u, if(dir = 'internal', 0, bytes) AS d, {flows} AS f FROM {pairs}
                 UNION ALL SELECT {nr}, cityHash64(ext_ip), if(dir = 'internal', 0, bytes), if(dir = 'internal', bytes, 0), {flows} FROM {pairs})
@@ -687,10 +698,10 @@ def api_top(q):
         # inside <-> inside: a host is the client (int_ip) of some sessions and the server (ext_ip) of others; count
         # what it sent (up) and received (dn), how many hosts it connected to (calls) and how many connected to it
         # (callers). For a chosen host the records are turned to it (host_view): `turned` = it was the server.
-        # (1.17.0) without a chosen host (nothing turned) both ends come from the conversations per hour (agg_conv)
+        # (1.17.0) both ends come from the conversations per hour (agg_conv), a chosen host's turned to it too
         turned = 'turned' if 'hv' in p else '0'
-        pairs = f"{p['_flows']} WHERE {where}" if 'hv' in p else src(p, ['int_ip', 'ext_ip'])
-        flows = '1' if 'hv' in p else 'flows'
+        pairs = src(p, ['int_ip', 'ext_ip'] + (['turned'] if 'hv' in p else []))
+        flows = 'flows'
         rows = ch(f"""SELECT k, sum(u) AS up, sum(d) AS dn, sum(f) AS fl, sum(pk_) AS pk,
                 uniqExactIf(peer, NOT srv) AS calls, uniqExactIf(peer, srv) AS callers FROM (
                 SELECT int_ip AS k, ext_ip AS peer, toUInt8({turned}) AS srv, if(dir = 'internal', bytes, 0) AS u, if(dir = 'internal', 0, bytes) AS d, {flows} AS f, packets AS pk_
@@ -719,7 +730,7 @@ def api_top(q):
             # when neither rollup serves (a chosen host, rollups off) both counts in one pass over the records, not two
             hp, one = {}, [('int_ip', 'hosts'), ('ext_ip', 'peers')]
             raw = not any(rollups.source(['ext_port', 'proto', c], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS,
-                                         table=p.get('_flows', 'flows'))[1] for c, _ in one)
+                                         table=p.get('_flows', 'flows'), turn=p.get('_turn'))[1] for c, _ in one)
             for part in ([one] if raw else [[x] for x in one]):
                 for x in ch(f"""SELECT ext_port AS k, {', '.join(f'uniqExact(cityHash64({c})) AS {out}' for c, out in part)}
                         FROM {src(p, ['ext_port', 'proto'] + [c for c, _ in part])} AND ext_port IN {{ports:Array(UInt64)}} GROUP BY k""", p, fmt='JSON'):
@@ -734,7 +745,7 @@ def api_top(q):
     else:
         raise BadRequest('bad dim')
     if dim in ('int_ip', 'net', 'net_svc') and q1(q, 't', 'internet') == 'internal':     # there every record counts for two hosts
-        tot = ch(f"SELECT sum(bytes) AS b FROM {p['_flows']} WHERE {where}" if 'hv' in p else f"SELECT sum(bytes) AS b FROM {src(p, [])}", p, fmt='JSON')[0]['b']
+        tot = ch(f"SELECT sum(bytes) AS b FROM {src(p, [])}", p, fmt='JSON')[0]['b']
     else:                       # up + dn of all groups, computed in the same pass (WITH TOTALS; no 2nd scan)
         tot = int(totals.get('up') or 0) + int(totals.get('dn') or 0)
     for r in rows:
@@ -1039,7 +1050,7 @@ def network_topology(q):
             topology.set_volumes(topo, topology.iface_volumes(ch, f'{where} AND {narrow}', p))
     else:                            # the neighbours of the last hour, the volumes of the period from the totals
         near, exp_h, pairs = topo_structure(cfg)
-        tot, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, table=p.get('_flows', 'flows'))
+        tot, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, table=p.get('_flows', 'flows'), turn=p.get('_turn'))
         ifaces = topology.iface_volumes(ch, p['_filt'], p, table=tot)
         topo = topology.build(cfg, near, ifaces, {r['exporter'] for r in ifaces} | set(exp_h), pairs)
         if narrow:
@@ -1099,7 +1110,7 @@ def api_path(q):
         rows = topology.path_query(ch, where, p, s, d)
     else:        # (1.17.0) a period: the conversations per hour (whole hours), the records only at its edges
         tbl, _ = rollups.source(['in_if', 'out_if', 'int_ip', 'ext_ip', 'nat_ip'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS,
-                                table=p.get('_flows', 'flows'))
+                                table=p.get('_flows', 'flows'), turn=p.get('_turn'))
         rows = topology.path_query(ch, p['_filt'], p, s, d, table=tbl)
     out = topology.path(topo, cfg, rows)
     return {'src': s, 'dst': d, **out, 'live': live, 'window': p.get('win', rng), 'window_end': p.get('wend'), 'range': rng}
@@ -1403,7 +1414,7 @@ def api_ifload(q):
     p['_step'] = 300
     # (1.17.0) each record goes to its two interfaces in ClickHouse: grouped by the PAIR, a firewall with 250 VLANs
     # (63,000 pairs) sent 6.4 M rows a day for Python to add up — 20 s against 1 s of the query
-    sql, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=300, table=p.get('_flows', 'flows'))
+    sql, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=300, table=p.get('_flows', 'flows'), turn=p.get('_turn'))
     rows = ch(f"""SELECT toUnixTimestamp(toStartOfInterval(ts, INTERVAL 300 SECOND)) AS t, x.1 AS i, x.2 AS d, sum(bytes) AS b
         FROM {sql} ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE ({p['_filt']}) AND x.1 != 0 GROUP BY t, i, d""", p, fmt='JSON')
     t0 = p['_t0'] // 300 * 300
@@ -1473,7 +1484,7 @@ def _five_min(p):
     """5-minute totals per device, interface and direction (0 = into it, as the input interface; 1 = out of it).
     (1.14.0) Each record goes to its two interfaces as it is read: grouping by the PAIR of interfaces first ran out of
     memory on a busy firewall (thousands of VLAN / tunnel pairs × 8,640 buckets in 30 days, a customer on 1.13.1)."""
-    sql, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=p['_step'], table=p.get('_flows', 'flows'))
+    sql, _ = rollups.source(['in_if', 'out_if'], p['_t0'], p['_t1'], p['_fcols'], use=USE_ROLLUPS, step=p['_step'], table=p.get('_flows', 'flows'), turn=p.get('_turn'))
     return f"""SELECT exporter, x.1 AS i, x.2 AS d, toStartOfInterval(ts, INTERVAL 300 SECOND) AS t, sum(bytes) AS v
         FROM {sql} ARRAY JOIN [(in_if, 0), (out_if, 1)] AS x WHERE ({p['_filt']}) AND x.1 != 0 GROUP BY exporter, i, d, t"""
 
