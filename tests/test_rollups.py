@@ -51,6 +51,17 @@ class Source(unittest.TestCase):
         self.assertIn(f'ts >= toDateTime({t0}) AND ts < toDateTime({a})', sql)
         self.assertIn(f'ts >= toDateTime({b}) AND ts < toDateTime({t1})', sql)
 
+    def test_whole_buckets_read_no_records_1170(self):
+        """(1.17.0) a period of whole buckets has no edges: the records are not in the query at all"""
+        self.state(agg_geo=0)
+        t0 = (NOW - DAY) // 3600 * 3600
+        sql, name = rollups.source([], t0, t0 + 6 * 3600, [])
+        self.assertEqual(name, 'agg_geo')
+        self.assertNotIn('FROM flows', sql)
+        sql, _ = rollups.source([], t0 + 7, t0 + 6 * 3600, [])           # only the left edge
+        self.assertEqual(sql.count('FROM flows'), 1)
+        self.assertIn(f'ts >= toDateTime({t0 + 7}) AND ts < toDateTime({t0 + 300})', sql)
+
     def test_history_not_filled_yet_comes_from_the_records(self):
         rf = NOW // DAY * DAY                        # backfill got down to midnight
         self.state(agg_traffic=rf)

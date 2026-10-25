@@ -469,7 +469,10 @@ def source(cols, t0, t1, flt_cols, use=True, step=None, table='flows'):
     # the rollup's columns as plain types (SimpleAggregateFunction(...) would not unite with the records' columns)
     acols = ', '.join(['ts', 'exporter', 'dir'] + [f"CAST({c}, '{_TYPES[c]}') AS {c}" for c in cols if c not in ('exporter', 'dir')])
     parts = [f"SELECT {acols}, toUInt64(bytes) AS bytes, toUInt64(packets) AS packets, toUInt64(flows) AS flows FROM {name} "
-             f"WHERE ts >= toDateTime({a}) AND ts < toDateTime({b})",
-             raw(f'ts >= toDateTime({int(t0)}) AND ts < toDateTime({a})'),
-             raw(f'ts >= toDateTime({b}){end}')]
+             f"WHERE ts >= toDateTime({a}) AND ts < toDateTime({b})"]
+    # (1.17.0) the records only for edges that exist: a period of whole buckets reads no records at all
+    if a > int(t0):
+        parts.append(raw(f'ts >= toDateTime({int(t0)}) AND ts < toDateTime({a})'))
+    if not t1 or b < int(t1):
+        parts.append(raw(f'ts >= toDateTime({b}){end}'))
     return '(' + ' UNION ALL '.join(parts) + ')', name
