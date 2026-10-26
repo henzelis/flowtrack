@@ -4,6 +4,9 @@ After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
+# (1.17.2) started = the UDP sockets are open (collector.py sends READY=1); ClickHouse may take minutes after a boot
+Type=notify
+TimeoutStartSec=300
 EnvironmentFile=/etc/flowtrack/env
 # the board UUID binds a license to this server; it is readable by root only ('+' runs this line as root)
 # as root into a folder of the flowtrack user: never through a link left there (set -C: a new file only; mv -T)

@@ -5,6 +5,14 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+### Fixed
+- **The installer said «running» before the collector listened.** It waited only for the collector's process to start,
+  while the collector opens its UDP port after preparing the database — what devices sent in those seconds right after
+  an install or upgrade was dropped. The collector now tells systemd it is ready only once the port is open, and the
+  installer also checks the port before saying FlowTrack is running.
+- **«Unknown table» warnings on the first start.** The web service now starts after the collector, which creates the
+  tables, and the interface rates no longer look for the rollups' progress table before it is made.
+
 ## 1.17.1 — 2026-10-25
 
 - **The installer finishes an installation that was interrupted** (a lost SSH session, a power cut): packages left

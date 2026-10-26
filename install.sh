@@ -721,7 +721,8 @@ start_all() {
   systemctl restart $UNITS
   systemctl start flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path
   for _ in $(seq 1 30); do
-    if systemctl is-active -q flowtrack-collector && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi   # localhost is always served
+    # (1.17.2) «running» = the collector holds its UDP port (before that the kernel drops what devices send)
+    if systemctl is-active -q flowtrack-collector && udp_busy "$NF_PORT" && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi   # localhost is always served
     sleep 1
   done
   systemctl status --no-pager $UNITS; journalctl -u flowtrack-collector -u flowtrack-web -n 30 --no-pager; return 1

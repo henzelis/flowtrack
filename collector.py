@@ -844,6 +844,7 @@ class Receiver:
                 break
             except (CHError, OSError) as ex:
                 log(f'waiting for ClickHouse ({ex.__class__.__name__}) ...')
+                sd_notify('STATUS=waiting for ClickHouse')
                 time.sleep(2)
         else:
             log('ClickHouse not reachable, exiting')
@@ -892,6 +893,7 @@ class Receiver:
         log(f'listening on UDP {PORT}' + (f' and {self.sflow_port} (sFlow)' if self.sflow_port else '') + f': {where}; {self.n} worker(s); socket buffer {self.rcvbuf // 1024} KiB; '
             f'forwarding to {FORWARD or "nobody"}; exporters allowed: {sorted(ALLOW) or "any"}')
         write_state({'port': PORT, 'sflow_port': self.sflow_port, 'bind': BIND, 'listen': listen, 'workers': self.n, 'started': int(time.time())})
+        sd_notify('READY=1')    # (1.17.2) systemd (Type=notify) and the installer count us started only from here
         if self.rcvbuf < RCVBUF:
             log(f'NOTE socket buffer capped by net.core.rmem_max; raise it to {RCVBUF} to absorb bursts (install.sh does)')
         stop = False
@@ -1002,6 +1004,21 @@ def write_state(info):
         os.replace(tmp, os.path.join(STATE_DIR, 'collector.json'))
     except OSError as ex:
         log(f'WARN cannot write collector state: {ex}')
+
+
+def sd_notify(msg):
+    """(1.17.2) A message to systemd's notify socket (READY=1 once the UDP sockets are open: before that the kernel
+    drops what devices send, so the installer must not say «running»). Nothing outside systemd."""
+    addr = os.environ.get('NOTIFY_SOCKET')
+    if not addr:
+        return
+    if addr[0] == '@':
+        addr = '\0' + addr[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.sendto(msg.encode(), addr)
+    except OSError as ex:
+        log(f'WARN cannot notify systemd: {ex}')
 
 
 def set_rcvbuf(s):

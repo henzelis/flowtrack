@@ -1,6 +1,7 @@
 [Unit]
 Description=FlowTrack web UI + API
-After=network-online.target docker.service
+# (1.17.2) after the collector: it creates the tables the pages read (no «Unknown table» on the first start)
+After=network-online.target docker.service flowtrack-collector.service
 Wants=network-online.target
 
 [Service]

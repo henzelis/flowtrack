@@ -262,3 +262,7 @@ ENGINE = ReplacingMergeTree
 PARTITION BY toYYYYMMDD(t5)
 ORDER BY (exporter, i, src, d, t5)
 TTL t5 + INTERVAL 90 DAY;
+
+-- (1.17.2) the rollups' and the interface rates' progress (rollups.ensure makes it too): here, so the rates thread does
+-- not find it missing on a fresh install's first start (it starts before the rollups thread creates it)
+CREATE TABLE IF NOT EXISTS agg_state (k String, v Int64, t DateTime64(3) DEFAULT now64(3)) ENGINE = ReplacingMergeTree(t) ORDER BY k;
