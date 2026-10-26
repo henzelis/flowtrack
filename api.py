@@ -1807,6 +1807,115 @@ def api_usage(q):
             'hosts': hosts, 'more': max(0, int(tot['hosts']) - len(hosts))}
 
 
+CONV_NEW_DAYS = 7          # (1.18.0) a conversation is new when it was not seen in this many days before the period
+CONV_RIGHT = {'owner': (['asn', 'as_org'], 'toString(asn)', 'any(as_org)'), 'country': (['country'], 'country', "''"),
+              'addr': (['ext_ip'], 'ext_ip', "''")}
+# (1.18.0) whom a pair talks to: the owner (AS) of the address, or the address itself when it has none
+CONV_OWNER = "cityHash64(int_ip, if(asn != 0, toString(asn), ext_ip))"
+
+
+def api_conversations(q):
+    """(1.18.0) Conversations: who talks to whom over the period (inside host x outside address, or two inside hosts),
+    from the conversations per hour (agg_conv). The cards (pairs, the biggest, the new ones, countries), the graph
+    hosts -> services -> owners / countries / addresses (`right`) with the rest as '__other', the biggest pairs over
+    time, and the pairs themselves, the biggest first, with the new ones apart. A pair is new when its inside host
+    never talked to that owner (AS) in the CONV_NEW_DAYS days before the period (or the period before, if longer) — as
+    far as the data reach back. CDNs and clouds change addresses every day: «host x address» was new for half of the
+    pairs on our own network (7,797 of 15,027 a day), «host x owner» for 126 of 734."""
+    where, p, rng, step = scope(q)
+    internal = q1(q, 't', 'internet') == 'internal'
+    right = 'addr' if internal else q1(q, 'right', 'owner')
+    if right not in CONV_RIGHT:
+        raise BadRequest('bad right')
+    n, m, ns = (max(3, min(q1(q, k, d, int), 20)) for k, d in (('hosts', '8'), ('peers', '8'), ('services', '6')))
+    p['lim'] = max(1, min(q1(q, 'limit', '50', int), 500))
+    t0, floor = p['t0'], p['floor']
+    pt0 = max(t0 - rng, floor)                                # the period before, for the change of each pair
+    lt0 = max(min(t0 - CONV_NEW_DAYS * 86400, pt0), floor)    # how far back «talked before» looks
+    oldest = int(ch("SELECT toUnixTimestamp(min(ts)) AS t FROM flows", fmt='JSON')[0]['t'] or 0)
+    has_prev = pt0 < t0 and 0 < oldest <= pt0 + 3600
+    looks = 0 < oldest < t0 - 3600 and lt0 < t0               # without an hour of history before, every pair would be «new»
+    PC = ['int_ip', 'ext_ip', 'asn']
+    parts = [f"SELECT int_ip, ext_ip, asn, ts, bytes, flows, 0 AS w FROM {src(p, PC)}"]
+    before = []
+    if looks:
+        parts.append(f"SELECT int_ip, ext_ip, asn, ts, bytes, flows, 1 AS w FROM {src(p, PC, pt0, t0)}")
+        before.append(f"SELECT int_ip, ext_ip, asn FROM {src(p, PC, pt0, t0)}")
+        if lt0 < pt0:
+            before.append(f"SELECT int_ip, ext_ip, asn FROM {src(p, PC, lt0, pt0)}")
+    # a pair is its 64-bit hash (see api_top) with its owner's (o); w: 0 the period, 1 the period before
+    old = f"o IN (SELECT {CONV_OWNER} FROM ({' UNION ALL '.join(before)}))" if before else '0'
+    pairs = f"""SELECT h, o, b, f, pb, pf, {old} AS old FROM (
+        SELECT cityHash64(int_ip, ext_ip) AS h, any({CONV_OWNER}) AS o, sumIf(bytes, w = 0) AS b, sumIf(flows, w = 0) AS f,
+            sumIf(bytes, w = 1) AS pb, sumIf(flows, w = 1) AS pf FROM ({' UNION ALL '.join(parts)}) GROUP BY h)"""
+    st = dict(CAP_SETTINGS, max_memory_usage=CH_QUERY_MEMORY)
+    tot = ch(f"""SELECT countIf(f > 0) AS pairs, uniqExactIf(o, f > 0 AND NOT old) AS new_owners, countIf(f > 0 AND NOT old) AS new_pairs,
+            sumIf(b, f > 0 AND NOT old) AS new_bytes, sum(b) AS bytes, countIf(pf > 0) AS prev_pairs FROM ({pairs})""",
+             p, fmt='JSON', timeout=120, settings=st)[0]
+    top = ch(f"SELECT h, b, pb, old FROM ({pairs}) WHERE f > 0 ORDER BY b DESC LIMIT {{lim:UInt32}} BY old",
+             p, fmt='JSON', timeout=120, settings=st)
+    info = {int(r['h']): r for r in top}
+    rows = []
+    if info:
+        p['hs'] = list(info)
+        rows = ch(f"""SELECT cityHash64(int_ip, ext_ip) AS h, int_ip, ext_ip, {UP_SQL} AS up, {DN_SQL} AS dn, sum(flows) AS fl,
+                argMax(service, bytes) AS service, any(country) AS country, any(asn) AS asn, any(as_org) AS as_org,
+                toUnixTimestamp(min(ts)) AS first, toUnixTimestamp(max(ts)) AS last
+            FROM {src(p, PC + ['service', 'country', 'as_org'])} AND cityHash64(int_ip, ext_ip) IN {{hs:Array(UInt64)}}
+            GROUP BY int_ip, ext_ip""", p, fmt='JSON', timeout=120)
+    out = []
+    for r in rows:
+        x = info.get(int(r['h']))
+        if x:
+            out.append({'int_ip': r['int_ip'], 'ext_ip': r['ext_ip'], 'name': NAMES.get(r['int_ip']),
+                        'ext_name': NAMES.get(r['ext_ip'], lookup=False), 'service': r['service'], 'country': r['country'],
+                        'asn': int(r['asn']), 'owner': common.clean_org(r['as_org']) if r['as_org'] else '',
+                        'up': int(r['up']), 'dn': int(r['dn']), 'fl': int(r['fl']), 'first': int(r['first']), 'last': int(r['last']),
+                        'prev': int(x['pb']) if has_prev else None, 'new': bool(looks and not int(x['old']))})
+    out.sort(key=lambda r: r['up'] + r['dn'], reverse=True)
+    # the graph: the busiest hosts, services and peers, the rest of each as '__other'
+    rcols, rkey, rlab = CONV_RIGHT[right]
+    p.update(n=n + 1, m=m + 1, ns=ns + 1)
+    hosts = ch(f"SELECT int_ip AS k, sum(bytes) AS b FROM {src(p, ['int_ip'])} GROUP BY k ORDER BY b DESC LIMIT {{n:UInt8}}", p, fmt='JSON', timeout=120)
+    svcs = ch(f"SELECT service AS k, sum(bytes) AS b FROM {src(p, ['service'])} GROUP BY k ORDER BY b DESC LIMIT {{ns:UInt8}}", p, fmt='JSON', timeout=120)
+    peers = ch(f"SELECT {rkey} AS k, {rlab} AS lab, sum(bytes) AS b FROM {src(p, rcols)} GROUP BY k ORDER BY b DESC LIMIT {{m:UInt8}}",
+               p, fmt='JSON', timeout=120)
+    more = {'hosts': len(hosts) > n, 'services': len(svcs) > ns, 'peers': len(peers) > m}
+    hosts, svcs, peers = hosts[:n], svcs[:ns], peers[:m]
+    p.update(L=[r['k'] for r in hosts], S=[r['k'] for r in svcs], R=[r['k'] for r in peers])
+    links = ch(f"""SELECT if(has({{L:Array(String)}}, int_ip), int_ip, '__other') AS l, if(has({{S:Array(String)}}, service), service, '__other') AS s,
+            if(has({{R:Array(String)}}, {rkey}), {rkey}, '__other') AS r, {UP_SQL} AS up, {DN_SQL} AS dn
+        FROM {src(p, ['int_ip', 'service'] + rcols)} GROUP BY l, s, r HAVING up + dn > 0""", p, fmt='JSON', timeout=120, settings=st) if hosts else []
+    peer_out = []
+    for r in peers:
+        lab = common.clean_org(r['lab']) if right == 'owner' and r['lab'] else ('' if right == 'owner' else r['k'])
+        peer_out.append({'k': r['k'], 'label': lab, 'b': int(r['b']), **({'name': NAMES.get(r['k'], lookup=False)} if right == 'addr' else {})})
+    # the biggest pairs over time (whole hours over a day or more: the conversations are kept per hour)
+    sstep = step if rng < LONG else -(-max(step, 3600) // 3600) * 3600
+    top5 = [h for h, x in sorted(info.items(), key=lambda kv: -int(kv[1]['b']))][:5]
+    series = []
+    if top5:
+        ps = dict(p, _step=sstep, ss=sstep, h5=top5)
+        series = [[int(r['t']), str(r['h']), int(r['b'])] for r in ch(f"""SELECT toUnixTimestamp(toStartOfInterval(ts, toIntervalSecond({{ss:UInt32}}))) AS t,
+                cityHash64(int_ip, ext_ip) AS h, sum(bytes) AS b FROM {src(ps, PC, bucketed=True)} AND cityHash64(int_ip, ext_ip) IN {{h5:Array(UInt64)}}
+            GROUP BY t, h ORDER BY t""", ps, fmt='JSON', timeout=120)]
+    keys = {str(r['h']): f"{r['int_ip']}|{r['ext_ip']}" for r in rows if int(r['h']) in top5}
+    countries = [] if internal else ch(f"""SELECT country AS k, sum(bytes) AS b FROM {src(p, ['country'])} AND country != ''
+        GROUP BY k ORDER BY b DESC""", p, fmt='JSON', timeout=120)
+    new = (lambda k: int(tot[k]) if looks else None)      # noqa: E731
+    return {'from': p['t0'], 'to': p['t1'], 'range': rng, 'right': right, 'internal': internal,
+            'new_from': lt0 if looks else None, 'new_days': round((t0 - max(lt0, oldest)) / 86400, 1) if looks else None,
+            'prev_from': pt0 if has_prev else None,
+            'total': {'pairs': int(tot['pairs']), 'bytes': int(tot['bytes']), 'prev_pairs': int(tot['prev_pairs']) if has_prev else None,
+                      'new_owners': new('new_owners'), 'new_pairs': new('new_pairs'), 'new_bytes': new('new_bytes'),
+                      'countries': len(countries), 'top_countries': [r['k'] for r in countries[:3]]},
+            'pairs': out[:p['lim']], 'new': [r for r in out if r['new']][:p['lim']],
+            'graph': {'hosts': [{'k': r['k'], 'name': NAMES.get(r['k']), 'b': int(r['b'])} for r in hosts],
+                      'services': [{'k': r['k'], 'b': int(r['b'])} for r in svcs], 'peers': peer_out, 'more': more,
+                      'links': [[r['l'], r['s'], r['r'], int(r['up']), int(r['dn'])] for r in links]},
+            'series': {'step': sstep, 'keys': keys, 'rows': series}}
+
+
 def api_qos(q):
     """(1.16.0) QoS marking under the period and the filters: the traffic of each DSCP class (on the way in), over time,
     through each interface of each device, the services of each class, and what the devices re-marked (class in ->
@@ -2600,7 +2709,7 @@ CACHE = Cache()
 ROUTES = {'/api/meta': api_meta, '/api/summary': api_summary, '/api/series': api_series, '/api/top': api_top, '/api/river': api_river,
           '/api/flows': api_flows, '/api/paths': api_paths, '/api/devmap': api_devmap, '/api/topology': api_topology, '/api/path': api_path, '/api/live': api_live, '/api/ports': api_ports, '/api/hosts/names': api_host_names, '/api/networks': api_networks, '/api/geo': api_geo, '/api/devices': api_devices, '/api/host': api_host,
           '/api/alerts': api_alerts, '/api/ifload': api_ifload,
-          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface, '/api/usage': api_usage, '/api/qos': api_qos}
+          '/api/capacity': api_capacity, '/api/capacity/iface': api_capacity_iface, '/api/usage': api_usage, '/api/qos': api_qos, '/api/conversations': api_conversations}
 STATIC = {'.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.json': 'application/json; charset=utf-8', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2'}
 
 

@@ -123,7 +123,7 @@ class Auth:
                 'display': name[len(LDAP_PREFIX):] if u.get('source') == 'ldap' else name}
 
     # (1.9.0) what a user chose for themself, kept with the account (any browser): the Path analysis map view
-    PREFS = {'path_view': ('classic', 'lines', 'stars', 'metro', 'river')}
+    PREFS = {'path_view': ('classic', 'lines', 'stars', 'metro', 'river'), 'conv_view': ('flow', 'chord', 'matrix')}
 
     def set_prefs(self, name, prefs):
         if not isinstance(prefs, dict):

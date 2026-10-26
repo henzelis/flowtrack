@@ -508,7 +508,7 @@ const USAGE_ICON = 'M3 15V9M7 15V5M11 15V8M15 15V3M2 15.5h14';
 // (1.13.0) a gauge
 const CAP_ICON = 'M2.5 13.5a6.5 6.5 0 1 1 13 0M9 13.5l3.2-4.2M4.6 9.6l.9.6M13.4 9.6l-.9.6M9 7v1';
 const NAV = [
-  ['overview',T('Overview'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['paths',T('Through device'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 10 6 10M6 14c3 0 3-10 6-10M6 9h6'], ['network',T('Path analysis'),'M6.9 4a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M1.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M11.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M7.57 6.86L5.43 11.14M10.43 6.86L12.57 11.14M7.2 14L10.8 14'], ['talkers',T('Top hosts'),'M4 6a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M2 15.5c0-2.8 2-4.5 4.5-4.5s4.5 1.7 4.5 4.5M11 7a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M12.6 11.2c.4-.1.9-.2 1.4-.2 1.9 0 3 1.5 3 4'],
+  ['overview',T('Overview'),'M3 9.5L9 4l6 5.5V15H3z'], ['flows',T('Flows'),'M2 6c4 0 5 6 9 6h5M2 12c4 0 5-6 9-6h5'], ['conversations',T('Conversations'),'M3 5h8l-2-2M15 13H7l2 2'], ['paths',T('Through device'),'M2 4h4M2 9h4M2 14h4M12 4h4M12 9h4M12 14h4M6 4c3 0 3 10 6 10M6 14c3 0 3-10 6-10M6 9h6'], ['network',T('Path analysis'),'M6.9 4a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M1.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M11.9 14a2.1 2.1 0 1 0 4.2 0a2.1 2.1 0 1 0 -4.2 0M7.57 6.86L5.43 11.14M10.43 6.86L12.57 11.14M7.2 14L10.8 14'], ['talkers',T('Top hosts'),'M4 6a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0 -5 0M2 15.5c0-2.8 2-4.5 4.5-4.5s4.5 1.7 4.5 4.5M11 7a2 2 0 1 0 4 0a2 2 0 1 0 -4 0M12.6 11.2c.4-.1.9-.2 1.4-.2 1.9 0 3 1.5 3 4'],
   ['usage',T('Usage'),USAGE_ICON], ['apps',T('Services'),'M3 3h5v5H3zM10 3h5v5h-5zM3 10h5v5H3zM10 10h5v5h-5z'], ['ports',T('Ports'),'M6 2v4M12 2v4M4 6h10v3a5 5 0 0 1-10 0zM9 14v3'], ['geo',T('Geolocation'),'M9 16.2s5.2-4.6 5.2-8.7A5.2 5.2 0 0 0 3.8 7.5c0 4.1 5.2 8.7 5.2 8.7zM7.2 7.4a1.8 1.8 0 1 0 3.6 0a1.8 1.8 0 1 0 -3.6 0'],
   ['capacity',T('page::Capacity'),CAP_ICON], ['qos',T('QoS'),QOS_ICON],
   ['threats',T('Events'),'M9 2l6 2.5V9c0 3.5-2.6 6-6 7-3.4-1-6-3.5-6-7V4.5z'],
@@ -4348,7 +4348,182 @@ async function openHost(ip){
 }
 
 // ===================== shell =====================
-const VIEWS = {overview:vOverview, flows:vFlows, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, qos:vQos, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, events:vEvents, settings:vSettings};
+// (1.18.0) Conversations: who talks to whom over the period — cards, the graph (Flow = hosts → services → owners /
+// countries / addresses, Chord, Matrix; each user's own default view: the lamp), the biggest pairs over time, the new
+// ones (an inside host talking to an owner it never talked to in the 7 days before) and all the pairs
+const CONV_VIEWS = () => [['flow', T('Flow')], ['chord', T('Chord')], ['matrix', T('Matrix')]];
+const CONV_RIGHT = () => [['owner', T('Owners')], ['country', T('Countries')], ['addr', T('Addresses')]];
+const convPair = r => { putFilter({k:'ip', v:r.int_ip, neg:false}); putFilter({k:'dst', v:r.ext_ip, neg:false}); state.sel = null; render(); };
+const convOwner = r => r.owner || (r.asn ? 'AS' + r.asn : '') || r.ext_name || '';
+function vConversations(){
+  const v = document.getElementById('view'), internal = isInternal();
+  const right = internal ? 'addr' : (state.convRight || 'owner'), only = state.convOnly || 'all';
+  const defView = () => ((ME && ME.prefs) || {}).conv_view || 'flow', curView = () => state.convView || defView();
+  v.innerHTML = `<div class="grid">
+    <section class="glass panel s12 caphead">${ph('conv', T('Conversations'), T('who talks to whom · the filters and the traffic selector at the top apply'), '', true)}</section>
+    <div id="cvKpi" style="display:contents"></div>
+    <section class="glass panel s12" id="cvSec">${ph('conv', T('Who talks to whom'), `<span id="cvSub"></span>`, `<span class="cvtools"><span id="cvViews" class="netviews"></span>${internal ? '' : seg('cvRight', CONV_RIGHT(), right)}</span>`, false, maxBtn())}
+      <div id="cvGraph" class="chart cvgraph loading"></div><div class="legend" id="cvLeg"></div></section>
+    <section class="glass panel s8">${ph('chart', T('The biggest pairs over time'), T('the 5 biggest pairs · drag across the chart to choose a stretch of time'))}<div id="cvSeries" class="chart cvseries loading"></div><div class="legend" id="cvSerLeg"></div></section>
+    <section class="glass panel s4">${ph('pulse', T('New conversations'), `<span id="cvNewSub"></span>`)}<div id="cvNew" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('All conversations'), `<span id="cvAllSub"></span>`, `<span class="cvtbar">${seg('cvOnly', [['all', T('All')], ['new', T('Only new')]], only)}<input type="search" id="cvQ" class="cvq" placeholder="${T('host, address, owner, service, country')}" aria-label="${T('Search the conversations')}"><a class="btn" id="cvCsv" href="#">${T('Download CSV')}</a></span>`)}<div id="cvTable" class="loading"></div></section></div>`;
+  const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
+  const LAMP = 'M9 2.2a5 5 0 0 0-3 9c.6.5.9 1.1.9 1.8h4.2c0-.7.3-1.3.9-1.8a5 5 0 0 0-3-9M7 15.2h4M7.6 17h2.8';
+  let d = null, chart = null;
+  const drawViews = () => { const box = document.getElementById('cvViews'); if (!box) return; const cur = curView(), def = defView();
+    box.innerHTML = `<div class="seg">${CONV_VIEWS().map(([k, l]) => `<button type="button" data-cv="${k}" aria-pressed="${k === cur}"${k === def ? ` title="${T('Your default view')}"` : ''}>${k === def ? `<span class="lamp on" aria-hidden="true">${icon(LAMP, 13)}</span>` : ''}${l}</button>`).join('')}</div>
+      <button type="button" class="btn lampbtn" id="cvDef" ${cur === def ? 'disabled' : ''}><span class="lamp${cur === def ? ' on' : ''}" aria-hidden="true">${icon(LAMP, 14)}</span>${cur === def ? T('Your default view') : T('Make it my default')}</button>`;
+    box.querySelectorAll('[data-cv]').forEach(b => b.onclick = () => { if (b.dataset.cv === curView()) return; state.convView = b.dataset.cv; drawViews(); drawGraph(); });
+    document.getElementById('cvDef').onclick = async () => { const b = document.getElementById('cvDef'); b.disabled = true;
+      try { ME = await apiPost('me/prefs', {prefs:{conv_view:curView()}}); } catch (e) { b.disabled = false; alert(e.message); return; } drawViews(); }; };
+  drawViews();
+  wireSeg('cvRight', k => { if (k === right) return; state.convRight = k; render(); });
+  // names of the graph's nodes and what a click on them filters by
+  const hostName = (k, nm) => k === '__other' ? T('Other hosts') : nm || k;
+  const peerName = p => p.k === '__other' ? (right === 'owner' ? T('Other owners') : right === 'country' ? T('Other countries') : T('Other addresses'))
+    : right === 'owner' ? (p.label || (p.k === '0' ? T('No owner (local or unknown)') : 'AS' + p.k)) : right === 'country' ? ccName(p.k) : (p.name || p.k);
+  const peerFilter = k => right === 'owner' ? (k !== '0' && ['asn', k]) : right === 'country' ? ['country', k] : ['dst', k];
+  const nodeFilter = id => { const [kind, ...rest] = id.split(':'), k = rest.join(':'); if (k === '__other') return null;
+    return kind === 'h' ? ['ip', k] : kind === 's' ? ['service', k] : peerFilter(k); };
+  const pick = id => { const f = nodeFilter(id); if (f) setTimeout(() => addFilter(f[0], f[1]), 0); };
+  const graphModel = () => { const g = d.graph, hn = new Map(g.hosts.map(h => [h.k, h.name])), pn = new Map(g.peers.map(p => [p.k, p]));
+    const hs = new Map(), sp = new Map(), hp = new Map();
+    for (const [l, s, r, up, dn] of g.links) { const b = up + dn;
+      hs.set(l + '\u0001' + s, (hs.get(l + '\u0001' + s) || 0) + b); sp.set(s + '\u0001' + r, (sp.get(s + '\u0001' + r) || 0) + b); hp.set(l + '\u0001' + r, (hp.get(l + '\u0001' + r) || 0) + b); }
+    const hostKeys = [...g.hosts.map(h => h.k), ...(g.links.some(x => x[0] === '__other') ? ['__other'] : [])];
+    const svcKeys = [...g.services.map(s => s.k), ...(g.links.some(x => x[1] === '__other') ? ['__other'] : [])];
+    const peerKeys = [...g.peers.map(p => p.k), ...(g.links.some(x => x[2] === '__other') ? ['__other'] : [])];
+    return {hn, pn, hs, sp, hp, hostKeys, svcKeys, peerKeys, peerLabel:k => peerName(pn.get(k) || {k}), hostLabel:k => hostName(k, hn.get(k))}; };
+  const svcCol = k => k === '__other' ? C.other : keyColor(k);
+  const tipNode = (name, b) => `<b>${esc(name)}</b><br>${fmtB(b)}`;
+  const drawGraph = () => {
+    const el = document.getElementById('cvGraph'); if (!el || !d) return;
+    if (chart) { chart.dispose(); chart = null; }
+    el.classList.remove('loading'); el.innerHTML = '';
+    if (!d.graph.links.length) { el.innerHTML = `<div class="empty">${T('No traffic under this filter')}</div>`; fill('cvLeg', ''); return; }
+    const m = graphModel(), view = curView();
+    fill('cvLeg', `<span><i style="background:${C.int}"></i>${internal ? T('clients') : T('our hosts')}</span><span><i style="background:${C.ext}"></i>${internal ? T('servers') : right === 'owner' ? T('owners outside') : right === 'country' ? T('countries') : T('outside addresses')}</span>`
+      + (view === 'flow' ? `<span>${T('the colour of a band is the service · width = bytes · click a node to filter by it')}</span>` : view === 'chord' ? `<span>${T('each band is a pair · width = bytes · click to filter')}</span>` : `<span>${T('brighter = more bytes · click a cell to filter by the pair')}</span>`));
+    if (view === 'matrix') { el.classList.add('cvmatrix'); el.innerHTML = matrixHtml(m); el.querySelectorAll('[data-mh]').forEach(c => c.onclick = () => {
+      const h = c.dataset.mh, r = c.dataset.mr, f = peerFilter(r); if (h !== '__other') putFilter({k:'ip', v:h, neg:false}); if (r !== '__other' && f) putFilter({k:f[0], v:f[1], neg:false}); state.sel = null; render(); }); return; }
+    el.classList.remove('cvmatrix');
+    chart = mkChart(el);
+    if (view === 'chord') {
+      const total = new Map(); for (const [k, b] of m.hp) { const [h, r] = k.split('\u0001'); total.set('h:' + h, (total.get('h:' + h) || 0) + b); total.set('r:' + r, (total.get('r:' + r) || 0) + b); }
+      const node = (id, name, col) => ({name:id, value:total.get(id) || 0, itemStyle:{color:col}, label:{formatter:() => name.length > 26 ? name.slice(0, 25) + '…' : name}, _n:name});
+      // peers on the right from the top, our hosts on the left (clockwise from 12 o'clock)
+      const data = [...m.peerKeys.map(k => node('r:' + k, m.peerLabel(k), k === '__other' ? C.other : C.ext)),
+                    ...[...m.hostKeys].reverse().map((k, i) => node('h:' + k, m.hostLabel(k), k === '__other' ? C.other : PAL[(m.hostKeys.length - 1 - i) % 5 === 3 ? 4 : [4, 0, 1, 2, 4][(m.hostKeys.length - 1 - i) % 5]]))];
+      const names = new Map(data.map(x => [x.name, x._n]));
+      chart.setOption({animation:true, tooltip:{...tipBase(), formatter:p => p.dataType === 'edge' ? `${esc(names.get(p.data.source))} ↔ ${esc(names.get(p.data.target))}<br>${fmtB(p.data.value)}` : tipNode(names.get(p.name), p.value)},
+        series:[{type:'chord', radius:['62%', '68%'], padAngle:2, minAngle:1, data:data.map(({_n, ...x}) => x),
+          links:[...m.hp].map(([k, b]) => { const [h, r] = k.split('\u0001'); return {source:'h:' + h, target:'r:' + r, value:b}; }),
+          label:{color:C.ink, fontFamily:'Manrope', fontSize:12}, lineStyle:{color:'source', opacity:.32}, emphasis:{focus:'adjacency', lineStyle:{opacity:.65}}}]});
+      chart.on('click', p => { if (p.dataType === 'node') pick(p.name); else if (p.dataType === 'edge') { const a = nodeFilter(p.data.source), b = nodeFilter(p.data.target);
+        setTimeout(() => { if (a) putFilter({k:a[0], v:a[1], neg:false}); if (b) putFilter({k:b[0], v:b[1], neg:false}); state.sel = null; render(); }, 0); } });
+      return;
+    }
+    // Flow: hosts → services → peers; the bands take the service's colour
+    const names = new Map(), data = [];
+    const add = (id, name, col, depth, pos) => { names.set(id, name); data.push({name:id, depth, itemStyle:{color:col, borderWidth:0}, label:{position:pos, formatter:() => name.length > 28 ? name.slice(0, 27) + '…' : name}}); };
+    m.hostKeys.forEach(k => add('h:' + k, m.hostLabel(k), k === '__other' ? C.other : C.int, 0, 'left'));
+    m.svcKeys.forEach(k => add('s:' + k, k === '__other' ? T('Other services') : dv(k), svcCol(k), 1, 'right'));
+    m.peerKeys.forEach(k => add('r:' + k, m.peerLabel(k), k === '__other' ? C.other : C.ext, 2, 'right'));
+    const links = [...[...m.hs].map(([k, b]) => { const [h, s] = k.split('\u0001'); return {source:'h:' + h, target:'s:' + s, value:b, lineStyle:{color:svcCol(s)}}; }),
+                   ...[...m.sp].map(([k, b]) => { const [s, r] = k.split('\u0001'); return {source:'s:' + s, target:'r:' + r, value:b, lineStyle:{color:svcCol(s)}}; })];
+    chart.setOption({animation:true, tooltip:{...tipBase(), formatter:p => p.dataType === 'edge' ? `${esc(names.get(p.data.source))} → ${esc(names.get(p.data.target))}<br>${fmtB(p.data.value)}` : tipNode(names.get(p.name), p.value)},
+      series:[{type:'sankey', left:150, right:170, top:8, bottom:8, nodeWidth:12, nodeGap:10, layoutIterations:0, draggable:false, data, links,
+        label:{color:C.ink, fontFamily:'Manrope', fontSize:12}, lineStyle:{curveness:.5, opacity:.36}, emphasis:{focus:'adjacency', lineStyle:{opacity:.6}}}]});
+    chart.on('click', p => { if (p.dataType === 'node') pick(p.name); });
+  };
+  const matrixHtml = m => {
+    const max = Math.max(1, ...m.hp.values()), rowT = k => m.peerKeys.reduce((a, r) => a + (m.hp.get(k + '\u0001' + r) || 0), 0), colT = r => m.hostKeys.reduce((a, k) => a + (m.hp.get(k + '\u0001' + r) || 0), 0);
+    const all = m.hostKeys.reduce((a, k) => a + rowT(k), 0);
+    return `<div class="cvmx" style="grid-template-columns:minmax(120px,170px) repeat(${m.peerKeys.length}, minmax(64px,1fr)) 84px"><div></div>${m.peerKeys.map(r => `<div class="h" title="${esc(m.peerLabel(r))}">${esc(m.peerLabel(r))}</div>`).join('')}<div class="h r">${T('in all')}</div>`
+      + m.hostKeys.map(k => `<div class="rh" title="${esc(k)}">${esc(m.hostLabel(k))}${m.hn.get(k) ? `<span class="mono">${esc(k)}</span>` : ''}</div>` + m.peerKeys.map(r => { const b = m.hp.get(k + '\u0001' + r) || 0;
+        return b ? `<button type="button" class="c" data-mh="${esc(k)}" data-mr="${esc(r)}" style="background:${hexA('#2F7BFF', .1 + .85 * Math.sqrt(b / max))}" title="${esc(m.hostLabel(k))} ↔ ${esc(m.peerLabel(r))}: ${fmtB(b)}">${fmtB(b)}</button>` : '<div class="c z">·</div>'; }).join('')
+        + `<div class="t">${fmtB(rowT(k))}</div>`).join('')
+      + `<div></div>${m.peerKeys.map(r => `<div class="t c2">${fmtB(colT(r))}</div>`).join('')}<div class="t c2 all">${fmtB(all)}</div></div>`;
+  };
+  (async () => {
+    try { d = await api('conversations', {right, limit:200}); } catch (e) { done('cvGraph', errBox(e)); ['cvSeries', 'cvNew', 'cvTable'].forEach(id => done(id, '')); return; }
+    if (seq !== renderSeq) return;
+    const t = d.total, all = t.bytes, big = d.pairs[0];
+    const kc = (ic, k, val, sub, warn) => `<section class="glass panel kcard s3${warn ? ' cvwarn' : ''}" style="grid-template-columns:auto 1fr"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v">${val}</span><span class="nat" style="grid-column:2">${sub}</span></section>`;
+    const nd = d.new_days ? Math.round(d.new_days) : 0;
+    fill('cvKpi', kc('conv', T('Conversations'), `${t.pairs.toLocaleString(LOC)} ${usageDelta(t.pairs, t.prev_pairs, true)}`, t.prev_pairs != null ? T('pairs · against the period before') : T('pairs · no period before to compare with'))
+      + kc('pie', T('The biggest pair'), big && all ? Math.round(100 * tot(big) / all) + '%' : '—', big ? `${esc(big.name || big.int_ip)} ↔ ${esc(convOwner(big) || big.ext_ip)}` : T('No traffic under this filter'))
+      + kc('pulse', T('New conversations'), t.new_owners == null ? '—' : t.new_owners.toLocaleString(LOC), t.new_owners == null ? T('needs the history of a few days before the period')
+          : T('hosts that talked to an owner for the first time in {n} days · {b}', {n:nd, b:fmtB(t.new_bytes)}), t.new_owners > 0)
+      + (internal ? kc('users', T('Between inside hosts'), t.pairs.toLocaleString(LOC), T('client → server pairs'))
+          : kc('globe', T('Countries outside'), t.countries.toLocaleString(LOC), t.top_countries.length ? T('the most: {list}', {list:t.top_countries.join(', ')}) : '—')));
+    fill('cvSub', right === 'owner' ? T('our hosts → services → who owns the addresses outside · the {n} busiest of each, the rest together', {n:8})
+      : right === 'country' ? T('our hosts → services → countries · the {n} busiest of each, the rest together', {n:8})
+      : internal ? T('clients → services → servers · the {n} busiest of each, the rest together', {n:8}) : T('our hosts → services → outside addresses · the {n} busiest of each, the rest together', {n:8}));
+    drawGraph();
+    document.getElementById('cvSec')._reload = () => { if (chart) chart.resize(); };
+    // the biggest pairs over time
+    const sel = document.getElementById('cvSeries');
+    if (sel) {
+      sel.classList.remove('loading');
+      const keys = Object.entries(d.series.keys);
+      if (!keys.length) sel.innerHTML = `<div class="empty">${T('No traffic under this filter')}</div>`;
+      else {
+        const step = d.series.step, t0 = Math.floor(d.from / step) * step, ts = []; for (let x = t0; x < d.to; x += step) ts.push(x);
+        const by = new Map(keys.map(([h]) => [h, new Map()])); for (const [x, h, b] of d.series.rows) if (by.has(h)) by.get(h).set(x, b);
+        const info = new Map(d.pairs.map(r => [r.int_ip + '|' + r.ext_ip, r])), cols = [C.up, '#2F7BFF', '#FF4FA0', C.down, '#8B5CFF'];
+        const lab = pk => { const r = info.get(pk) || {}; const [a, b] = pk.split('|'); return `${r.name || a} ↔ ${convOwner(r) || b}`; };
+        const c2 = zoomable(mkChart(sel));
+        c2.setOption({animation:false, grid:{left:14, right:10, top:12, bottom:4, containLabel:true}, tooltip:{...tipBase(), trigger:'axis', valueFormatter:v => fmtR(v)},
+          xAxis:axisX(ts), yAxis:axisY(v => fmtR(v)), toolbox:{show:false},
+          series:keys.map(([h, pk], i) => { const r = info.get(pk) || {}, col = r.new ? '#FFC34D' : cols[i % cols.length];
+            return {name:lab(pk), type:'line', smooth:.25, showSymbol:false, lineStyle:{width:2, color:col, type:r.new ? 'dashed' : 'solid'}, itemStyle:{color:col},
+              data:ts.map(x => [x * 1000, (by.get(h).get(x) || 0) * 8 / step])}; })});
+        fill('cvSerLeg', keys.map(([h, pk], i) => { const r = info.get(pk) || {}; return `<button type="button" class="link" data-pair="${esc(pk)}"><i style="background:${r.new ? '#FFC34D' : cols[i % cols.length]}"></i>${esc(lab(pk))}${r.new ? ` <span class="pill warn">${T('new')}</span>` : ''}</button>`; }).join(''));
+        document.querySelectorAll('#cvSerLeg [data-pair]').forEach(b => b.onclick = () => { const [a, z] = b.dataset.pair.split('|'); convPair({int_ip:a, ext_ip:z}); });
+      }
+    }
+    // the new ones
+    fill('cvNewSub', d.new_days ? T('hosts that talked to an owner they had not talked to in the {n} days before · the biggest', {n:nd}) : T('needs the history of a few days before the period'));
+    const nl = d.new.slice(0, 7);
+    done('cvNew', !d.new_days ? `<div class="empty">${T('FlowTrack has collected data only since {date}: new conversations show once there are a few days before the period.', {date:dmy(d.to - 0)})}</div>`
+      : !nl.length ? `<div class="empty">${T('Nobody started talking to someone new — every conversation of the period was there in the days before.')}</div>`
+      : `<div class="cvnew">${nl.map((r, i) => `<button type="button" class="cvn" data-i="${i}"><span class="a">${esc(r.name || r.int_ip)} → ${esc(r.ext_ip)}</span><span class="b mono">${fmtB(tot(r))}</span>
+          <span class="c">${[convOwner(r), r.country, dv(r.service)].filter(Boolean).map(esc).join(' · ')} · ${T('first at {t}', {t:(Date.now() / 1000 - r.first > 86400 ? dmy(r.first) + ' ' : '') + hhmm(r.first)})}${r.up > 3 * r.dn && r.up > 1e6 ? ` · ${T('↑ mostly sent')}` : ''}</span><span class="pill warn">${T('new')}</span></button>`).join('')}
+        ${t.new_pairs > nl.length ? `<button type="button" class="link cvmore" id="cvAllNew">${T('all {n} new pairs → in the table', {n:t.new_pairs.toLocaleString(LOC)})}</button>` : ''}</div>`);
+    document.querySelectorAll('#cvNew [data-i]').forEach(b => b.onclick = () => convPair(nl[+b.dataset.i]));
+    const an = document.getElementById('cvAllNew'); if (an) an.onclick = () => { state.convOnly = 'new'; setPressed('cvOnly', 'new'); table(); document.getElementById('cvTable').scrollIntoView({behavior:'smooth', block:'start'}); };
+    // all of them
+    let showAll = false;
+    const rowsNow = () => { const q = (document.getElementById('cvQ') || {}).value || '', ql = q.trim().toLowerCase();
+      const src = (state.convOnly || 'all') === 'new' ? d.new : d.pairs;
+      return !ql ? src : src.filter(r => [r.int_ip, r.name, r.ext_ip, r.ext_name, r.owner, r.service, dv(r.service), r.country, ccName(r.country), r.asn ? 'as' + r.asn : ''].some(x => String(x || '').toLowerCase().includes(ql))); };
+    const change = r => { if (r.prev == null) return '<span class="nat">—</span>'; if (!r.prev) return `<span class="nat">${T('quiet before')}</span>`; const c = Math.round(100 * (tot(r) - r.prev) / r.prev);
+      return `<span style="color:${Math.abs(c) < 5 ? 'var(--ink2)' : c > 0 ? 'var(--up)' : 'var(--down)'}">${c > 0 ? '+' : ''}${c > 999 ? '×' + Math.round(tot(r) / r.prev) : c + '%'}</span>`; };
+    const when = x => (Date.now() / 1000 - x > 86400 ? dmy(x) + ' ' : '') + hhmm(x);
+    const table = () => {
+      const rows = rowsNow(), shown = showAll ? rows : rows.slice(0, 25), cap = (state.convOnly || 'all') === 'new' ? t.new_pairs : t.pairs;
+      fill('cvAllSub', T('{n} of {all} pairs · the biggest first · click a row to filter every page by the pair', {n:rows.length.toLocaleString(LOC), all:(cap || 0).toLocaleString(LOC)}));
+      done('cvTable', !rows.length ? `<div class="empty">${T('No conversations match')}</div>` : `<div class="tw"><table class="compact cvt"><thead><tr><th>${internal ? T('Client') : T('Our host')}</th><th>${internal ? T('Server') : T('Outside')}</th><th>${T('Service')}</th>${internal ? '' : `<th>${T('Country')}</th>`}
+        <th class="num">↓ ${T('received')}</th><th class="num">↑ ${T('sent')}</th><th class="num">${T('Flows')}</th><th>${T('First in the period')}</th><th>${T('Last hour')}</th><th class="num">${T('Change')}</th></tr></thead><tbody>${shown.map((r, i) => `<tr class="click${r.new ? ' cvnewrow' : ''}" data-r="${i}" title="${T('Filter every page by this conversation')}">
+        <td>${hostCell(r.int_ip, r.name)}</td><td><span class="mono">${esc(r.ext_ip)}</span>${convOwner(r) ? ` <span class="nat">${esc(convOwner(r))}</span>` : ''}${r.new ? ` <span class="pill warn">${T('new')}</span>` : ''}</td><td>${svcBadge(r.service)}</td>${internal ? '' : `<td>${esc(r.country || '—')}</td>`}
+        <td class="num mono">${fmtB(r.dn)}</td><td class="num mono">${fmtB(r.up)}</td><td class="num mono">${fmtN(r.fl)}</td><td>${when(r.first)}</td><td>${when(r.last)}</td><td class="num mono">${change(r)}</td></tr>`).join('')}</tbody></table></div>
+        ${rows.length > shown.length ? `<button type="button" class="btn cvmore" id="cvShowAll">${T('Show all {n}', {n:rows.length.toLocaleString(LOC)})}</button>` : ''}
+        ${cap > rows.length && !document.getElementById('cvQ').value ? `<p class="note">${T('The {n} biggest are listed: narrow the period or the filters to see the rest.', {n:rows.length})}</p>` : ''}`);
+      document.querySelectorAll('#cvTable tr[data-r]').forEach(tr => tr.onclick = () => convPair(shown[+tr.dataset.r]));
+      const sa = document.getElementById('cvShowAll'); if (sa) sa.onclick = () => { showAll = true; table(); };
+    };
+    wireSeg('cvOnly', k => { state.convOnly = k; setPressed('cvOnly', k); showAll = false; table(); });
+    const qb = document.getElementById('cvQ'); if (qb) qb.oninput = () => { showAll = false; table(); };
+    document.getElementById('cvCsv').onclick = e => { e.preventDefault(); const q = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
+      const lines = [['inside', 'inside_name', 'outside', 'owner', 'asn', 'service', 'country', 'received_bytes', 'sent_bytes', 'flows', 'first', 'last', 'bytes_period_before', 'new'].join(',')]
+        .concat(rowsNow().map(r => [r.int_ip, r.name, r.ext_ip, r.owner, r.asn || '', r.service, r.country, r.dn, r.up, r.fl, new Date(r.first * 1000).toISOString(), new Date(r.last * 1000).toISOString(), r.prev ?? '', r.new ? 1 : 0].map(q).join(',')));
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], {type:'text/csv'})); a.download = `flowtrack-conversations-${new Date(d.to * 1000).toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+    table();
+  })();
+}
+
+const VIEWS = {overview:vOverview, flows:vFlows, conversations:vConversations, paths:vPaths, network:vNetwork, capacity:vCapacity, usage:vUsage, qos:vQos, talkers:vTalkers, apps:vApps, ports:vPorts, geo:vGeo, threats:vThreats, events:vEvents, settings:vSettings};
 function renderShell(){
   document.getElementById('nav').innerHTML = NAV.filter(n => n[3] !== 'admin' || isAdmin()).map(([k, l, d]) => `<button data-view="${k}" ${state.view === k || (k === 'threats' && state.view === 'events') ? 'aria-current="page"' : ''}>${icon(d)}${l}</button>`).join('');
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => { state.view = b.dataset.view; state.sel = null; state.openFlow = null; render(); });

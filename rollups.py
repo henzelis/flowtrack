@@ -61,10 +61,12 @@ ROLLUPS = {
     # (1.17.0, v2) service / country / city in the key, as in agg_ext; (v3) the interfaces and the address after NAT
     # too, for Path analysis over a period — a device carries a pair through one pair of interfaces and a host leaves
     # through one NAT address, so the rows hardly grow (a day of prod: +0.26 %)
-    'agg_conv': {'bucket': 3600, 'v': 3, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
+    # (1.18.0, v4) the outside address's AS and its owner too, for Conversations by owner (an address is one AS: the
+    # rows do not grow)
+    'agg_conv': {'bucket': 3600, 'v': 4, 'keys': [('int_ip', 'String', 'int_ip'), ('ext_ip', 'String', 'ext_ip'),
                  ('service', 'LowCardinality(String)', 'service'), ('country', 'LowCardinality(String)', 'country'),
                  ('city', 'LowCardinality(String)', 'city'), ('in_if', 'UInt32', 'in_if'), ('out_if', 'UInt32', 'out_if'),
-                 ('nat_ip', 'String', 'nat_ip')], 'attrs': []},
+                 ('nat_ip', 'String', 'nat_ip'), ('asn', 'UInt32', 'asn'), ('as_org', 'LowCardinality(String)', 'as_org')], 'attrs': []},
     # (1.17.0) Ports: the inside hosts and the outside addresses of each port, exact (an approximate count would need
     # far less room, but Yegor's rule: numbers are exact) — scanners hitting thousands of ports make these the big ones
     'agg_port_host': {'bucket': 3600, 'keys': [('ext_port', 'UInt16', 'ext_port'), ('proto', 'UInt8', 'proto'), ('int_ip', 'String', 'int_ip')],
