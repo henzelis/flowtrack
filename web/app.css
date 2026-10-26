@@ -767,7 +767,7 @@ table.evr td.evkey .chk{margin-top:4px;font-size:12px}
 .cvtools{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .cvtools .netviews{display:inline-flex;align-items:center;gap:8px}
 .cvgraph{height:470px;position:relative}
-.cvseries{height:300px}
+.cvseries{height:350px}
 .kcard.cvwarn{border-color:rgba(255,195,77,.45)} .kcard.cvwarn .v{color:var(--warn)}
 .cvgraph.cvmatrix{height:auto;min-height:200px;overflow-x:auto}
 .cvmx{display:grid;gap:4px;font-size:12.5px;min-width:640px}

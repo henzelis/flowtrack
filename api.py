@@ -1903,7 +1903,7 @@ def api_conversations(q):
     countries = [] if internal else ch(f"""SELECT country AS k, sum(bytes) AS b FROM {src(p, ['country'])} AND country != ''
         GROUP BY k ORDER BY b DESC""", p, fmt='JSON', timeout=120)
     new = (lambda k: int(tot[k]) if looks else None)      # noqa: E731
-    return {'from': p['t0'], 'to': p['t1'], 'range': rng, 'right': right, 'internal': internal,
+    return {'from': p['t0'], 'to': p['t1'], 'range': rng, 'right': right, 'internal': internal, 'since': oldest,
             'new_from': lt0 if looks else None, 'new_days': round((t0 - max(lt0, oldest)) / 86400, 1) if looks else None,
             'prev_from': pt0 if has_prev else None,
             'total': {'pairs': int(tot['pairs']), 'bytes': int(tot['bytes']), 'prev_pairs': int(tot['prev_pairs']) if has_prev else None,
