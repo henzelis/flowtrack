@@ -5,6 +5,8 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+## 1.17.2 — 2026-10-26
+
 ### Fixed
 - **The installer said «running» before the collector listened.** It waited only for the collector's process to start,
   while the collector opens its UDP port after preparing the database — what devices sent in those seconds right after
