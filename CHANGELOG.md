@@ -5,6 +5,22 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+### Added
+- **Conversations** — a page of its own: who talks to whom over the period. Four cards (how many pairs and against
+  the period before, the biggest pair's share, the new conversations, the countries outside), then **Who talks to
+  whom** in three views with each user's own default (the lamp, as on Path analysis): **Flow** — our hosts → the
+  services → who owns the addresses outside (or the countries, or the addresses themselves), **Chord** and **Matrix**
+  (exact bytes in every cell). Below: the biggest pairs over time, the **new conversations** and every pair with the
+  bytes both ways, flows, first and last hour, the change against the period before, a search, «Only new» and CSV.
+  A click on a host, a service, an owner or a pair filters every page by it. **New** means an inside host talked to
+  an owner (its AS) it had not talked to in the 7 days before — clouds and CDNs change their addresses every day, so
+  «new address» would mark half of the pairs. Everything comes from the conversations per hour, now with the AS of the
+  outside address: one rebuild of that table at the upgrade.
+- *Overview* and *Flows*: **All conversations →** on the Top conversations panel.
+
+### Changed
+- Charts: ECharts 6.0 (was 5.5). Every page looks as before; the Chord view needs it.
+
 ## 1.17.2 — 2026-10-26
 
 ### Fixed
