@@ -55,7 +55,7 @@ class TemplatePersistence(unittest.TestCase):
         self.assertEqual([(x[0], x[1], x[2], x[17]) for x in f], [('10.0.0.5', '198.51.100.7', 1000, 0)])
 
     def test_saved_before_domains_serve_any_domain(self):
-        # templates.json of FlowTrack <= 1.9.4 has no source ID: such a template serves until the domain resends it
+        # templates.json of FlowSphera <= 1.9.4 has no source ID: such a template serves until the domain resends it
         d = decoder()
         d.packet('x', v9(FLOW_TPL), NOW)
         saved = json.loads(d.templates_json())['x']

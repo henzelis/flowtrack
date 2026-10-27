@@ -2,8 +2,8 @@
 <style>.ink{fill:#1f2328}.mute{fill:#59636e}.old{fill:#eb6834}.new{fill:#2a78d6}.grid{stroke:#d1d9e0}@media (prefers-color-scheme: dark){.ink{fill:#e6edf3}.mute{fill:#9198a1}.old{fill:#d95926}.new{fill:#3987e5}.grid{stroke:#3d444d}}</style>
 <text class="ink" x="0" y="22" font-size="17" font-weight="600">Доба на екрані, у ній 216 мільйонів записів</text>
 <text class="mute" x="0" y="44" font-size="13">5 000 записів/с протягом 12 годин · секунд, доки сторінка отримає всі дані · VM на 6 vCPU · без кешу</text>
-<path class="old" d="M0,60 h10.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-10.0 z"/><text class="ink" x="20" y="71" font-size="13">FlowTrack 1.16.2</text>
-<path class="new" d="M130,60 h10.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-10.0 z"/><text class="ink" x="150" y="71" font-size="13">FlowTrack 1.17.0</text>
+<path class="old" d="M0,60 h10.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-10.0 z"/><text class="ink" x="20" y="71" font-size="13">FlowSphera 1.16.2</text>
+<path class="new" d="M130,60 h10.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-10.0 z"/><text class="ink" x="150" y="71" font-size="13">FlowSphera 1.17.0</text>
 <line class="grid" x1="150" y1="84" x2="150" y2="460" stroke-width="1"/>
 <text class="ink" x="140" y="108" font-size="13" text-anchor="end">Огляд</text>
 <path class="old" d="M150,92 h491.0 a4,4 0 0 1 4,4 v4 a4,4 0 0 1 -4,4 h-491.0 z"/>

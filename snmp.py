@@ -1,6 +1,6 @@
 """SNMP v2c / v3: the names and addresses of a device's interfaces (Settings → Devices).
 
-NetFlow carries interface indexes only. With SNMP on, FlowTrack reads IF-MIB (ifName, ifDescr, ifAlias, ifOperStatus,
+NetFlow carries interface indexes only. With SNMP on, FlowSphera reads IF-MIB (ifName, ifDescr, ifAlias, ifOperStatus,
 ifHighSpeed) and IP-MIB (ipAddrTable, ipAddressTable) when the device is saved and then every hour. The names and
 addresses are used wherever the user entered none by hand (Through device, Path analysis).
 

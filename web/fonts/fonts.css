@@ -1,6 +1,6 @@
 /* Manrope, JetBrains Mono and (1.17.0) Michroma — the TELESPHERA wordmark, Latin only (SIL Open Font License 1.1:
    OFL-Manrope.txt, OFL-JetBrainsMono.txt, OFL-Michroma.txt), served by
-   FlowTrack itself: the browser asks nobody else. Latin and Cyrillic; variable fonts (one file per alphabet). */
+   FlowSphera itself: the browser asks nobody else. Latin and Cyrillic; variable fonts (one file per alphabet). */
 @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400 700; font-display: swap;
   src: url(jetbrainsmono-cyrillic-ext.woff2) format('woff2'); unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F; }
 @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400 700; font-display: swap;

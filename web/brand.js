@@ -1,4 +1,4 @@
-// (1.17.0) FlowTrack by TELESPHERA: the TELESPHERA globe — latitude arcs of a tilted sphere, the front ones solid, the
+// (1.17.0) FlowSphera by TELESPHERA: the TELESPHERA globe — latitude arcs of a tilted sphere, the front ones solid, the
 // back dissolving into faint dots, nodes at the ends of arcs — drawn in code as on telesphera.net (same geometry), on
 // every canvas[data-logo] (the sidebar, the sign-in box; the ones made later too) and once as the tab's icon. It turns
 // slowly (~18 s a turn, 30 frames/s on a 36 px canvas: nothing on a NOC screen); still when the system asks for less motion.

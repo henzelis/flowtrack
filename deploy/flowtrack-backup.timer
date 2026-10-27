@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowTrack backup check every 5 minutes (backup.py decides whether a scheduled backup is due)
+Description=FlowSphera backup check every 5 minutes (backup.py decides whether a scheduled backup is due)
 
 [Timer]
 OnBootSec=3min

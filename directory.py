@@ -1,6 +1,6 @@
 """Sign-in through a directory (1.12.0): Active Directory or any LDAP server.
 
-FlowTrack looks the user up with a service account (bind DN + password), checks the password by binding as the user
+FlowSphera looks the user up with a service account (bind DN + password), checks the password by binding as the user
 found, and gives the role of the user's groups: one of the administrator groups -> admin, one of the viewer groups ->
 viewer (or anyone who signs in, when that is ticked); nobody else gets in. Active Directory groups count nested (the
 LDAP_MATCHING_RULE_IN_CHAIN rule), other servers by memberOf or by the groups' member / uniqueMember / memberUid.
@@ -25,7 +25,7 @@ KINDS = ('ad', 'ldap')
 SECURITY = ('ldaps', 'starttls', 'none')
 HOST_RE = re.compile(r'^([A-Za-z0-9_-]{1,63}\.)*[A-Za-z0-9_-]{1,63}$|^[0-9a-fA-F:.]{2,39}$')
 USER_RE = re.compile(r'^[A-Za-z0-9._@-]{1,128}$')
-NAME_RE = re.compile(r'^[A-Za-z0-9._-]{1,64}$')         # what a directory user is called in FlowTrack
+NAME_RE = re.compile(r'^[A-Za-z0-9._-]{1,64}$')         # what a directory user is called in FlowSphera
 FILTERS = {'ad': '(&(objectCategory=person)(objectClass=user)(|(sAMAccountName={u})(userPrincipalName={u})))',
            'ldap': '(&(|(objectClass=inetOrgPerson)(objectClass=posixAccount)(objectClass=person))(uid={u}))'}
 NAME_ATTR = {'ad': 'sAMAccountName', 'ldap': 'uid'}
@@ -214,7 +214,7 @@ def _service(cfg):
 
 
 def _find(cfg, conn, username):
-    """-> (dn, name in FlowTrack, memberOf list) of the one entry the filter finds, or None."""
+    """-> (dn, name in FlowSphera, memberOf list) of the one entry the filter finds, or None."""
     from ldap3.utils.conv import escape_filter_chars
     flt = (cfg['user_filter'] or FILTERS[cfg['kind']]).replace('{u}', escape_filter_chars(username))
     attr = NAME_ATTR[cfg['kind']]
@@ -279,7 +279,7 @@ def authenticate(cfg, username, password):
         return None
     user.unbind()
     if not NAME_RE.match(name):
-        raise DirectoryError(tr('The directory name {name} cannot be used in FlowTrack (letters, digits, dot, hyphen, underscore).', name=name[:80]))
+        raise DirectoryError(tr('The directory name {name} cannot be used in FlowSphera (letters, digits, dot, hyphen, underscore).', name=name[:80]))
     return {'name': name, 'role': role_of(cfg, groups), 'dn': dn, 'groups': groups}
 
 

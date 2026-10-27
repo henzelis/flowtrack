@@ -1,6 +1,6 @@
 # Install, upgrade and server commands
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
@@ -54,7 +54,7 @@ Other commands on the server:
 | `flowtrack status` | version, services, edition |
 | `sudo flowtrack license status` / `activate KEY` / `renew` / `deactivate` | license of this server (`renew`: ask the license server for a renewal now; see [Editions](editions.md)) |
 | `sudo flowtrack reconfigure` | the installer's questions again: ports, device, admin password, firewall |
-| `sudo flowtrack uninstall` | remove FlowTrack; asks whether to keep the data |
+| `sudo flowtrack uninstall` | remove FlowSphera; asks whether to keep the data |
 
 ## Requirements
 

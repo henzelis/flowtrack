@@ -1,4 +1,4 @@
-"""Pre-aggregated flow tables (FlowTrack 1.3.3): 5-minute totals per exporter x direction x a few dimensions, kept
+"""Pre-aggregated flow tables (FlowSphera 1.3.3): 5-minute totals per exporter x direction x a few dimensions, kept
 like the records they come from. A day of a busy network (tens of millions of records) becomes a few hundred
 thousand rows, so pages over hours and days read 10-100x less.
 

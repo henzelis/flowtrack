@@ -1,6 +1,6 @@
 # API
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 JSON over HTTP — with the session cookie of the UI, or with an **API token** (see below). Read endpoints take `range` (`1h`, `6h`, `24h`, `7d`,
 `30d`) or `from` + `to` (unix seconds, from 1 minute up to the retention of flow details) and `f` (JSON list of `{"k": …, "v": …, "neg": bool}` filters; keys `ip` / `dst` (an address or a network such as
@@ -34,7 +34,7 @@ JSON over HTTP — with the session cookie of the UI, or with an **API token** (
 ## API tokens
 
 For scripts, monitoring (Zabbix, Grafana, your own) and integrations: *Settings → API → New token*. A token is shown
-once — FlowTrack keeps only its SHA-256 — and is sent in a header:
+once — FlowSphera keeps only its SHA-256 — and is sent in a header:
 
 ```bash
 curl -k -H "Authorization: Bearer ftapi_…" "https://flowtrack.example.com:3030/api/summary?range=24h&f=[]"
@@ -70,7 +70,7 @@ curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Beare
 ```
 
 - `up` — bytes the host sent (uploaded), `dn` — bytes it received (downloaded), `fl` — flow records, `pk` — packets,
-  `name` — the host's name when FlowTrack knows it; `total` — all the traffic under the filters. Rows: the busiest first.
+  `name` — the host's name when FlowSphera knows it; `total` — all the traffic under the filters. Rows: the busiest first.
 - **The network**: `{"k":"ip","v":"10.0.1.0/24"}` (any CIDR, IPv4 or IPv6) or a named network of *Settings → Flow
   configuration*: `{"k":"net","v":"Office"}`. Any other filter narrows it further, as in the search box:
   `{"k":"device","v":"fw-main"}`, `{"k":"service","v":"YouTube"}`, `{"k":"country","v":"US","neg":true}`.
@@ -78,7 +78,7 @@ curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Beare
   edition keeps flow details (Community: 31).
 - **Traffic**: `t=internet` (default, with outside addresses), `t=internal` (between your hosts), `t=all`.
 - **`limit=all`** returns every host, up to 100,000; `"truncated": true` means there were more — narrow the filters (a
-  smaller network, a shorter period). A number keeps to 1–500 (`0` or `-1` mean 1). Names come from what FlowTrack
+  smaller network, a shorter period). A number keeps to 1–500 (`0` or `-1` mean 1). Names come from what FlowSphera
   knows already: an export never starts reverse DNS lookups.
 - **CSV**: add `format=csv` — a file `flowtrack-int_ip.csv` (UTF-8 with a BOM, opens in Excel as is):
 
@@ -100,12 +100,12 @@ host,name,upload_bytes,download_bytes,flows,packets,total_bytes
 ## Webhooks
 
 *Settings → Events → Notifications → Webhook*: new events go out as an HTTP `POST` with a JSON body, with the same
-priority threshold, kinds and hourly limit as Telegram and e-mail (the SIEM channel below has no hourly limit). Formats: **FlowTrack JSON** (below), **Slack /
+priority threshold, kinds and hourly limit as Telegram and e-mail (the SIEM channel below has no hourly limit). Formats: **FlowSphera JSON** (below), **Slack /
 Mattermost / Rocket.Chat** (`{"text": …}`) and **Discord** (`{"content": …}`) — for those, paste their incoming
 webhook address. An optional extra header (`Authorization: Bearer …`, `X-Api-Key: …`) is sent with each request.
 
 ```json
-{"source": "FlowTrack", "version": "1.11.0", "link": "https://flowtrack.example.com:3030", "more": 0,
+{"source": "FlowSphera", "version": "1.11.0", "link": "https://flowtrack.example.com:3030", "more": 0,
  "events": [{"kind": "port_scan", "severity": "warn", "title": "Port scan",
              "text": "203.0.113.5 (NL, Example) tried 9 ports of ours: 22, 80, 443, …",
              "details": {"src": "203.0.113.5", "hits": 3, "first_seen": "2026-10-18 10:00:00", "…": "…"}}]}

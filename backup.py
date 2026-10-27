@@ -254,7 +254,7 @@ def decrypt_stream(src, dst, passphrase):
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     head = src.read(len(MAGIC) + 24)
     if not head.startswith(MAGIC) or len(head) != len(MAGIC) + 24:
-        raise BackupError(tr('Not an encrypted FlowTrack backup.'))
+        raise BackupError(tr('Not an encrypted FlowSphera backup.'))
     salt, log_n, prefix = head[len(MAGIC):len(MAGIC) + 16], head[len(MAGIC) + 16], head[len(MAGIC) + 17:]
     if not 10 <= log_n <= 20:                  # the file is not trusted: a huge scrypt cost would never finish
         raise BackupError(tr('The backup file is damaged.'))
@@ -422,7 +422,7 @@ class SFTP(Dest):
                 return cls.from_private_key(io.StringIO(text))
             except (p.SSHException, ValueError):
                 continue
-        raise BackupError(tr('SFTP: the private key is not an OpenSSH key FlowTrack can read (without a passphrase).'))
+        raise BackupError(tr('SFTP: the private key is not an OpenSSH key FlowSphera can read (without a passphrase).'))
 
     def _mkdirs(self):
         if self.dir in ('.', '/'):
@@ -1173,13 +1173,13 @@ def restore(bid, data=True, settings=True, with_license=False, force=False, log=
     name until the backup is in place, and comes back if the restore fails."""
     m = _manifest(bid)
     if _ver(m['version']) > _ver(VERSION) and not force:
-        raise BackupError(tr('The backup is from FlowTrack {v}, newer than this {cur}: upgrade first (sudo flowtrack upgrade).', v=m['version'], cur=VERSION))
+        raise BackupError(tr('The backup is from FlowSphera {v}, newer than this {cur}: upgrade first (sudo flowtrack upgrade).', v=m['version'], cur=VERSION))
     if data and _db_exists(ASIDE):
         raise BackupError(tr('An earlier restore did not finish: the flow data from before it is kept as {aside}. Run sudo flowtrack restore --undo to put it back, then try again.', aside=ASIDE))
     problems = verify(bid, log=log, settings=settings)
     if problems:
         raise BackupError(tr('The backup is not intact:') + '\n  ' + '\n  '.join(problems))
-    log(tr('Stopping FlowTrack…'))
+    log(tr('Stopping FlowSphera…'))
     _systemctl('stop', *SERVICES)
     try:
         if data:
@@ -1200,7 +1200,7 @@ def restore(bid, data=True, settings=True, with_license=False, force=False, log=
             log(tr('Restoring the settings…'))
             _restore_settings(os.path.join(DIR, bid, 'settings.tar.gz'), with_license)
     finally:
-        log(tr('Starting FlowTrack…'))
+        log(tr('Starting FlowSphera…'))
         _systemctl('start', *SERVICES)
     log(tr('Restored {id} ({when}).', id=bid, when=time.strftime('%Y-%m-%d %H:%M', time.localtime(m['t']))))
 
@@ -1220,12 +1220,12 @@ def undo(log=print):
     """After a restore that did not finish: the flow data from before it back in its place."""
     if not _db_exists(ASIDE):
         raise BackupError(tr('Nothing to undo: no flow data was set aside by a restore.'))
-    log(tr('Stopping FlowTrack…'))
+    log(tr('Stopping FlowSphera…'))
     _systemctl('stop', *SERVICES)
     try:
         _put_back(log)
     finally:
-        log(tr('Starting FlowTrack…'))
+        log(tr('Starting FlowSphera…'))
         _systemctl('start', *SERVICES)
 
 
@@ -1379,7 +1379,7 @@ def main(argv=None):
     with contextlib.suppress(OSError):
         with open(os.path.join(CONFIG_DIR, 'install-lang')) as f:
             set_lang(f.read().strip())
-    ap = argparse.ArgumentParser(prog='flowtrack', description=tr('FlowTrack backups'))
+    ap = argparse.ArgumentParser(prog='flowtrack', description=tr('FlowSphera backups'))
     sub = ap.add_subparsers(dest='cmd')
     b = sub.add_parser('backup')
     b.add_argument('what', nargs='?', default='now', choices=('now', 'list', 'verify', 'prune', 'copy', 'delete', 'service'))
@@ -1474,7 +1474,7 @@ def main(argv=None):
                 raise BackupError(tr('No backup {id}.', id=a.id))
             m = next(m for m in ms if m['id'] == a.id)
             what = tr('the settings') if a.only_settings else tr('the flow data') if a.only_data else tr('the flow data and the settings')
-            print(tr('Restore {id} ({when}, FlowTrack {v}): {what} of this server are replaced; collecting stops for the time of it.',
+            print(tr('Restore {id} ({when}, FlowSphera {v}): {what} of this server are replaced; collecting stops for the time of it.',
                      id=a.id, when=time.strftime('%Y-%m-%d %H:%M', time.localtime(m['t'])), v=m.get('version', '?'), what=what))
             if not a.yes and input(tr('Type yes to go on: ')).strip().lower() not in ('yes', 'y', tr('yes').lower()):
                 print(tr('Nothing changed.'))

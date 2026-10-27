@@ -1,4 +1,4 @@
-# The compiled FlowTrack core this version runs with: release core-v<version> on GitHub, SHA-256 of each build.
+# The compiled FlowSphera core this version runs with: release core-v<version> on GitHub, SHA-256 of each build.
 # The installer downloads the file for the server's CPU and refuses one that does not match.
 version 1.6.0
 x86_64 3142a9388cea97c7eeed7866e285c22f1971f7ddbdc94accd417e80c97f83756

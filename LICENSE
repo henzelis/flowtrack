@@ -1,11 +1,11 @@
-FlowTrack — Copyright (c) 2026 Henzelis. The licensor below is Henzelis.
+FlowSphera — Copyright (c) 2026 Henzelis. The licensor below is Henzelis.
 
 The source code in this repository is licensed under the Elastic License 2.0 (the text follows).
-In short: you may use, copy, modify and run FlowTrack, but you may not provide it to others as a hosted or managed
+In short: you may use, copy, modify and run FlowSphera, but you may not provide it to others as a hosted or managed
 service, and you may not move, change, disable or circumvent the license key functionality (the edition limits
 and the license checks).
 
-The FlowTrack core (ftcore) is distributed in compiled form only, under the FlowTrack End User License Agreement.
+The FlowSphera core (ftcore) is distributed in compiled form only, under the FlowSphera End User License Agreement.
 
 Versions up to and including 1.1.0 were published under the MIT License; those versions remain available under
 MIT. Everything published after them is under the terms below.

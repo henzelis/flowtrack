@@ -3,7 +3,7 @@ time, the busiest hosts, outside networks, services, countries, named networks, 
 e-mailed through the mail server of Settings -> Notifications to the report's own recipients.
 
 The numbers come from the same queries as the pages (the web service runs the reports: `call(path, q)` is its API in
-process), so a report never disagrees with what FlowTrack shows for that period. A period is whole local days of the
+process), so a report never disagrees with what FlowSphera shows for that period. A period is whole local days of the
 report's time zone: a daily report covers yesterday, a weekly one Monday to Sunday, a monthly one the calendar month,
 each sent at its hour on the first day after it. A server that was off at that hour sends it when it is back (within
 the next period); a failed sending is tried again every 15 minutes, 8 times.
@@ -744,7 +744,7 @@ def render(r, data, t0, t1, version='', now=None):
                              Paragraph(f'<b>{esc(e["title"])}</b><br/><font color="{INK2}">{esc(e["text"][:400])}</font>', P),
                              Paragraph(f'<font color="{INK2}" size="7.4">{esc(e.get("last") or e.get("when", ""))}</font>', PR)])
             note = trn(len(ev), '{n} event in this period.', '{n} events in this period.') + \
-                (' ' + tr('The 15 most important are shown; all of them are in FlowTrack → Events.') if len(ev) > 15 else '')
+                (' ' + tr('The 15 most important are shown; all of them are in FlowSphera → Events.') if len(ev) > 15 else '')
             section(tr('Security events'), *graphs, chips, Spacer(0, 2 * mm),
                     table(['', tr('Event'), tr('Last seen')], body, [6 * mm, W - 6 * mm - 30 * mm, 30 * mm], right=(2,)), note=note)
 
@@ -798,13 +798,13 @@ def render(r, data, t0, t1, version='', now=None):
         c.saveState()
         c.setFont('FT', 7)
         c.setFillColor(C(INK3))
-        c.drawString(16 * mm, 9 * mm, f"FlowTrack {version} · {tr('made {when}', when=made)}".strip())
+        c.drawString(16 * mm, 9 * mm, f"FlowSphera {version} · {tr('made {when}', when=made)}".strip())
         c.drawRightString(A4[0] - 16 * mm, 9 * mm, f"{plabel} · {tr('page {n}', n=doc.page)}")
         c.restoreState()
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=16 * mm, rightMargin=16 * mm, topMargin=16 * mm, bottomMargin=16 * mm,
-                            title=f'{title} — {plabel}', author='FlowTrack', creator='FlowTrack')
+                            title=f'{title} — {plabel}', author='FlowSphera', creator='FlowSphera')
     story.insert(0, Spacer(0, 24 * mm))       # under the head of the first page
     doc.build(story, onFirstPage=first, onLaterPages=later)
     return buf.getvalue()
@@ -814,7 +814,7 @@ def render(r, data, t0, t1, version='', now=None):
 
 def cover(r, data, t0, t1, now):
     """What the report can really cover of the period (1.10.0). `oldest` of the summary is the first record of the
-    period — or, when it has none, the moment FlowTrack began receiving (0: never). -> {'kind', 't0', 't1'}:
+    period — or, when it has none, the moment FlowSphera began receiving (0: never). -> {'kind', 't0', 't1'}:
     full; part (records from a moment inside the period); later (none in the period, all came after it: the report
     shows what there is instead, up to one period long); silent (the devices sent nothing then); none (never)."""
     s = data['summary']
@@ -843,19 +843,19 @@ def cover_note(r, cov, p0, p1):
     have = period_label(r, cov['t0'], cov['t1'])
     if k == 'part':
         return (tr('Not the whole period: records from {start}', start=start),
-                tr('FlowTrack has records of {period} only from {start} (it began collecting then, or older records are no longer kept). '
+                tr('FlowSphera has records of {period} only from {start} (it began collecting then, or older records are no longer kept). '
                    'The report covers {have}.', period=period_label(r, p0, p1), start=start, have=have))
     if k == 'later':
         return (tr('No records of {period} yet: the report shows {have}', period=period_label(r, p0, p1), have=have),
-                tr('FlowTrack has been collecting since {start}, after this period ended. So that the report is not empty, it shows '
+                tr('FlowSphera has been collecting since {start}, after this period ended. So that the report is not empty, it shows '
                    'everything collected so far; the next one will cover its whole period.', start=start))
     if k == 'before':
         return (tr('No records of {period}', period=period_label(r, p0, p1)),
-                tr('FlowTrack has records only from {start}, after this period (or older records are no longer kept).', start=start))
+                tr('FlowSphera has records only from {start}, after this period (or older records are no longer kept).', start=start))
     if k == 'silent':
         return (tr('No records in this period'),
-                tr('FlowTrack was running, but the devices sent it nothing then. Check them in Settings → Devices.'))
-    return (tr('FlowTrack has not received any records yet'),
+                tr('FlowSphera was running, but the devices sent it nothing then. Check them in Settings → Devices.'))
+    return (tr('FlowSphera has not received any records yet'),
             tr('Connect a firewall, router or switch in Settings → Devices: the next report will show its traffic.'))
 
 
@@ -921,8 +921,8 @@ def mail(r, pdf, data, t0, t1, cfg=None):
                 f'</table><p style="margin:14px 0 0">{html.escape(tr("The full report is attached (PDF)."))}</p>')
         if cfg.get('link'):
             body += (f'<p><a href="{html.escape(cfg["link"])}" style="display:inline-block;background:#2f7bff;color:#fff;'
-                     f'text-decoration:none;padding:8px 14px;border-radius:7px;font-weight:700">{html.escape(tr("Open FlowTrack"))}</a></p>')
-        msg = notify._mail(m, f"FlowTrack: {r['name']} — {plabel}", text, body)
+                     f'text-decoration:none;padding:8px 14px;border-radius:7px;font-weight:700">{html.escape(tr("Open FlowSphera"))}</a></p>')
+        msg = notify._mail(m, f"FlowSphera: {r['name']} — {plabel}", text, body)
     finally:
         set_lang(ui)
     msg.add_attachment(pdf, maintype='application', subtype='pdf', filename=file_name(r, t0))

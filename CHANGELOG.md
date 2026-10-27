@@ -5,6 +5,12 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ## Unreleased
 
+**FlowTrack is now FlowSphera** (FlowSphera by TELESPHERA): a name of its own — «FlowTrack» is also the name of
+unrelated products. Only the name changes: the logo, the repository, the `flowtrack` command, the folders, the
+services and the database stay as they are, and an installation upgrades as before (`sudo flowtrack upgrade`). What
+other systems read stays too: SIEM / syslog lines (`CEF:0|FlowTrack|FlowTrack|…`, app name `FlowTrack`), the webhook
+JSON `"source": "FlowTrack"` and its `X-FlowTrack-*` headers — rules and signature checks keep working.
+
 ### Added
 - **Conversations** — a page of its own: who talks to whom over the period. Four cards (how many pairs and against
   the period before, the biggest pair's share, the new conversations, the countries outside), then **Who talks to

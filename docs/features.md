@@ -1,6 +1,6 @@
 # Features in detail
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 **New in 1.16**
 - **QoS (DSCP)**: the class each record carried on the way in (and on the way out where the device says, e.g.
@@ -10,7 +10,7 @@
 **New in 1.15**
 - **Usage**: what each host downloaded and uploaded this month, last month or the last 7 – 365 days (as far as the
   edition keeps data), against the same time before it; day by day, who uses most, the biggest changes, by network,
-  every host as CSV. Everything FlowTrack keeps is shown somewhere and kept as long as the license says: the hourly
+  every host as CSV. Everything FlowSphera keeps is shown somewhere and kept as long as the license says: the hourly
   per-host totals kept for 3 years whatever the edition (shown nowhere) are gone.
 
 **New in 1.14**
@@ -30,7 +30,7 @@
 
 **New in 1.11**
 - **API tokens** (*Settings → API*) for scripts and monitoring — read only, or read and change — and **webhooks**
-  (FlowTrack JSON, Slack / Mattermost / Rocket.Chat, Discord; signed with HMAC-SHA256) next to Telegram and e-mail.
+  (FlowSphera JSON, Slack / Mattermost / Rocket.Chat, Discord; signed with HMAC-SHA256) next to Telegram and e-mail.
 - **SIEM / syslog export**: every event as RFC 5424 syslog over UDP / TCP / TLS, in CEF or JSON, for Splunk, QRadar,
   ArcSight, Sentinel, Elastic, Graylog, Wazuh.
 
@@ -153,11 +153,11 @@
   (botnet controllers, malware hosts, criminal netblocks, attackers — eight free public lists plus your own; ThreatFox
   asks for abuse.ch's free Auth-Key, entered in Settings → Events → IP reputation, where any list can get a key); plus
   sustained upload, bursts, new countries, export health, links near their capacity, and scheduled reports that could
-  not be sent. FlowTrack works out who opened each connection (NetFlow has no such field) and which of your
+  not be sent. FlowSphera works out who opened each connection (NetFlow has no such field) and which of your
   services are public, so web sites with thousands of visitors stay quiet. One event per source that grows while it
   goes on; each kind can be switched off, given a priority and its thresholds; addresses, networks and ASNs can be
   ignored and a connection excluded in one direction (Settings → Events → Exceptions). New events can go to Telegram
-  through your own bot, by e-mail (the mail server of Settings → General), to a webhook (FlowTrack JSON, Slack /
+  through your own bot, by e-mail (the mail server of Settings → General), to a webhook (FlowSphera JSON, Slack /
   Mattermost / Rocket.Chat, Discord; HMAC-signed) and to a SIEM as syslog (RFC 5424, CEF or JSON, over UDP / TCP /
   TLS) — once each, by priority and kind, per channel; the SIEM gets every event, without the hourly limit.
 - *Reports*: a PDF of the last day, week (on the weekday you choose) or month (on the day you choose), e-mailed at its

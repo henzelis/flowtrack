@@ -1,4 +1,4 @@
-"""Detections (FlowTrack 1.6.0): port scans, password guessing, probes of management services, aggressive web
+"""Detections (FlowSphera 1.6.0): port scans, password guessing, probes of management services, aggressive web
 clients, DDoS / floods and inside hosts that scan. The collector runs them over every closed 10-minute window and
 keeps what it finds in the `events` table: one event per kind and source (or service) that grows while the activity
 goes on, so a scanner that knocks all day is one line, not a hundred.

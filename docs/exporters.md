@@ -1,11 +1,11 @@
 # Exporter configuration
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 **Which interfaces.** Enable export on every interface whose traffic you want to see: the WAN for
 internet traffic, internal interfaces (LAN, VLANs, VPN tunnels) for traffic between your own networks.
 Monitoring both directions (ingress and egress) is fine: when a flow is reported on the way in and again
-on the way out, FlowTrack keeps one copy if the record carries the direction field (NetFlow v9
+on the way out, FlowSphera keeps one copy if the record carries the direction field (NetFlow v9
 `DIRECTION` / IPFIX `flowDirection`), and Settings → Devices warns when an exporter sends copies that
 cannot be told apart. The *Internet / Internal / All* selector in the top bar switches between internet
 traffic and traffic between inside addresses. Inside traffic is shown client -> server: who started the session
@@ -87,7 +87,7 @@ snippets.
 **SNMP (optional).** Tick *Read interface names and IP addresses over SNMP* in the device dialog, choose v2c
 (community) or v3 (user, authentication MD5 / SHA / SHA-2, privacy DES / AES / AES-192 / AES-256): the dialog adds
 the matching SNMP configuration to the device snippet, and *Test SNMP* checks it before saving. The device must let
-the FlowTrack server poll it (UDP 161; FortiGate: `allowaccess snmp` on the interface, the community's host list).
-FlowTrack polls read-only with the net-snmp tools (package `snmp`, installed by the installer); the community and
+the FlowSphera server poll it (UDP 161; FortiGate: `allowaccess snmp` on the interface, the community's host list).
+FlowSphera polls read-only with the net-snmp tools (package `snmp`, installed by the installer); the community and
 v3 passwords are kept in `/var/lib/flowtrack/snmp.json` (readable by the service only) and are never sent back to
 the browser. Use the same `ifIndex` for SNMP and NetFlow — on Cisco IOS keep `snmp-server ifindex persist`.

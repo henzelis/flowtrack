@@ -1,10 +1,10 @@
 # Performance
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 **Long periods (1.17.0).** A synthetic busy network sending 5,000 records/s (the most Community stores) for 12 hours —
 216 million records, 9.7 GiB on disk — and pages asked for the day that holds them, in a VM with 6 vCPUs of an Intel Core i5-1145G7 and 12 GB of RAM (ClickHouse ~6 GiB),
-measured on 2026-10-25 by FlowTrack's regression lab: the same data, first on 1.16.2, then upgraded to 1.17.0 and its
+measured on 2026-10-25 by FlowSphera's regression lab: the same data, first on 1.16.2, then upgraded to 1.17.0 and its
 new summary tables filled; 656 requests (every page × period × filter), nothing cached. A page sends its requests at
 once, so a page takes as long as its slowest one:
 
@@ -25,7 +25,7 @@ every summary table was compared with the records, row by row (the same keys and
 the records for a day: a chosen host's ports, QoS and geolocation, the device map under a port filter (the slowest
 request left: 27 s), and live windows of a few minutes.
 
-Measured on 2026-10-08 with FlowTrack 1.3.3 in a VM with 4 vCPUs of an Intel Core i5-1145G7 (a laptop-class CPU)
+Measured on 2026-10-08 with FlowSphera 1.3.3 in a VM with 4 vCPUs of an Intel Core i5-1145G7 (a laptop-class CPU)
 and 4 GB of RAM; ClickHouse runs in the same VM with the 2 GiB the installer gives it on such a machine.
 
 **Receiving.** Real FortiGate NetFlow v9 packets (about 10 records each) offered at a steady rate for 2 minutes;
@@ -41,7 +41,7 @@ Short bursts above these rates are absorbed by the queues (one worker took 62,50
 Whatever does not fit is dropped at the worker queues, counted and shown in Settings → Devices — never silently. One
 worker decodes and enriches about **74,000 records per second** on one core (the decoder is compiled); the rest of
 the CPU goes to the receiver and to ClickHouse's inserts and merges. For scale: a small office firewall exports a few
-records per second, a busy 1 Gbit/s internet edge typically a few thousand. FlowTrack Community stores up to 5,000
+records per second, a busy 1 Gbit/s internet edge typically a few thousand. FlowSphera Community stores up to 5,000
 records/s (see [Editions](editions.md)).
 
 **Pages.** A synthetic busy network of 40 million records a day (about 460 records/s on average; 5,000 inside hosts,

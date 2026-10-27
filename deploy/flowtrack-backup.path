@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowTrack backup asked for by the web interface
+Description=FlowSphera backup asked for by the web interface
 
 [Path]
 PathExists=/var/lib/flowtrack/backup.request

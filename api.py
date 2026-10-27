@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FlowTrack API + web UI server (stdlib HTTP server, ClickHouse over HTTP).
+"""FlowSphera API + web UI server (stdlib HTTP server, ClickHouse over HTTP).
 
 All user input reaches ClickHouse only as bound query parameters ({name:Type}),
 never by string interpolation; dimension names come from fixed whitelists.
@@ -439,9 +439,9 @@ def edition_info(admin=False):
 # Licensing messages come in English from the core and the license server; in another UI language they are shown by
 # these English texts of the dictionaries (N_ marks a text for them), in English as they came.
 _LICENSE_MSGS = {
-    N_('this is not a FlowTrack license code'), N_('the license code was mistyped or cut short'),
-    N_('this license is for another FlowTrack version'), N_('this license is for another FlowTrack edition'),
-    N_('the license was not issued by FlowTrack or was altered'), N_('this license was deactivated on this server to move it elsewhere'),
+    N_('this is not a FlowSphera license code'), N_('the license code was mistyped or cut short'),
+    N_('this license is for another FlowSphera version'), N_('this license is for another FlowSphera edition'),
+    N_('the license was not issued by FlowSphera or was altered'), N_('this license was deactivated on this server to move it elsewhere'),
     N_('the system clock is behind — set the correct date and time (NTP)'), N_('no license is installed')}
 
 
@@ -459,6 +459,8 @@ _SERVER_MSGS = {
 def license_message(code, msg, lic=None):
     """A licensing message in the UI language."""
     lic = lic or {}
+    # (1.18.0) the compiled core and the license server still say «FlowTrack» (the product's former name)
+    msg = (msg or '').replace('FlowTrack', 'FlowSphera')
     if get_lang() == 'en':
         return msg or ''
     if code == 'in_use':
@@ -472,7 +474,7 @@ def license_message(code, msg, lic=None):
     if code == 'unknown' and 'license key' not in msg:
         return tr('this license was not issued by the license server')
     if code == 'invalid' and 'license key' in msg:
-        return tr('this is not a FlowTrack license key') if 'not a' in msg else tr('the license key was mistyped or cut short')
+        return tr('this is not a FlowSphera license key') if 'not a' in msg else tr('the license key was mistyped or cut short')
     if code in _SERVER_MSGS and msg not in _LICENSE_MSGS and (code != 'expired' or 'license key' in msg):
         return tr(_SERVER_MSGS[code])        # from the license server
     if code == 'expired' and lic.get('expires'):
@@ -971,7 +973,7 @@ def network_q(q):
     return q
 
 
-# Path analysis (1.8.1): which devices are neighbours changes rarely, and finding it is the heaviest query FlowTrack
+# Path analysis (1.8.1): which devices are neighbours changes rarely, and finding it is the heaviest query FlowSphera
 # has (every conversation of the period, grouped by the devices that saw it). It is worked out in the background from
 # the last hour every 10 minutes (and when the devices' settings or SNMP data change); a page over a period then adds
 # only the volumes of its links, from the 5-minute totals per interface pair.
@@ -2039,7 +2041,7 @@ def _alerts_now(kinds):
     ed = edition()
     lic = ed['license'] or {}
     if ed['status'] == 'expired':
-        out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowTrack Pro license expired'),
+        out.append({'sev': 'crit', 'kind': 'license_expired', 'title': tr('FlowSphera Pro license expired'),
                     'text': tr('{msg}. The Community limits apply again ({rps} records/s, {days} days); stored data is kept, records older than '
                                '{days} days show again with a renewed key. Enter it in Settings → License.',
                                msg=license_message(ed['status'], ed['message'], lic).capitalize(), rps=f"{COMMUNITY['rps']:,}", days=COMMUNITY['retention_days']),
@@ -2050,15 +2052,15 @@ def _alerts_now(kinds):
                                msg=license_message(ed['status'], ed['message'], lic).capitalize(), rps=f"{COMMUNITY['rps']:,}", days=COMMUNITY['retention_days']),
                     'when': tr('now')})
     elif ed['status'] == 'active' and lic.get('days_left', 99) < 14:
-        out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowTrack Pro license ends soon'),
+        out.append({'sev': 'warn', 'kind': 'license_expiring', 'title': tr('FlowSphera Pro license ends soon'),
                     'text': trn(lic['days_left'], 'The license ends on {date} ({n} day left). After that the Community limits apply.',
                                 'The license ends on {date} ({n} days left). After that the Community limits apply.',
                                 date=time.strftime('%Y-%m-%d', time.gmtime(lic['expires']))),
                     'when': trn(lic['days_left'], '{n} day left', '{n} days left')})
     if col and col.get('license_drops'):
         out.append({'sev': 'warn', 'kind': 'license_limit', 'title': tr('Edition limit reached'),
-                    'text': tr('{n} records were not stored in the last hour: the traffic exceeds {rps} records/s, the limit of FlowTrack Community. '
-                               'FlowTrack Pro has no limit.', n=col['license_drops'], rps=f"{ed['rps']:,}"), 'when': tr('last hour')})
+                    'text': tr('{n} records were not stored in the last hour: the traffic exceeds {rps} records/s, the limit of FlowSphera Community. '
+                               'FlowSphera Pro has no limit.', n=col['license_drops'], rps=f"{ed['rps']:,}"), 'when': tr('last hour')})
     if col and col['dropped_rows']:
         out.append({'sev': 'crit', 'kind': 'rows_dropped', 'title': tr('Records not stored'),
                     'text': tr('{n} records did not reach the database in the last hour: ClickHouse was unavailable longer than the collector buffer lasts.',
@@ -2397,7 +2399,7 @@ def api_ports(q):
     names = common.load_port_names()
     rev = {v: k for k, v in PROTO_BY_NAME.items()}
     return {'lines': [f"{rev.get(p, p)}/{n} {v}" for (p, n), v in sorted(names.items())],
-            # (1.8.4) the table in Settings → Flow configuration: each name with what FlowTrack calls the port without it
+            # (1.8.4) the table in Settings → Flow configuration: each name with what FlowSphera calls the port without it
             'items': [{'proto': rev.get(p, str(p)), 'port': n, 'name': v, 'default': common.default_l7(p, n)}
                       for (p, n), v in sorted(names.items(), key=lambda x: (x[0][1], x[0][0]))],
             'known': {f"{rev.get(p, p)}/{n}": v[0] for (p, n), v in common.PORTS.items()},
@@ -3117,7 +3119,7 @@ def _report_of(body):
 def _report_period(r, back):
     t0, t1 = reports.period(r, time.time(), back)      # older records than the edition keeps: the report says so itself
     if t1 <= int(time.time()) - (view_days() + 1) * 86400:
-        raise BadRequest(tr('This period is older than the records FlowTrack keeps.'))
+        raise BadRequest(tr('This period is older than the records FlowSphera keeps.'))
     return t0, t1
 
 
@@ -3144,7 +3146,7 @@ def _report_once(body):
         raise BadRequest(tr('The period of the report must be at least 5 minutes long.')) from None
     t1 = min(t1, int(time.time()))
     if t1 <= int(time.time()) - (view_days() + 1) * 86400:
-        raise BadRequest(tr('This period is older than the records FlowTrack keeps.'))
+        raise BadRequest(tr('This period is older than the records FlowSphera keeps.'))
     try:
         return reports.once(body.get('form') or {}, t0, t1), t0, t1
     except ValueError as e:
@@ -3206,7 +3208,7 @@ def post_ldap(body):
 
 def post_ldap_test(body):
     """The typed (not saved) settings against the server: the service account, the base DN and, with a name, the user,
-    their groups and the role FlowTrack would give (with a password also that)."""
+    their groups and the role FlowSphera would give (with a password also that)."""
     try:
         cfg = directory.validate(dict(body, on=False), directory.load())
         return directory.test(cfg, str(body.get('test_user') or '').strip(), str(body.get('test_password') or ''))

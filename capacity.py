@@ -1,4 +1,4 @@
-"""Capacity planning (FlowTrack 1.13.0): how full each interface is day by day and where it is heading.
+"""Capacity planning (FlowSphera 1.13.0): how full each interface is day by day and where it is heading.
 
 The API sums the 5-minute buckets of every interface (as the input and as the output interface of the records) per
 local day: the peak, the 95th percentile (empty 5 minutes count as 0, as in the Interface load panel) and the bytes.

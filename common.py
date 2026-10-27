@@ -1,4 +1,4 @@
-"""Shared FlowTrack helpers: config, ClickHouse HTTP client, enrichment."""
+"""Shared FlowSphera helpers: config, ClickHouse HTTP client, enrichment."""
 import base64
 import contextlib
 import ipaddress
@@ -496,7 +496,7 @@ def save_license(text):
 
 def _check_new_license(text):
     """A license code or .lic file that must be valid here now -> the license code to keep. An online license from a
-    file comes with the license server's first confirmation; without one (or with an old one) FlowTrack asks the
+    file comes with the license server's first confirmation; without one (or with an old one) FlowSphera asks the
     server right away. The installed license's confirmation is put back if the new license is refused."""
     import licensing
     text, lease = licensing.split_file(text)
@@ -805,7 +805,7 @@ def reload_port_names():
 
 
 def default_l7(proto, port):
-    """The L7 protocol FlowTrack names for proto + port without the user's names."""
+    """The L7 protocol FlowSphera names for proto + port without the user's names."""
     hit = PORTS.get((proto, port))
     if hit:
         return hit[0]

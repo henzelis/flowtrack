@@ -1,4 +1,4 @@
-"""IP reputation (FlowTrack 1.6.1): public lists of malicious addresses, downloaded by the collector once a day
+"""IP reputation (FlowSphera 1.6.1): public lists of malicious addresses, downloaded by the collector once a day
 straight from their publishers (nothing is sent anywhere but a plain download) and looked up by the detector for the
 outside addresses of each 10-minute window — never on the receiving path, so it costs nothing per record.
 
@@ -60,7 +60,7 @@ def _dshield(text):
 
 # name -> (category, urls, parser, refresh seconds, link for people). Categories: malware = botnet controllers and
 # malware delivery (contact is critical), drop = netblocks run by criminals, attack = hosts seen attacking others,
-# anon = Tor exit relays. All are free to use; FlowTrack downloads them on the customer's own server.
+# anon = Tor exit relays. All are free to use; FlowSphera downloads them on the customer's own server.
 LISTS = {
     'feodo':          ('malware', ['https://feodotracker.abuse.ch/downloads/ipblocklist.txt'], _lines, REFRESH, 'https://feodotracker.abuse.ch/'),
     # (1.16.2) the CSV export without a key is gone (410): the API, with the customer's free abuse.ch Auth-Key

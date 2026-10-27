@@ -1,5 +1,5 @@
 [Unit]
-Description=FlowTrack backup (the schedule is in Settings → Backups; also started by the web interface)
+Description=FlowSphera backup (the schedule is in Settings → Backups; also started by the web interface)
 After=network-online.target docker.service
 Wants=network-online.target
 

@@ -1,5 +1,5 @@
 'use strict';
-// FlowTrack web UI — talks to /api/* (see api.py). No build step.
+// FlowSphera web UI — talks to /api/* (see api.py). No build step.
 
 // ===================== language =====================
 // The code holds English only: T('English text'). Other languages are dictionaries web/i18n/<lang>.json
@@ -1505,7 +1505,7 @@ function vQos(){
     done('qTable', `<div class="tw"><table class="compact"><thead><tr><th>${T('Class')}</th><th class="num">DSCP</th><th>${T('Meant for')}</th><th class="num">${T('Traffic')}</th><th class="num">${T('Share')}</th><th class="num">${T('Packets')}</th><th class="num">${T('Flows')}</th></tr></thead><tbody>
       ${cls.map(c => `<tr data-f="dscp" data-v="${c.k === 255 ? '255' : esc(dscpName(N, c.k))}" style="cursor:pointer"><td><span class="dscp" style="--c:${dscpInfo(c.k)[1]}">${esc(dscpLabel(N, c.k))}</span></td><td class="num mono">${c.k === 255 ? '—' : c.k}</td><td>${esc(dscpInfo(c.k)[0])}</td>
         <td class="num mono">${fmtB(c.bytes)}</td><td class="num mono">${pct(c.bytes, all)}</td><td class="num mono">${fmtN(c.packets)}</td><td class="num mono">${fmtN(c.flows)}</td></tr>`).join('')}</tbody></table></div>
-      <p class="note">${T('DSCP is the class a sender or a device puts on each packet so the network can give it priority (voice before downloads). FortiGate reports the class on the way in and on the way out (re-marking shows); MikroTik on the way in. «Not reported»: traffic from before FlowTrack 1.16 or from devices that do not export it.')}</p>`);
+      <p class="note">${T('DSCP is the class a sender or a device puts on each packet so the network can give it priority (voice before downloads). FortiGate reports the class on the way in and on the way out (re-marking shows); MikroTik on the way in. «Not reported»: traffic from before FlowSphera 1.16 or from devices that do not export it.')}</p>`);
     wireFilters(document.getElementById('qTable'));
   })();
 }
@@ -1643,7 +1643,7 @@ function linkHints(l, nmOf, live){
   if (l.state === 'silent') {
     const silentB = !(l.b_out + l.b_in), [S, Sif, R, back] = silentB ? [B, l.b_name, A, l.a_in] : [A, l.a_name, B, l.b_in];
     out.push(T('{s} records nothing on {iface}, but {r} received {bytes} from it: the link works.', {s:S, iface:`<span class="mono">${esc(Sif || '?')}</span>`, r:R, bytes:fmtB(back)}));
-    out.push(T('NetFlow is probably off on that interface (FortiGate: set netflow-sampler both; tunnel interfaces need it too). Until then FlowTrack sees this link from one end only.'));
+    out.push(T('NetFlow is probably off on that interface (FortiGate: set netflow-sampler both; tunnel interfaces need it too). Until then FlowSphera sees this link from one end only.'));
     return out;
   }
   if (l.state === 'gap') {
@@ -2791,10 +2791,10 @@ function vEventsCfg(){
         <label>${T('Language of the messages')}${langSel('mlLang', ml.lang)}</label></div>
       <div><button class="btn" type="button" id="mlTest">${T('Send a test')}</button> <span class="note" id="mlSay"></span></div></div>
       <div class="form tgform" id="ntWebhook" ${ntTab === 'webhook' ? '' : 'hidden'}>
-      <p class="note" style="margin:0">${T('New events as an HTTP POST: to your own system (FlowTrack JSON), or a message to Slack, Mattermost, Rocket.Chat or Discord (their incoming webhook address).')}</p>
+      <p class="note" style="margin:0">${T('New events as an HTTP POST: to your own system (FlowSphera JSON), or a message to Slack, Mattermost, Rocket.Chat or Discord (their incoming webhook address).')}</p>
       <label class="chk"><input type="checkbox" id="whOn" ${wh.on ? 'checked' : ''}>${T('Send new events to the webhook')}</label>
       <div class="two"><label>${T('Webhook address')}<input id="whUrl" value="${esc(wh.url)}" placeholder="https://hooks.example.com/flowtrack" autocomplete="off"></label>
-        <label>${T('Format')}<select id="whFmt">${[['json', T('FlowTrack JSON')], ['slack', 'Slack / Mattermost / Rocket.Chat'], ['discord', 'Discord']].map(([v, l]) => `<option value="${v}" ${wh.format === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
+        <label>${T('Format')}<select id="whFmt">${[['json', T('FlowSphera JSON')], ['slack', 'Slack / Mattermost / Rocket.Chat'], ['discord', 'Discord']].map(([v, l]) => `<option value="${v}" ${wh.format === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label></div>
       <div class="two"><label>${T('Secret for the signature (optional)')}<input id="whSec" type="password" autocomplete="new-password" placeholder="${wh.secret_set ? T('saved — leave empty to keep') : T('e.g. a long random string')}"></label>
         <label>${T('Extra header (optional)')}<input id="whHdr" autocomplete="off" placeholder="${wh.header_set ? esc(wh.header) + ': ' + T('saved — leave empty to keep') : 'Authorization: Bearer abc123'}"></label></div>
       ${wh.secret_set || wh.header_set ? `<div style="display:flex;gap:14px;flex-wrap:wrap">${wh.secret_set ? `<label class="chk"><input type="checkbox" id="whSecX">${T('Remove the saved secret')}</label>` : ''}${wh.header_set ? `<label class="chk"><input type="checkbox" id="whHdrX">${T('Remove the saved header')}</label>` : ''}</div>` : ''}
@@ -2815,7 +2815,7 @@ function vEventsCfg(){
       <div class="two"><label>${T('Send from priority')}${sevSel('smSev', sm.min_sev || 'info')}</label>
         <label>${T('Language of the messages')}${langSel('smLang', sm.lang || 'en')}</label></div>
       <div><button class="btn" type="button" id="smTest">${T('Send a test')}</button> <span class="note" id="smSay"></span></div></div>
-      <div class="form tgform ntshared"><div class="two"><label>${T('FlowTrack address for the link in messages (optional)')}<input id="tgLink" value="${esc(res.notify.link)}" placeholder="${esc(location.origin)}"></label>
+      <div class="form tgform ntshared"><div class="two"><label>${T('FlowSphera address for the link in messages (optional)')}<input id="tgLink" value="${esc(res.notify.link)}" placeholder="${esc(location.origin)}"></label>
         <label>${T('At most messages an hour, per channel')}<input id="tgHour" type="number" min="1" max="600" value="${esc(res.notify.per_hour)}"></label></div></div>`);
     document.querySelectorAll('#ntSeg [data-v]').forEach(b => b.onclick = () => { state.ntTab = b.dataset.v;
       document.querySelectorAll('#ntSeg [data-v]').forEach(x => { x.setAttribute('aria-pressed', String(x === b)); x.setAttribute('aria-selected', String(x === b)); });
@@ -2949,12 +2949,12 @@ function vEventsCfg(){
     try { show({...await apiPost('events/config', {}), notify:await get('api/notify')}); ok.hidden = false; } catch (e) { err.textContent = e.message; } };
 }
 // How each vendor exports flows: the protocols it can send, in the order offered (the first is the recommended one),
-// each with the configuration for the device. FlowTrack recognises the protocol of every packet by itself; the choice
+// each with the configuration for the device. FlowSphera recognises the protocol of every packet by itself; the choice
 // picks the instructions and lets the Devices page warn when something else arrives.
 const PROTO_NAME = {netflow5:'NetFlow v5', netflow9:'NetFlow v9', ipfix:'IPFIX', sflow:'sFlow v5'};
 const PROTO_READY = ['netflow5', 'netflow9', 'ipfix', 'sflow'];      // what the collector decodes
 // the sampling of the form (1:N): the snippets that set a rate on the device are marked rated(); for the others the
-// configuration says to set the same rate there (FlowTrack scales records that carry no rate by it)
+// configuration says to set the same rate there (FlowSphera scales records that carry no rate by it)
 const sampleRate = v => { const n = parseInt(String(v || '').split(':').pop(), 10); return n >= 1 ? n : 1; };
 const sfRate = (o, d) => o.rate > 1 ? o.rate : d;        // sFlow: the vendor's usual rate until one is entered
 const rated = f => Object.assign(f, {rated:true});
@@ -2975,7 +2975,7 @@ const steps = list => (ip, port, o) => list(ip, port, o).map((x, i) => `${i + 1}
 // firewall doing NAT samples its LAN side in both directions — on the WAN the packets carry its public address, not the host's
 const SFLOW_NOTE = () => T('switches: sample incoming traffic (ingress) on every port — both directions everywhere counts the traffic twice; a router or firewall doing NAT: sample the LAN-side interfaces in both directions and not the WAN, where packets carry the public address instead of the inside host');
 const VENDORS = {
-  Fortinet:{netflow9:named(rated((ip, port, o) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}${o.rate > 1 ? `\n# ${T('netflow-sample-rate: FortiOS 7.6 and newer; FortiOS 7.4 and older sends every session — set 1:1 in FlowTrack there and leave the line out')}` : ''}\nconfig system interface${each(o, ['wan1', 'internal'], n => `\n    edit "${n}"\n        set netflow-sampler both${o.rate > 1 ? `\n        set netflow-sample-rate ${o.rate}` : ''}\n    next`)}\nend`)),
+  Fortinet:{netflow9:named(rated((ip, port, o) => `config system netflow\n    set active-flow-timeout 60\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('WAN + internal interfaces (not Wi-Fi SSIDs)')}${o.rate > 1 ? `\n# ${T('netflow-sample-rate: FortiOS 7.6 and newer; FortiOS 7.4 and older sends every session — set 1:1 in FlowSphera there and leave the line out')}` : ''}\nconfig system interface${each(o, ['wan1', 'internal'], n => `\n    edit "${n}"\n        set netflow-sampler both${o.rate > 1 ? `\n        set netflow-sample-rate ${o.rate}` : ''}\n    next`)}\nend`)),
     sflow:named(rated((ip, port, o) => `config system sflow\n    config collectors\n        edit 1\n            set collector-ip ${ip}\n            set collector-port ${port}\n        next\n    end\nend\n# ${T('FortiOS 7.0 and older: set collector-ip / set collector-port directly under config system sflow')}\n# ${T('the LAN-side interfaces in both directions, not the WAN: on the WAN sFlow sees the public address instead of the inside host (FortiOS samples before NAT)')}\n# ${T('Wi-Fi through FortiAPs in tunnel mode shows as the access point\'s CAPWAP traffic (UDP 5247), not as its clients; for per-host traffic use NetFlow v9')}\nconfig system interface${each(o, ['internal'], n => `\n    edit "${n}"\n        set sflow-sampler enable\n        set sample-rate ${sfRate(o, 1000)}\n        set sample-direction both\n        set polling-interval 20\n    next`)}\nend`))},
   Cisco:{netflow9:ciscoFnf('netflow-v9'), ipfix:ciscoFnf('ipfix'),
     sflow:named(rated((ip, port, o) => `! ${T('Cisco Nexus (NX-OS); IOS routers export NetFlow / IPFIX')}\nfeature sflow\nsflow sampling-rate ${sfRate(o, 1024)}\nsflow counter-poll-interval 20\nsflow collector-ip ${ip} vrf default\nsflow collector-port ${port}\nsflow agent-ip <${T('address of this device')}>\n! ${SFLOW_NOTE()}${each(o, ['ethernet 1/1'], n => `\nsflow data-source interface ${n}`)}`)),
@@ -2985,8 +2985,8 @@ const VENDORS = {
     netflow5:named(rated((ip, port, o) => `/ip traffic-flow set enabled=yes interfaces=${mtIfs(o)} active-flow-timeout=1m${mtSamp(o)}\n/ip traffic-flow target add dst-address=${ip} port=${port} version=5`))},
   Juniper:{ipfix:juniper('version-ipfix', 'version-ipfix'), netflow9:juniper('version9', 'version9'),
     sflow:named(rated((ip, port, o) => `# ${T('EX / QFX switches')}\nset protocols sflow collector ${ip} udp-port ${port}\nset protocols sflow sample-rate ingress ${sfRate(o, 1000)}\nset protocols sflow polling-interval 20\n# ${SFLOW_NOTE()}${each(o, ['ge-0/0/0'], n => `\nset protocols sflow interfaces ${n}`)}`))},
-  'Palo Alto':{netflow9:steps((ip, port) => [T('Device → Server Profiles → NetFlow → Add: name FlowTrack, active timeout 1 min, template refresh 1 min.'),
-    T('Servers → Add: address {ip}, port {port}.', {ip, port}), T('Network → Interfaces → each interface to watch → Advanced → NetFlow Profile: FlowTrack.'), T('Commit.')])},
+  'Palo Alto':{netflow9:steps((ip, port) => [T('Device → Server Profiles → NetFlow → Add: name FlowSphera, active timeout 1 min, template refresh 1 min.'),
+    T('Servers → Add: address {ip}, port {port}.', {ip, port}), T('Network → Interfaces → each interface to watch → Advanced → NetFlow Profile: FlowSphera.'), T('Commit.')])},
   'Check Point':{netflow9:(ip, port) => `# Gaia clish\nadd netflow collector ip ${ip} port ${port} export-format Netflow_V9\nsave config`,
     netflow5:(ip, port) => `# Gaia clish\nadd netflow collector ip ${ip} port ${port} export-format Netflow_V5\nsave config`},
   SonicWall:Object.fromEntries([['ipfix', 'IPFIX'], ['netflow9', 'NetFlow version-9'], ['netflow5', 'NetFlow version-5']].map(([k, l]) => [k, steps((ip, port) => [
@@ -3008,12 +3008,12 @@ const VENDORS = {
     T('Flow export ({proto}) to {ip}, UDP port {port}.', {proto: PROTO_NAME[k], ip, port}), T('Active timeout 60 s, inactive timeout 15 s; templates resent at least every minute.'),
     T('On every interface to watch (WAN and LAN), ingress — or ingress and egress when the record carries the flow direction.'),
     T('Fields: addresses, ports, protocol, input and output interface, bytes, packets, first and last time.'),
-    ...(o.rate > 1 ? [T('Packet sampling 1 of {n} — or, if the device cannot sample, none and 1:1 in FlowTrack.', {n: o.rate})] : [])]))]).concat([['sflow', rated(steps((ip, port, o) => [
+    ...(o.rate > 1 ? [T('Packet sampling 1 of {n} — or, if the device cannot sample, none and 1:1 in FlowSphera.', {n: o.rate})] : [])]))]).concat([['sflow', rated(steps((ip, port, o) => [
     T('sFlow version 5 to {ip}, UDP port {port}.', {ip, port}), o.rate > 1 ? T('Sampling 1 of {n} packets, counter polling every 20 s.', {n: o.rate}) : T('Sampling 1 of 1000 packets on fast links (1 of 100–500 on slower ones), counter polling every 20 s.'),
     SFLOW_NOTE()]))]])),
   'HPE Aruba':{sflow:named(rated((ip, port, o) => `! AOS-CX\nsflow\nsflow collector ${ip} port ${port}\nsflow sampling ${sfRate(o, 1024)}\nsflow polling 20\n! ${SFLOW_NOTE()}${each(o, ['1/1/1'], n => `\ninterface ${n}\n    sflow`)}\n! ${T('AOS-S (ProCurve): sflow 1 destination {ip} {port} · interface 1-24 sflow 1 sampling {rate} · sflow 1 polling 1-24 20', {ip, port, rate: sfRate(o, 1024)})}`))},
 };
-// the protocols FlowTrack takes from this vendor now, recommended first; vendors with none are not offered yet
+// the protocols FlowSphera takes from this vendor now, recommended first; vendors with none are not offered yet
 const vendorProtos = v => Object.keys(VENDORS[v] || {}).filter(p => PROTO_READY.includes(p) && VENDORS[v][p]);
 const VENDOR_LIST = () => Object.keys(VENDORS).filter(v => vendorProtos(v).length);
 const vendorLabel = v => v === 'Other' ? T('Other') : v;
@@ -3021,7 +3021,7 @@ const vendorLabel = v => v === 'Other' ? T('Other') : v;
 const SNMP_AUTH = ['MD5', 'SHA', 'SHA-224', 'SHA-256', 'SHA-384', 'SHA-512'], SNMP_PRIV = ['DES', 'AES', 'AES-192', 'AES-256'];
 const SNMP_LEVELS = {noAuthNoPriv:T('no authentication, no privacy'), authNoPriv:T('authentication only'), authPriv:T('authentication + privacy')};
 const snmpVal = (s, k, ph) => s[k] || `<${ph}>`;
-// the protocols each vendor's SNMP agent accepts: the form offers only these (FlowTrack itself takes all)
+// the protocols each vendor's SNMP agent accepts: the form offers only these (FlowSphera itself takes all)
 const SNMP_SUPPORT = {MikroTik:{auth:['MD5', 'SHA'], priv:['DES', 'AES']}, Cisco:{auth:['MD5', 'SHA', 'SHA-256', 'SHA-384', 'SHA-512'], priv:['DES', 'AES']},
   Fortinet:{priv:['DES', 'AES', 'AES-256']}, Juniper:{priv:['DES', 'AES']}};
 const snmpChoices = (vendor, k) => ((SNMP_SUPPORT[vendor] || {})[k]) || (k === 'auth' ? SNMP_AUTH : SNMP_PRIV);
@@ -3032,14 +3032,14 @@ const snmpDefaults = vendor => ({Fortinet:['SHA-256', 'AES-256'], MikroTik:['SHA
 const snmpFit = (vendor, s) => { for (const [k, f] of [['auth', 'auth_proto'], ['priv', 'priv_proto']]) { const c = snmpChoices(vendor, k); if (!c.includes(s[f])) s[f] = c[c.length - 1]; } };
 const SNMP_VENDORS = {
   Fortinet:(ip, s) => (s.version === '3'
-    ? `config system snmp sysinfo\n    set status enable\nend\nconfig system snmp user\n    edit "${snmpVal(s, 'user', 'user')}"\n        set trap-status disable\n        # ${T('FortiOS answers SNMPv3 queries only from these hosts')}\n        set notify-hosts ${ip}\n        set queries enable\n        set query-port ${s.port || 161}\n        set security-level ${{noAuthNoPriv:'no-auth-no-priv', authNoPriv:'auth-no-priv', authPriv:'auth-priv'}[s.level]}${s.level !== 'noAuthNoPriv' ? `\n        set auth-proto ${{MD5:'md5', SHA:'sha', 'SHA-224':'sha224', 'SHA-256':'sha256', 'SHA-384':'sha384', 'SHA-512':'sha512'}[s.auth_proto]}\n        set auth-pwd ${snmpVal(s, 'auth_pass', 'auth-password')}` : ''}${s.level === 'authPriv' ? `\n        set priv-proto ${{DES:'des', AES:'aes', 'AES-192':'aes', 'AES-256':'aes256'}[s.priv_proto]}\n        set priv-pwd ${snmpVal(s, 'priv_pass', 'priv-password')}` : ''}\n    next\nend\n# ${T('SNMP access on the interface FlowTrack reaches the device through')}\nconfig system interface\n    edit "internal"\n        append allowaccess snmp\n    next\nend\n# ${T('No answer after this? Restart the SNMP agent once')}:\n# diagnose test application snmpd 99`
-    : `config system snmp sysinfo\n    set status enable\nend\nconfig system snmp community\n    edit 1\n        set name "${snmpVal(s, 'community', 'community')}"\n        config hosts\n            edit 1\n                set ip ${ip} 255.255.255.255\n            next\n        end\n        set query-v1-status disable\n        set query-v2c-port ${s.port || 161}\n        set trap-v1-status disable\n        set trap-v2c-status disable\n    next\nend\n# ${T('SNMP access on the interface FlowTrack reaches the device through')}\nconfig system interface\n    edit "internal"\n        append allowaccess snmp\n    next\nend\n# ${T('No answer after this? Restart the SNMP agent once')}:\n# diagnose test application snmpd 99`),
+    ? `config system snmp sysinfo\n    set status enable\nend\nconfig system snmp user\n    edit "${snmpVal(s, 'user', 'user')}"\n        set trap-status disable\n        # ${T('FortiOS answers SNMPv3 queries only from these hosts')}\n        set notify-hosts ${ip}\n        set queries enable\n        set query-port ${s.port || 161}\n        set security-level ${{noAuthNoPriv:'no-auth-no-priv', authNoPriv:'auth-no-priv', authPriv:'auth-priv'}[s.level]}${s.level !== 'noAuthNoPriv' ? `\n        set auth-proto ${{MD5:'md5', SHA:'sha', 'SHA-224':'sha224', 'SHA-256':'sha256', 'SHA-384':'sha384', 'SHA-512':'sha512'}[s.auth_proto]}\n        set auth-pwd ${snmpVal(s, 'auth_pass', 'auth-password')}` : ''}${s.level === 'authPriv' ? `\n        set priv-proto ${{DES:'des', AES:'aes', 'AES-192':'aes', 'AES-256':'aes256'}[s.priv_proto]}\n        set priv-pwd ${snmpVal(s, 'priv_pass', 'priv-password')}` : ''}\n    next\nend\n# ${T('SNMP access on the interface FlowSphera reaches the device through')}\nconfig system interface\n    edit "internal"\n        append allowaccess snmp\n    next\nend\n# ${T('No answer after this? Restart the SNMP agent once')}:\n# diagnose test application snmpd 99`
+    : `config system snmp sysinfo\n    set status enable\nend\nconfig system snmp community\n    edit 1\n        set name "${snmpVal(s, 'community', 'community')}"\n        config hosts\n            edit 1\n                set ip ${ip} 255.255.255.255\n            next\n        end\n        set query-v1-status disable\n        set query-v2c-port ${s.port || 161}\n        set trap-v1-status disable\n        set trap-v2c-status disable\n    next\nend\n# ${T('SNMP access on the interface FlowSphera reaches the device through')}\nconfig system interface\n    edit "internal"\n        append allowaccess snmp\n    next\nend\n# ${T('No answer after this? Restart the SNMP agent once')}:\n# diagnose test application snmpd 99`),
   Cisco:(ip, s) => `ip access-list standard FLOWTRACK-SNMP\n permit ${ip}\nsnmp-server ifindex persist\n` + (s.version === '3'
     ? `snmp-server group FLOWTRACK v3 ${{noAuthNoPriv:'noauth', authNoPriv:'auth', authPriv:'priv'}[s.level]} access FLOWTRACK-SNMP\nsnmp-server user ${snmpVal(s, 'user', 'user')} FLOWTRACK v3${s.level !== 'noAuthNoPriv' ? ` auth ${s.auth_proto === 'MD5' ? 'md5' : s.auth_proto === 'SHA' ? 'sha' : 'sha-2 ' + s.auth_proto.slice(4)} ${snmpVal(s, 'auth_pass', 'auth-password')}` : ''}${s.level === 'authPriv' ? ` priv ${s.priv_proto === 'DES' ? 'des' : 'aes 128'} ${snmpVal(s, 'priv_pass', 'priv-password')}` : ''}`
     : `snmp-server community ${snmpVal(s, 'community', 'community')} RO FLOWTRACK-SNMP`),
   MikroTik:(ip, s) => (s.version === '3'
     ? `/snmp community add name=${snmpVal(s, 'user', 'user')} addresses=${ip}/32 read-access=yes security=${{noAuthNoPriv:'none', authNoPriv:'authorized', authPriv:'private'}[s.level]}${s.level !== 'noAuthNoPriv' ? ` authentication-protocol=${s.auth_proto === 'SHA' ? 'SHA1' : s.auth_proto} authentication-password="${snmpVal(s, 'auth_pass', 'auth-password')}"` : ''}${s.level === 'authPriv' ? ` encryption-protocol=${s.priv_proto} encryption-password="${snmpVal(s, 'priv_pass', 'priv-password')}"` : ''}`
-    : `/snmp community add name="${snmpVal(s, 'community', 'community')}" addresses=${ip}/32 read-access=yes`) + `\n/snmp set enabled=yes\n# ${T('The default firewall drops input from interfaces outside the LAN list (tunnels, WAN): let FlowTrack in')}\n/ip firewall filter add chain=input protocol=udp dst-port=161 src-address=${ip} action=accept place-before=0 comment=FlowTrack-SNMP`,
+    : `/snmp community add name="${snmpVal(s, 'community', 'community')}" addresses=${ip}/32 read-access=yes`) + `\n/snmp set enabled=yes\n# ${T('The default firewall drops input from interfaces outside the LAN list (tunnels, WAN): let FlowSphera in')}\n/ip firewall filter add chain=input protocol=udp dst-port=161 src-address=${ip} action=accept place-before=0 comment=FlowSphera-SNMP`,
   Juniper:(ip, s) => (s.version === '3'
     ? `set snmp v3 usm local-engine user ${snmpVal(s, 'user', 'user')} ${s.level === 'noAuthNoPriv' ? 'authentication-none' : `authentication-${s.auth_proto.toLowerCase().replace('-', '')} authentication-password "${snmpVal(s, 'auth_pass', 'auth-password')}"`}${s.level === 'authPriv' ? `\nset snmp v3 usm local-engine user ${snmpVal(s, 'user', 'user')} privacy-${s.priv_proto === 'DES' ? 'des' : 'aes128'} privacy-password "${snmpVal(s, 'priv_pass', 'priv-password')}"` : ''}\nset snmp v3 vacm security-to-group security-model usm security-name ${snmpVal(s, 'user', 'user')} group flowtrack\nset snmp v3 vacm access group flowtrack default-context-prefix security-model usm security-level ${{noAuthNoPriv:'none', authNoPriv:'authentication', authPriv:'privacy'}[s.level]} read-view all\nset snmp view all oid .1 include`
     : `set snmp community "${snmpVal(s, 'community', 'community')}" authorization read-only\nset snmp community "${snmpVal(s, 'community', 'community')}" clients ${ip}/32`),
@@ -3075,7 +3075,7 @@ async function editionPanel(returned){
   let ed; try { ed = await api('edition'); } catch (e) { box.innerHTML = errBox(e); box.classList.remove('loading'); return; }
   if (!box.isConnected) return;
   const pro = ed.status === 'active', lic = ed.license || {};
-  const name = pro ? 'FlowTrack Pro' : 'FlowTrack Community';
+  const name = pro ? 'FlowSphera Pro' : 'FlowSphera Community';
   const status = {community:T('free edition'), active:T('license active'),
     invalid:T('the license is not valid'), other_instance:T('license of another server'),
     returned:T('license deactivated'), clock:T('the clock is wrong'),
@@ -3088,7 +3088,7 @@ async function editionPanel(returned){
     chk ? ' · ' + (chk.ok ? T('last check ') + new Date(chk.ts * 1000).toLocaleString(LOC) : T('last check failed: ') + esc(chk.error)) : ''}</span>${
     isAdmin() ? `<button class="btn" id="licCheck">${T('Check now')}</button>` : ''}</div>`
     // an offline (or expired) license never contacts the server by itself: ask on request whether the vendor renewed it
-    : lic.customer && isAdmin() ? `<div class="lic-online"><span class="nat">${T('Offline license · FlowTrack does not contact the license server by itself')}</span><button class="btn" id="licCheck">${T('Check for renewal')}</button></div>` : '';
+    : lic.customer && isAdmin() ? `<div class="lic-online"><span class="nat">${T('Offline license · FlowSphera does not contact the license server by itself')}</span><button class="btn" id="licCheck">${T('Check for renewal')}</button></div>` : '';
   const note = window.__licNote; window.__licNote = null;
   const noteHtml = note ? `<p class="note" role="status" style="color:${note.renewed ? 'var(--ok)' : note.error ? 'var(--crit)' : 'inherit'}">${esc(note.note)}</p>` : '';
   const soon = pro && lic.days_left != null && lic.days_left < 30;
@@ -3111,14 +3111,14 @@ async function editionPanel(returned){
   act.innerHTML = `<div class="lic-grid">
     <div class="lic-col">
       <div class="lic-step"><span class="lic-n">1</span><div><b>${T('Send the activation request')}</b>
-        <p class="note">${T('Not needed with a license key. Without internet access, send it to your FlowTrack vendor — by e-mail, or read it out by phone from a closed network. The license will work on this server only.')}</p></div></div>
+        <p class="note">${T('Not needed with a license key. Without internet access, send it to your FlowSphera vendor — by e-mail, or read it out by phone from a closed network. The license will work on this server only.')}</p></div></div>
       <div class="lic-field"><span>${T('Instance ID')}</span><code class="mono" id="licInst">${esc(ed.instance || '')}</code></div>
       <div class="lic-field"><span>${T('Activation request')}</span><code class="mono lic-code" id="licReq">${esc(ed.request || '')}</code></div>
       <div class="acts"><button class="btn" id="reqCopy">${T('Copy')}</button><button class="btn" id="reqSave">${T('Download')}</button></div>
     </div>
     <div class="lic-col">
       <div class="lic-step"><span class="lic-n">2</span><div><b>${pro ? T('Enter a renewed license') : T('Enter the license')}</b>
-        <p class="note">${T('Paste the license key (FTK-…): FlowTrack activates it online. Or load the .lic file (or paste the FTL-… code) from your vendor: it works at once and is then confirmed by the license server daily — only an offline license never needs the internet.')}</p></div></div>
+        <p class="note">${T('Paste the license key (FTK-…): FlowSphera activates it online. Or load the .lic file (or paste the FTL-… code) from your vendor: it works at once and is then confirmed by the license server daily — only an offline license never needs the internet.')}</p></div></div>
       <textarea id="edKey" rows="4" spellcheck="false" autocomplete="off" placeholder="FTK-XXXXX-… / FTL-XXXXX-…" aria-label="${T('License key or code')}"></textarea>
       <div class="acts"><span class="nat" id="edMsg" role="status"></span><input type="file" id="licFile" accept=".lic,.txt,text/plain" hidden>
         <button class="btn" id="licLoad">${T('Load file…')}</button><button class="btn primary" id="edSave">${T('Activate')}</button></div>
@@ -3137,7 +3137,7 @@ async function editionPanel(returned){
   const refresh = async ret => { META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(ret); };
   document.getElementById('reqCopy').onclick = e => copyText(ed.request, e.currentTarget);
   document.getElementById('reqSave').onclick = () => saveText(`flowtrack-request-${(ed.instance || '').replace(/-/g, '')}.txt`,
-    `# FlowTrack activation request\n# Instance ID: ${ed.instance}\n# FlowTrack ${META.version || ''}, ${new Date().toISOString().slice(0, 10)}\n${ed.request}\n`);
+    `# FlowSphera activation request\n# Instance ID: ${ed.instance}\n# FlowSphera ${META.version || ''}, ${new Date().toISOString().slice(0, 10)}\n${ed.request}\n`);
   const file = document.getElementById('licFile');
   document.getElementById('licLoad').onclick = () => file.click();
   file.onchange = async () => { const f = file.files[0]; if (!f) return; document.getElementById('edKey').value = (await f.text()).trim(); file.value = ''; say(f.name); };
@@ -3159,7 +3159,7 @@ function editionBadge(){
   const pro = ed.status === 'active', left = ed.days_left;
   b.textContent = pro ? 'Pro' : 'Community';
   b.className = 'edbadge' + (pro ? ' pro' : '') + (pro && left != null && left < 30 ? ' warn' : '') + (LIC_BAD.includes(ed.status) ? ' crit' : '');
-  b.title = (pro ? 'FlowTrack Pro' + (left != null ? Tn(left, ' · {n} day left', ' · {n} days left') : '') : `FlowTrack Community · ${T('up to')} ${fmtInt(ed.rps)} ${T('records/s')}`)
+  b.title = (pro ? 'FlowSphera Pro' + (left != null ? Tn(left, ' · {n} day left', ' · {n} days left') : '') : `FlowSphera Community · ${T('up to')} ${fmtInt(ed.rps)} ${T('records/s')}`)
     + (ed.status === 'expired' ? T(' · license expired') : LIC_BAD.includes(ed.status) ? T(' · the license does not work here') : '') + ' — ' + T('edition and license');
   b.hidden = false;
   b.onclick = () => { state.view = 'settings'; state.setTab = 'license'; render(); };
@@ -3247,7 +3247,7 @@ function mailPanel(el, d){
       // (1.12.1) deleting it: asked for in a window of its own that says what stops working
       $('rmDel').onclick = () => {
         const md = openModal(T('Delete the mail server?'), esc(`${m.host}:${m.port}`), `<div class="form" style="padding:4px 2px">
-          <p class="note" style="margin:0">${T('FlowTrack forgets the server, the login and the password. Until you set up another one:')}</p>
+          <p class="note" style="margin:0">${T('FlowSphera forgets the server, the login and the password. Until you set up another one:')}</p>
           <ul class="note" style="margin:0;padding-left:18px"><li>${T('scheduled reports are not sent (they stay, marked «not sent»);')}</li>
             <li>${T('e-mail notifications are switched off (their recipients are kept);')}</li><li>${T('Telegram, webhooks and the SIEM go on as before.')}</li></ul>
           <p class="err" id="rmDelErr" hidden></p>
@@ -3259,7 +3259,7 @@ function mailPanel(el, d){
       };
       return;
     }
-    el.innerHTML = `${m.ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px"><b>${T('Not set up yet: nothing is sent by e-mail.')}</b> ${T('Enter the SMTP server you send mail through — your own, Gmail or Microsoft 365 (with an app password), or a relay of your provider. FlowTrack only sends: no POP3 or IMAP is needed.')}</p>`}
+    el.innerHTML = `${m.ready ? '' : `<p class="note" style="color:var(--warn);margin:0 0 10px"><b>${T('Not set up yet: nothing is sent by e-mail.')}</b> ${T('Enter the SMTP server you send mail through — your own, Gmail or Microsoft 365 (with an app password), or a relay of your provider. FlowSphera only sends: no POP3 or IMAP is needed.')}</p>`}
       <form class="form" id="rmForm" novalidate>
       <div class="two"><label>${T('Mail server (SMTP)')}<input id="rmHost" value="${esc(m.host)}" placeholder="smtp.example.com" autocomplete="off"></label>
         <div class="two"><label>${T('Port')}<input id="rmPort" type="number" min="1" max="65535" value="${esc(m.port)}"></label>
@@ -3356,7 +3356,7 @@ function vApi(){
         <td>${t.last_used ? `${when(t.last_used)}<div class="nat mono">${esc(t.last_ip)}</div>` : `<span class="nat">${T('never')}</span>`}</td>
         <td>${!t.expires ? `<span class="nat">${T('no end date')}</span>` : ended ? `<span class="pill crit">${T('ended')}</span> <span class="nat">${when(t.expires)}</span>` : when(t.expires)}</td>
         <td style="text-align:right"><button class="btn" data-a="del">${T('Revoke')}</button></td></tr>`; }).join('')}</tbody></table></div>`
-      : `<div class="empty">${T('No tokens yet. A token lets a script or a monitoring system (Zabbix, Grafana, your own) read FlowTrack without a password: press New token.')}</div>`;
+      : `<div class="empty">${T('No tokens yet. A token lets a script or a monitoring system (Zabbix, Grafana, your own) read FlowSphera without a password: press New token.')}</div>`;
     el.querySelectorAll('[data-a="del"]').forEach(b => b.onclick = async () => { const t = d.tokens.find(x => x.id === b.closest('tr').dataset.id);
       if (!confirm(T('Revoke the token {name}? Scripts that use it stop working at once.', {name:t.name}))) return;
       try { d = await apiPost('tokens/delete', {id:t.id}); draw(); } catch (e) { formErr('tkErr', e.message); } });
@@ -3375,7 +3375,7 @@ function vApi(){
       try { const r = await apiPost('tokens', {name:$('tkName').value.trim(), scope:document.querySelector('[name="tkScope"]:checked').value, days:Number($('tkDays').value)});
         d = {tokens:r.tokens}; draw();
         md.root.querySelector('.modal').lastElementChild.outerHTML = `<div class="form" style="padding:4px 2px">
-          <p class="note" style="margin:0;color:var(--warn)"><b>${T('Copy the token now: FlowTrack keeps only its fingerprint and cannot show it again.')}</b></p>
+          <p class="note" style="margin:0;color:var(--warn)"><b>${T('Copy the token now: FlowSphera keeps only its fingerprint and cannot show it again.')}</b></p>
           ${codeBox(r.token, 'tkTok', 'mono', 'margin:0;padding:10px 104px 10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap;word-break:break-all')}
           ${codeBox(`curl -k -H "Authorization: Bearer ${r.token}" \\\n  "${location.origin}/api/summary?range=24h&f=[]"`, '', 'mono', 'margin:0;padding:10px 104px 10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap;word-break:break-all;font-size:12px')}
           <div><button class="btn primary" type="button" id="tkDone">${T('Done')}</button></div></div>`;
@@ -3471,7 +3471,7 @@ function vGeneral(){
   // (1.10.0) one even row of four cards (as on Backups), the mail server under it: no panel shorter than its neighbour
   const card = (ic, k, v, sub) => `<section class="glass panel kcard gcard s3"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v">${v}</span><span class="nat">${sub}</span></section>`;
   document.getElementById('setBody').innerHTML = `<div class="grid">
-    ${card('list', T('Version'), `FlowTrack ${esc(META.version || '—')}`, `<a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
+    ${card('list', T('Version'), `FlowSphera ${esc(META.version || '—')}`, `<a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
     ${card('shield', T('Edition'), ed.status === 'active' ? 'Pro' : 'Community', `<button class="lnk" id="toLic">${T('License')} →</button>`)}
     ${card('globe', T('Language'), `<select id="langSel" aria-label="${T('Language')}">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${LANG === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
       T('only in this browser'))}
@@ -3555,7 +3555,7 @@ function addrOk(v, net, asn){
 async function openPortName(proto, port){
   let d; try { d = await api('ports'); } catch (e) { alert(e.message); return; }
   const have = d.items.find(x => x.proto === proto && x.port === port), def = have ? have.default : (d.known[`${proto}/${port}`] || (port < 1024 ? `${proto.toUpperCase()}/${port}` : `${proto.toUpperCase()} other`));
-  const m = openModal(T('Name of {p}', {p:`${proto.toUpperCase()} ${port}`}), T('FlowTrack calls it: {name}', {name:esc(def)}), `<form class="form" id="opnForm" novalidate>
+  const m = openModal(T('Name of {p}', {p:`${proto.toUpperCase()} ${port}`}), T('FlowSphera calls it: {name}', {name:esc(def)}), `<form class="form" id="opnForm" novalidate>
     <label>${T('Name')}<input id="opnName" maxlength="40" value="${esc(have ? have.name : '')}" placeholder="${T('HTTPS management')}" autocomplete="off"></label>
     <p class="note" style="margin:0">${T('New records get the name at once; the records of the last 30 days within a minute, the totals of longer periods after the current hour.')} ${T('All names: Settings → Flow configuration.')}</p>
     <p class="err" id="opnErr" hidden></p>
@@ -3567,12 +3567,12 @@ async function openPortName(proto, port){
   document.getElementById('opnForm').onsubmit = e => { e.preventDefault(); if (!ok.disabled) put([...rest, {proto, port, name:inp.value.trim()}]); };
   const del = document.getElementById('opnDel'); if (del) del.onclick = () => put(rest);
 }
-// ===================== Settings → Flow configuration: how FlowTrack names and treats the traffic =====================
+// ===================== Settings → Flow configuration: how FlowSphera names and treats the traffic =====================
 // (1.8.4) own port names (a table, added with a form) and the roles of our services (from the Events tab)
 function vFlowCfg(){
   const admin = isAdmin();
   document.getElementById('setBody').innerHTML = `<div class="grid top">
-    <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowTrack names (e.g. TCP other) in every report'))}<div id="pnBox" class="loading"></div></section>
+    <section class="glass panel s12">${ph('list', T('Port names'), T('your own names of ports: they replace the protocol FlowSphera names (e.g. TCP other) in every report'))}<div id="pnBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('dev', T('Host names'), T('your own names of the hosts in your network: shown next to their addresses everywhere, over the names from DNS'))}<div id="hnBox" class="loading"></div></section>
     <section class="glass panel s12">${ph('nodes', T('Network names'), T('your own names of networks: filter by them (net:Office) and see the traffic of each on Top hosts → Networks'))}<div id="nnBox" class="loading"></div></section>
     ${admin ? `<section class="glass panel s7">${ph('dev', T('Services on our side'), T('learned from the last day: what outside addresses call · the role decides which events they get'))}<div id="evsBox" class="loading"></div></section>
@@ -3616,14 +3616,14 @@ function vFlowCfg(){
       hint.innerHTML = !N.value ? T('Pick the protocol, type the port number (1–65535) and the name you want to see in the reports.')
         : !ok ? T('A port is a number from 1 to 65535.')
         : dup ? T('{p} already has the name «{name}» — adding replaces it.', {p:`${up(pr)} ${N.value}`, name:esc(dup.name)})
-        : T('Now FlowTrack calls it: {name}', {name:`<b>${esc(deflt(pr, +N.value))}</b>`}); };
+        : T('Now FlowSphera calls it: {name}', {name:`<b>${esc(deflt(pr, +N.value))}</b>`}); };
     [P, N, Tt].forEach(x => x.addEventListener('input', check)); check();
     document.getElementById('pnAdd').onsubmit = async e => { e.preventDefault(); check(); if (go.disabled) return;
       const it = {proto:P.value, port:+N.value, name:Tt.value.trim()};
       try { await save([...items.filter(x => !(x.proto === it.proto && x.port === it.port)), it]); setTimeout(() => { const n = document.getElementById('pnN'); if (n) n.focus(); }); } catch (err) { fail(err); } };
     el.querySelectorAll('[data-pe]').forEach(b => b.onclick = () => { edit = +b.dataset.pe; draw(d); const t = document.getElementById('pnEdT'); t.focus(); t.select(); });
     el.querySelectorAll('[data-pd]').forEach(b => b.onclick = async () => { const it = items[+b.dataset.pd];
-      if (!confirm(T('Delete the name «{name}» of {p}? The port gets back the name FlowTrack gives it: {def}.', {name:it.name, p:`${up(it.proto)} ${it.port}`, def:it.default}))) return;
+      if (!confirm(T('Delete the name «{name}» of {p}? The port gets back the name FlowSphera gives it: {def}.', {name:it.name, p:`${up(it.proto)} ${it.port}`, def:it.default}))) return;
       try { await save(items.filter(x => x !== it)); } catch (err) { fail(err); } });
     if (edit !== null) {
       const eP = document.getElementById('pnEdP'), eN = document.getElementById('pnEdN'), eT = document.getElementById('pnEdT'), ok = document.getElementById('pnEdOk');
@@ -3796,7 +3796,7 @@ function vBackups(){
       <p class="note" style="margin:0">${T('Restoring stops collecting and the web interface for a few minutes, replaces the flow data and the settings with the backup, and starts them again. Records that arrive meanwhile are lost. The current data is set aside until the backup is in place and comes back if the restore fails.')}</p>
       <p class="note" style="margin:0">${T('Run on the server:')}</p>
       ${codeBox(`sudo flowtrack restore ${m.id}`, '', 'mono', 'margin:0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,.35);white-space:pre-wrap')}
-      <p class="note" style="margin:0">${T('Options: --only-settings (keep the flow data), --only-data (keep the settings), --with-license (also the license files — only on the same server). On a new server: install FlowTrack, set the same place here (S3, SFTP or FTP), then run sudo flowtrack restore --from s3 (or sftp, ftp, a folder) and pick the backup.')}</p>
+      <p class="note" style="margin:0">${T('Options: --only-settings (keep the flow data), --only-data (keep the settings), --with-license (also the license files — only on the same server). On a new server: install FlowSphera, set the same place here (S3, SFTP or FTP), then run sudo flowtrack restore --from s3 (or sftp, ftp, a folder) and pick the backup.')}</p>
       ${m.encrypted ? `<p class="note" style="margin:0;color:var(--warn)">${T('The copies of this backup are encrypted: a restore from them asks for the passphrase.')}</p>` : ''}</div>`);
   // ---- the forms: drawn once, so a refresh while a backup runs never clears what is being typed
   const forms = () => {
@@ -3826,7 +3826,7 @@ function vBackups(){
         <label>${T('Folder')}<input value="${esc(d.dir)}" readonly></label>
         <p class="note" style="margin:0">${T('Always used: the newest backups stay here for a quick restore. {free} free.', {free:fmtB(d.free)})} ${T('Another folder (e.g. a disk mounted from a NAS) is set when installing or upgrading:')} <span class="mono">sudo flowtrack upgrade --force --backup-dir /mnt/nas/flowtrack</span></p></div>
       <div class="form tgform" data-p="s3" ${dTab === 's3' ? '' : 'hidden'}>
-        <p class="note" style="margin:0">${T('Amazon S3 or any storage that speaks S3: MinIO, Backblaze B2, Wasabi, Cloudflare R2, Hetzner. Give FlowTrack a key that may only write and read this bucket.')}</p>
+        <p class="note" style="margin:0">${T('Amazon S3 or any storage that speaks S3: MinIO, Backblaze B2, Wasabi, Cloudflare R2, Hetzner. Give FlowSphera a key that may only write and read this bucket.')}</p>
         <label class="chk"><input type="checkbox" id="s3On" ${x3.on ? 'checked' : ''}>${T('Copy every backup to S3')}</label>
         <div class="two"><label>${T('Endpoint (empty: Amazon S3)')}<input id="s3Ep" value="${esc(x3.endpoint)}" placeholder="https://s3.eu-central-1.amazonaws.com"></label><label>${T('Region')}<input id="s3Reg" value="${esc(x3.region)}" placeholder="eu-central-1"></label></div>
         <div class="two"><label>${T('Bucket')}<input id="s3Bk" value="${esc(x3.bucket)}"></label><label>${T('Folder in the bucket (optional)')}<input id="s3Pre" value="${esc(x3.prefix)}" placeholder="flowtrack/"></label></div>
@@ -3912,7 +3912,7 @@ function vBackups(){
   every(30000, () => { if (!polling && d) load().then(n => { if (seq === renderSeq) { d = {...n, config:d.config}; draw(); if (busy()) poll(); } }).catch(() => {}); });
 }
 function vLicense(){
-  document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license'), T('limits in effect · a FlowTrack Pro license raises them'))}<div id="edBox" class="loading"></div></section>
+  document.getElementById('setBody').innerHTML = `<div class="grid"><section class="glass panel s12">${ph('shield', T('Edition and license'), T('limits in effect · a FlowSphera Pro license raises them'))}<div id="edBox" class="loading"></div></section>
     ${isAdmin() ? `<section class="glass panel s12">${ph('key', T('Activation'), T('the license is bound to this server · a key or a license file'))}<div id="actBox"></div></section>` : ''}</div>`;
   editionPanel();
 }
@@ -3945,9 +3945,9 @@ const dupPill = x => x.dup_pct >= 2
   ? ` <span class="pill warn" title="${T('{pct}% of the records in 15 min arrive twice. The device monitors both directions on several interfaces but sends no direction field, so the copies cannot be told apart: add the flow direction field to the exported record, or monitor ingress only.', {pct: x.dup_pct})}">${T('duplicates {pct}%', {pct: x.dup_pct})}</span>`
   : x.dup_dropped ? ` <span class="pill info" title="${T('Copies of flows seen on ingress and again on egress, removed by the collector (15 min)')}">${T('{n} duplicates removed', {n: fmtN(x.dup_dropped)})}</span>` : '';
 // an exporter that sends the running totals of long sessions: the collector stores only their growth
-const runningPill = x => x.running_totals ? ` <span class="pill info" title="${T('This device sends long sessions again at every export with all their bytes since the start (a running total). FlowTrack stores only what each session grew by since its last export.')}">${T('running totals corrected')}</span>` : '';
+const runningPill = x => x.running_totals ? ` <span class="pill info" title="${T('This device sends long sessions again at every export with all their bytes since the start (a running total). FlowSphera stores only what each session grew by since its last export.')}">${T('running totals corrected')}</span>` : '';
 // whole packets the exporter sent more than once (same content, own sequence counter): dropped by the receiver
-const repeatPill = x => x.dup_packets ? ` <span class="pill warn" title="${T('The device sent {n} packets in 15 min a second time with the same content. FlowTrack dropped the copies, so traffic and loss are not affected. The device\'s export is misbehaving: check its NetFlow targets or restart its flow export.', {n: fmtN(x.dup_packets)})}">${T('{n} repeated packets dropped', {n: fmtN(x.dup_packets)})}</span>` : '';
+const repeatPill = x => x.dup_packets ? ` <span class="pill warn" title="${T('The device sent {n} packets in 15 min a second time with the same content. FlowSphera dropped the copies, so traffic and loss are not affected. The device\'s export is misbehaving: check its NetFlow targets or restart its flow export.', {n: fmtN(x.dup_packets)})}">${T('{n} repeated packets dropped', {n: fmtN(x.dup_packets)})}</span>` : '';
 // where devices must send NetFlow: the collector's own interface address when it listens on specific interfaces
 // (the web UI may be on another one), otherwise the address this page was opened with
 function collectorTarget(){
@@ -4119,7 +4119,7 @@ function openDevice(dev){
         : pw('sComm', 'community', 'Community')}
       <div class="snmptest"><button class="btn" type="button" id="sTest">${T('Test SNMP')}</button><span class="nat" id="sMsg" role="status"></span></div>
       ${window.__snmpTools === false ? `<p class="err">${T('The server has no net-snmp tools (package snmp) yet: run sudo flowtrack upgrade.')}</p>` : ''}
-      <p class="note">${T('FlowTrack polls the device when you save and then every hour. Names and addresses entered by hand under Interfaces take priority.')}</p>`;
+      <p class="note">${T('FlowSphera polls the device when you save and then every hour. Names and addresses entered by hand under Interfaces take priority.')}</p>`;
   let drawIfs = () => {};
   const draw = () => {
     if (!picked) [sn.auth_proto, sn.priv_proto] = snmpDefaults(VENDORS[vendor] ? vendor : 'Fortinet');
@@ -4128,7 +4128,7 @@ function openDevice(dev){
       <div class="vendors" role="group">${VENDOR_LIST().map(k => `<button type="button" data-v="${esc(k)}" aria-pressed="${k === vendor}">${esc(vendorLabel(k))}</button>`).join('')}</div>
       ${protoSeg()}
       <div class="cols"><div><h4>${T('1. Configuration on the device')}</h4>${codeBox(code(), 'devCode')}</div>
-      <form class="form" id="devForm" autocomplete="off"><h4 style="margin:0">${T('2. Description for FlowTrack')}</h4>
+      <form class="form" id="devForm" autocomplete="off"><h4 style="margin:0">${T('2. Description for FlowSphera')}</h4>
         <div class="two"><label>${T('IP the export comes from')}<input id="fIp" required value="${esc(editing ? dev.ip : '')}" ${editing ? 'readonly' : ''} placeholder="192.0.2.1"></label><label>${T('Name')}<input id="fName" value="${esc(c.name || '')}" placeholder="branch-fw01"></label></div>
         <div class="two"><label>${T('Model')}<input id="fModel" value="${esc(c.model || '')}" placeholder="FortiGate 60F"></label><label>${T('form::Sampling')}<input id="fSamp" value="${esc(c.sampling || '1:1')}"></label></div>
         <p class="note warn" id="fSampNote" hidden></p>
@@ -4150,7 +4150,7 @@ function openDevice(dev){
     // a device whose configuration sets no sampling sends every flow: a rate here would multiply its volumes
     const sampNote = () => { const el = document.getElementById('fSampNote'), n = sampleRate(document.getElementById('fSamp').value);
       const show = n > 1 && !VENDORS[vendor][proto].rated; el.hidden = !show;
-      el.textContent = show ? T('{vendor} ({proto}) has no sampling setting: it sends every flow. Set 1:1 here — with 1:{n} FlowTrack would multiply its volumes by {n}.', {vendor: vendorLabel(vendor), proto: PROTO_NAME[proto], n}) : ''; };
+      el.textContent = show ? T('{vendor} ({proto}) has no sampling setting: it sends every flow. Set 1:1 here — with 1:{n} FlowSphera would multiply its volumes by {n}.', {vendor: vendorLabel(vendor), proto: PROTO_NAME[proto], n}) : ''; };
     const box = document.getElementById('sBox'), redraw = () => { document.getElementById('devCode').textContent = code(); sampNote(); };
     sampNote();
     const wireSnmp = () => {
@@ -4242,12 +4242,12 @@ function openDirUser(u){
       <div><span>${T('Last sign-in')}</span><b>${u.last_login ? new Date(u.last_login * 1000).toLocaleString(LOC) : T('never signed in')}</b></div></div>
     <p class="note" style="margin:0">${T('To change the role, move the user to another group in the directory; the password is changed in the directory too.')}</p>
     <p class="err" id="duErr" hidden></p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">${self ? '' : `<button class="btn" type="button" id="duDel">${T('Remove from FlowTrack')}</button>`}<button class="btn" type="button" id="duNo">${T('Close')}</button></div></div>`);
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${self ? '' : `<button class="btn" type="button" id="duDel">${T('Remove from FlowSphera')}</button>`}<button class="btn" type="button" id="duNo">${T('Close')}</button></div></div>`);
   document.getElementById('duNo').onclick = m.close;
   const del = document.getElementById('duDel');
   if (del) del.onclick = async () => { try { await apiPost('users/delete', {name:u.name}); m.close(); render(); } catch (e) { formErr('duErr', e.message); } };
 }
-// the directory settings + a check that shows what FlowTrack finds for a user (groups, role) before anyone relies on it
+// the directory settings + a check that shows what FlowSphera finds for a user (groups, role) before anyone relies on it
 function ldapPanel(el){
   let d = null;
   const $ = id => document.getElementById(id);
@@ -4292,7 +4292,7 @@ function ldapPanel(el){
           ${!u ? '' : !u.found ? `<div><span>${T('User')}</span><b style="color:var(--warn)">${T('not found with this filter')}</b></div>`
           : `<div><span>${T('User')}</span><b class="mono">${esc(u.name)}</b><span class="nat mono" style="word-break:break-all">${esc(u.dn)}</span></div>
              <div><span>${T('Groups')}</span><b class="mono" style="font-weight:500;font-size:12px;white-space:normal">${u.groups.length ? u.groups.map(g => esc(g.split(',')[0].split('=')[1] || g)).join(', ') : '—'}</b></div>
-             <div><span>${T('Role in FlowTrack')}</span><b style="color:${u.role ? 'var(--ok)' : 'var(--crit)'}">${u.role ? role(u.role) : T('none — would not get in')}</b>${u.admin_match.length || u.viewer_match.length ? `<span class="nat">${T('by')} ${esc([...u.admin_match, ...u.viewer_match].join(', '))}</span>` : ''}</div>
+             <div><span>${T('Role in FlowSphera')}</span><b style="color:${u.role ? 'var(--ok)' : 'var(--crit)'}">${u.role ? role(u.role) : T('none — would not get in')}</b>${u.admin_match.length || u.viewer_match.length ? `<span class="nat">${T('by')} ${esc([...u.admin_match, ...u.viewer_match].join(', '))}</span>` : ''}</div>
              ${'password_ok' in u ? `<div><span>${T('Password')}</span><b style="color:${u.password_ok ? 'var(--ok)' : 'var(--crit)'}">${u.password_ok ? '✓ ' + T('right') : '✕ ' + T('wrong')}</b></div>` : ''}`}</div>`; }
       catch (x) { say(false, x.message); } finally { b.disabled = false; b.textContent = old; } };
     $('ldForm').onsubmit = async e => { e.preventDefault(); say(true, '');
@@ -4341,7 +4341,7 @@ function showLogin(msg){
   document.querySelector('.app').hidden = true;
   const box = document.createElement('div'); box.className = 'login-wrap'; box.id = 'loginWrap';
   box.innerHTML = `<form class="glass login" id="loginForm">
-    <div class="brand" style="padding:0"><canvas class="logo" data-logo aria-hidden="true"></canvas><div><b>FlowTrack</b><small><span class="by">by TELESPHERA</span></small></div></div>
+    <div class="brand" style="padding:0"><canvas class="logo" data-logo aria-hidden="true"></canvas><div><b>FlowSphera</b><small><span class="by">by TELESPHERA</span></small></div></div>
     <h2 class="login-h">${T('Sign in')}</h2>
     ${msg ? `<p class="note" style="margin:0">${esc(msg)}</p>` : ''}
     <label>${T('Username')}<input id="lUser" required autocomplete="username" autofocus></label>
@@ -4536,7 +4536,7 @@ function vConversations(){
     // the new ones
     fill('cvNewSub', d.new_days ? T('hosts that talked to an owner they had not talked to in the {n} days before · the biggest', {n:nd}) : T('needs the history of a few days before the period'));
     const nl = d.new.slice(0, 7);
-    done('cvNew', !d.new_days ? `<div class="empty">${T('FlowTrack has collected data only since {date}: new conversations show once there are a few days before the period.', {date:d.since ? dmy(d.since) : '—'})}</div>`
+    done('cvNew', !d.new_days ? `<div class="empty">${T('FlowSphera has collected data only since {date}: new conversations show once there are a few days before the period.', {date:d.since ? dmy(d.since) : '—'})}</div>`
       : !nl.length ? `<div class="empty">${T('Nobody started talking to someone new — every conversation of the period was there in the days before.')}</div>`
       : `<div class="cvnew">${nl.map((r, i) => `<button type="button" class="cvn" data-i="${i}"><span class="a">${esc(r.name || r.int_ip)} → ${esc(r.ext_ip)}</span><span class="b mono">${fmtB(tot(r))}</span>
           <span class="c">${[convOwner(r), r.country, dv(r.service) !== convOwner(r) && dv(r.service)].filter(Boolean).map(esc).join(' · ')} · ${T('first at {t}', {t:(Date.now() / 1000 - r.first > 86400 ? dmy(r.first) + ' ' : '') + hhmm(r.first)})}${r.up > 3 * r.dn && r.up > 1e6 ? ` · ${T('↑ mostly sent')}` : ''}</span><span class="pill warn">${T('new')}</span></button>`).join('')}
@@ -4591,7 +4591,7 @@ function renderShell(){
     + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = dfs.length > 1 ? '*' : dfs.length ? dfs[0].v : '';
   editionBadge();
-  const fv = document.getElementById('ftVer'); if (fv && META.version) fv.textContent = 'FlowTrack ' + META.version;
+  const fv = document.getElementById('ftVer'); if (fv && META.version) fv.textContent = 'FlowSphera ' + META.version;
   const rs = document.getElementById('rangeSel');
   rs.querySelectorAll('option[data-x]').forEach(o => o.remove());
   if (isCustom()) rs.insertAdjacentHTML('beforeend', `<option data-x value="custom">${esc(rangeLabel())}</option>`);

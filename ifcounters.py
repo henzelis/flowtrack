@@ -1,4 +1,4 @@
-"""Interface counters over SNMP (FlowTrack 1.14.0): what each interface of a device really carried, every minute.
+"""Interface counters over SNMP (FlowSphera 1.14.0): what each interface of a device really carried, every minute.
 
 Flows say who talked to whom, but only for the traffic a device exports (an interface without a sampler, a VAP of
 FortiGate, traffic the device itself sends) and in 5-minute steps. The interface's own counters count every octet.

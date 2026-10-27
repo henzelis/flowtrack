@@ -118,7 +118,7 @@ def validate(body, old):
         t['lang'] = src['lang']
     link = str(body.get('link', src.get('link')) or '').strip().rstrip('/')
     if link and not re.match(r'^https?://[^\s<>"]+$', link):
-        raise ValueError(tr('The FlowTrack address must start with https:// or http://.'))
+        raise ValueError(tr('The FlowSphera address must start with https:// or http://.'))
     cfg['link'] = link
     if t['on'] and not (t['token'] and t['chat']):
         raise ValueError(tr('Enter the bot token and the chat ID to switch Telegram on.'))
@@ -221,8 +221,8 @@ def test_server(cfg, to, lang):
         raise ValueError(tr('Enter the mail server and the sender first.'))
     ui = get_lang()
     set_lang(m['lang'])
-    t = tr('Test message: FlowTrack reports reach this mailbox.')
-    msg = _mail(m, 'FlowTrack: ' + tr('test message'), t, f'<p>✅ {html.escape(t)}</p>')
+    t = tr('Test message: FlowSphera reports reach this mailbox.')
+    msg = _mail(m, 'FlowSphera: ' + tr('test message'), t, f'<p>✅ {html.escape(t)}</p>')
     set_lang(ui)
     try:
         smtp_send(m, msg)
@@ -408,7 +408,7 @@ def test_siem(cfg):
         raise ValueError(tr('Enter the SIEM / syslog server first.'))
     ui = get_lang()
     set_lang(m['lang'])
-    lines = siem_lines(m, [{'kind': 'test', 'sev': 'info', 'title': 'FlowTrack', 'text': tr('Test message: events reach this SIEM / syslog server.')}])
+    lines = siem_lines(m, [{'kind': 'test', 'sev': 'info', 'title': 'FlowSphera', 'text': tr('Test message: events reach this SIEM / syslog server.')}])
     set_lang(ui)
     try:
         siem_send(m, lines)
@@ -421,7 +421,7 @@ class WebhookError(Exception):
 
 
 def webhook_body(w, events, more, link):
-    """The JSON a webhook gets: FlowTrack's own (`json`) or a message for Slack / Mattermost / Rocket.Chat or Discord."""
+    """The JSON a webhook gets: FlowSphera's own (`json`) or a message for Slack / Mattermost / Rocket.Chat or Discord."""
     if w['format'] == 'json':
         keep = lambda r: {k: v for k, v in (r or {}).items() if isinstance(v, (str, int, float, bool)) and k not in ('addrs', 'ports')}   # noqa: E731
         return {'source': 'FlowTrack', 'version': VERSION, 'link': link or '', 'more': more,
@@ -475,7 +475,7 @@ def test_webhook(cfg):
     ui = get_lang()
     set_lang(w['lang'])
     t = tr('Test message: notifications reach this webhook.')
-    body = webhook_body(w, [{'kind': 'test', 'sev': 'info', 'title': 'FlowTrack', 'text': t}], 0, cfg['link'])
+    body = webhook_body(w, [{'kind': 'test', 'sev': 'info', 'title': 'FlowSphera', 'text': t}], 0, cfg['link'])
     set_lang(ui)
     try:
         webhook_send(w, body)
@@ -524,7 +524,7 @@ def test(cfg):
     set_lang(t['lang'])
     try:
         call(t['token'], 'sendMessage', {'chat_id': t['chat'], 'parse_mode': 'HTML', 'disable_web_page_preview': True,
-             'text': '✅ <b>FlowTrack</b>\n' + html.escape(tr('Test message: notifications reach this chat.'))})
+             'text': '✅ <b>FlowSphera</b>\n' + html.escape(tr('Test message: notifications reach this chat.'))})
     except TelegramError as e:
         raise ValueError(_explain(e)) from None
 
@@ -667,7 +667,7 @@ def _mail(m, subject, text, body_html):
     msg.set_content(text)
     msg.add_alternative(f'<!doctype html><html><body style="margin:0;padding:16px;background:#f4f6fa;font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif;color:#1c2333">'
                         f'<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:10px;padding:18px 20px">'
-                        f'<div style="font-weight:800;font-size:16px;margin-bottom:12px">FlowTrack</div>{body_html}</div></body></html>', subtype='html')
+                        f'<div style="font-weight:800;font-size:16px;margin-bottom:12px">FlowSphera</div>{body_html}</div></body></html>', subtype='html')
     return msg
 
 
@@ -678,7 +678,7 @@ def test_mail(cfg):
     ui = get_lang()
     set_lang(m['lang'])
     t = tr('Test message: notifications reach this mailbox.')
-    msg = _mail(m, 'FlowTrack: ' + tr('test message'), t, f'<p>✅ {html.escape(t)}</p>')
+    msg = _mail(m, 'FlowSphera: ' + tr('test message'), t, f'<p>✅ {html.escape(t)}</p>')
     set_lang(ui)                                  # errors in the language of the page
     try:
         smtp_send(m, msg)
@@ -691,7 +691,7 @@ def format_mail(events, more, m, link):
     set_lang(m['lang'])
     events = events[:10]
     n = len(events) - 1 + more
-    subject = f"FlowTrack: {ICON.get(events[0]['sev'], '•')} {events[0]['title'][:120]}" + (f' +{n}' if n > 0 else '')
+    subject = f"FlowSphera: {ICON.get(events[0]['sev'], '•')} {events[0]['title'][:120]}" + (f' +{n}' if n > 0 else '')
     text, body = [], []
     for e in events:
         text.append(f"{ICON.get(e['sev'], '•')} {e['title'][:200]}\n{e['text'][:3000]}")
@@ -702,7 +702,7 @@ def format_mail(events, more, m, link):
         text.append(t)
         body.append(f'<p style="color:#5b6478">{html.escape(t)}</p>')
     if link:
-        t = tr('Open the events in FlowTrack')
+        t = tr('Open the events in FlowSphera')
         text.append(f'{t}: {link}/#v=threats')
         body.append(f'<p><a href="{html.escape(link)}/#v=threats" style="display:inline-block;background:#2f7bff;color:#fff;'
                     f'text-decoration:none;padding:8px 14px;border-radius:7px;font-weight:700">{html.escape(t)}</a></p>')
@@ -723,7 +723,7 @@ def format_events(events, more, lang, link):
     if more:
         parts.append(html.escape(trn(more, '…and {n} more event (the hourly limit of messages).', '…and {n} more events (the hourly limit of messages).')))
     if link:
-        parts.append(f'<a href="{html.escape(link)}/#v=threats">{html.escape(tr("Open the events in FlowTrack"))}</a>')
+        parts.append(f'<a href="{html.escape(link)}/#v=threats">{html.escape(tr("Open the events in FlowSphera"))}</a>')
     return '\n\n'.join(parts)
 
 

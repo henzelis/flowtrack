@@ -1,4 +1,4 @@
-"""Layer-3 topology of the exporting devices (FlowTrack 1.4, Path analysis): which devices are neighbours, through
+"""Layer-3 topology of the exporting devices (FlowSphera 1.4, Path analysis): which devices are neighbours, through
 which interfaces, and how much traffic each link carries as seen from both ends.
 
 NetFlow carries no interface addresses, so the picture is built from the same data as the Through device page:

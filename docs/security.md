@@ -1,6 +1,6 @@
 # Security
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 - Passwords are stored as scrypt hashes with per-user salt; only SHA-256 digests of session tokens are
   stored. Sessions use an `HttpOnly`, `SameSite=Strict` cookie and expire after 7 days of inactivity.
@@ -34,7 +34,7 @@
 - The sign-in page offers «Local account» or the directory; nothing is guessed from the name. Directory users are kept
   as `ldap:<name>` without a password; their role comes from their groups at every sign-in and their sessions end
   after 12 hours (no sliding), so someone removed from a group loses access within that time at the latest.
-- FlowTrack binds with a service account to find the user (the typed name is escaped and restricted to letters,
+- FlowSphera binds with a service account to find the user (the typed name is escaped and restricted to letters,
   digits and `. _ @ -`, so it cannot change the LDAP filter), then binds as the user to check the password.
   Use LDAPS or STARTTLS with "Verify the certificate" (paste the directory's CA if it is not a public one); the
   service account only needs read access. Its password is stored in `/var/lib/flowtrack/ldap.json` (0600) and never

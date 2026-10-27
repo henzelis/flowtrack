@@ -1,4 +1,4 @@
-"""FlowTrack users and sessions (stdlib only).
+"""FlowSphera users and sessions (stdlib only).
 
 - Passwords: scrypt (n=2^14, r=8, p=1) with a per-user random salt; compared in constant time.
 - Sessions: random 256-bit tokens; only their SHA-256 is stored on disk, so a leaked
@@ -198,7 +198,7 @@ class Auth:
                 q.append(now)
                 raise AuthError(tr('Wrong username or password'))
             if not r['role']:
-                raise AuthError(tr('Your directory account is not in a FlowTrack group: ask an administrator to add you.'), 403)
+                raise AuthError(tr('Your directory account is not in a FlowSphera group: ask an administrator to add you.'), 403)
             q.clear()
             key = LDAP_PREFIX + r['name']
             u = self.users.get(key) or {'created': int(now), 'source': 'ldap'}

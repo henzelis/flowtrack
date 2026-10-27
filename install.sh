@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# FlowTrack installer — https://github.com/henzelis/flowtrack
+# FlowSphera installer — https://github.com/henzelis/flowtrack
 #
 #   curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
 #
-# Installs FlowTrack (collector + ClickHouse + web UI) with its dependencies, asking a few
+# Installs FlowSphera (collector + ClickHouse + web UI) with its dependencies, asking a few
 # questions on the way. Afterwards: sudo flowtrack upgrade | reconfigure | uninstall (or re-run this command).
 #
 # Options:  --yes          no questions: defaults, or values from FT_* variables below
 #           --upgrade      update code of an existing install, keep settings
-#           --uninstall    remove FlowTrack (asks whether to keep the data)
+#           --uninstall    remove FlowSphera (asks whether to keep the data)
 #           --lang en|uk   installer language
-#           --core FILE          the compiled FlowTrack core (ftcore-<version>-linux-<arch>.so from the GitHub release)
+#           --core FILE          the compiled FlowSphera core (ftcore-<version>-linux-<arch>.so from the GitHub release)
 #                                for servers without access to github.com; it must match ftcore.lock
 #           --backup-dir DIR     where backups are kept on this server (default /var/backups/flowtrack); a disk
 #                                mounted from a NAS works too. Copies to S3 / SFTP / FTP: Settings → Backups
@@ -73,7 +73,7 @@ fi
 LIC_KEY=""
 if [ -n "$LIC_SRC" ]; then
   if [ -f "$LIC_SRC" ]; then LIC_KEY=$(grep -v '^[[:space:]]*#' "$LIC_SRC" | tr -d '[:space:]'); else LIC_KEY=$(printf '%s' "$LIC_SRC" | tr -d '[:space:]'); fi
-  case "$LIC_KEY" in [Ff][Tt][LlKk]-*) ;; *) echo "--license: not a FlowTrack license key or code (expected FTK-… or FTL-…): $LIC_SRC" >&2; exit 2 ;; esac
+  case "$LIC_KEY" in [Ff][Tt][LlKk]-*) ;; *) echo "--license: not a FlowSphera license key or code (expected FTK-… or FTL-…): $LIC_SRC" >&2; exit 2 ;; esac
 fi
 
 # ------------------------------------------------------------------ output helpers
@@ -174,7 +174,7 @@ ok_tcp() { is_port "$1" && { [ "$1" = "$WEB_OWN" ] || ! tcp_busy "$1"; }; }
 # ------------------------------------------------------------------ preflight
 [ "$(id -u)" = 0 ] || die "$(t 'Run as root:' 'Запустіть від root:') curl -fsSL https://raw.githubusercontent.com/$FT_REPO/main/install.sh | sudo bash"
 : > "$LOG" 2>/dev/null || LOG=/tmp/flowtrack-install.log
-echo "=== FlowTrack installer $(date -Is) mode=${MODE:-auto} ===" >> "$LOG"
+echo "=== FlowSphera installer $(date -Is) mode=${MODE:-auto} ===" >> "$LOG"
 
 if [ "$YES" = 0 ] && [ -z "$LANG_SEL" ]; then
   printf '%s' "${B}Language / Мова${N}: 1) English  2) Українська ${D}[$([ "$L" = uk ] && echo 2 || echo 1)]${N}: "
@@ -183,7 +183,7 @@ if [ "$YES" = 0 ] && [ -z "$LANG_SEL" ]; then
 fi
 
 say ""
-say "${B}FlowTrack$(t ' installer' ' — встановлення')${N}  ${D}github.com/$FT_REPO${N}"
+say "${B}FlowSphera$(t ' installer' ' — встановлення')${N}  ${D}github.com/$FT_REPO${N}"
 say "${D}$(t 'Log' 'Лог'): $LOG${N}"
 say ""
 
@@ -197,14 +197,14 @@ ARCH=$(uname -m); case "$ARCH" in x86_64|aarch64|arm64) ;; *) die "$(t "Unsuppor
 ok "$(t 'System' 'Система'): ${PRETTY_NAME:-$OS_ID} ($ARCH)"
 
 # ---- earlier layouts on this machine -------------------------------------------------
-# (a) the SQLite-era FlowTrack used /opt/flowtrack, /etc/flowtrack.env and units flowtrack/flowtrack-web —
+# (a) the SQLite-era FlowSphera used /opt/flowtrack, /etc/flowtrack.env and units flowtrack/flowtrack-web —
 #     the same names this version needs, so it is stopped and moved aside (with consent);
 # (b) installs made before the rename used /opt/flowtrack-v2, /etc/flowtrack-v2, /var/lib/flowtrack-v2 and
 #     flowtrack2-* units — moved to the current names automatically, data and settings kept.
 legacy_unit() { [ -f "/etc/systemd/system/$1.service" ] && grep -qE '/opt/flowtrack/(collector|web)\.py' "/etc/systemd/system/$1.service"; }
 if [ "$MODE" != uninstall ] && { [ -f /etc/flowtrack.env ] || { [ -f /opt/flowtrack/collector.py ] && [ ! -d /opt/flowtrack/app ]; } || legacy_unit flowtrack || legacy_unit flowtrack-web; }; then
   STAMP=$(date +%Y%m%d-%H%M%S)
-  say ""; warn "$(t 'An older FlowTrack (SQLite collector) is installed in /opt/flowtrack.' 'Знайдено стару версію FlowTrack (колектор із SQLite) в /opt/flowtrack.')"
+  say ""; warn "$(t 'An older FlowSphera (SQLite collector) is installed in /opt/flowtrack.' 'Знайдено стару версію FlowSphera (колектор із SQLite) в /opt/flowtrack.')"
   say "  $(t "It will be stopped and its files moved to /opt/flowtrack.legacy-$STAMP (nothing is deleted)." "Її буде зупинено, а файли перенесено в /opt/flowtrack.legacy-$STAMP (нічого не видаляється).")"
   ask_yn retire "$(t 'Continue?' 'Продовжити?')" y FT_RETIRE_LEGACY
   [ "$retire" = y ] || die "$(t 'Both versions use the same names, so they cannot be installed side by side.' 'Обидві версії використовують ті самі імена, тож встановити їх поруч неможливо.')"
@@ -252,7 +252,7 @@ EXISTING=0; [ -f "$ETC/env" ] && EXISTING=1
 if [ "$EXISTING" = 1 ] && [ -z "$MODE" ]; then
   if [ "$YES" = 1 ]; then MODE=upgrade
   else
-    say ""; say "$(t 'FlowTrack is already installed. What do you want to do?' 'FlowTrack уже встановлено. Що зробити?')"
+    say ""; say "$(t 'FlowSphera is already installed. What do you want to do?' 'FlowSphera уже встановлено. Що зробити?')"
     say "  1) $(t 'Upgrade to the latest version (keep settings)' 'Оновити до останньої версії (налаштування збережуться)')"
     say "  2) $(t 'Reconfigure (answer the questions again)' 'Переналаштувати (відповісти на питання знову)')"
     say "  3) $(t 'Uninstall' 'Видалити')"
@@ -303,7 +303,7 @@ if ! docker_engine; then
   if command -v docker >/dev/null 2>&1; then
     say "$(t 'Docker is only partly installed: the docker command is there, but not its engine (docker.service) — an earlier installation was probably interrupted. It will be installed again.' 'Docker встановлено лише частково: команда docker є, а її рушія (docker.service) немає — мабуть, попереднє встановлення перервали. Його буде встановлено ще раз.')"
   else
-    say "$(t 'FlowTrack stores flows in ClickHouse, which runs in Docker. Docker is not installed.' 'FlowTrack зберігає потоки в ClickHouse, який працює в Docker. Docker не встановлено.')"
+    say "$(t 'FlowSphera stores flows in ClickHouse, which runs in Docker. Docker is not installed.' 'FlowSphera зберігає потоки в ClickHouse, який працює в Docker. Docker не встановлено.')"
   fi
   ask_yn want_docker "$(t 'Install Docker now (official get.docker.com script)?' 'Встановити Docker зараз (офіційний скрипт get.docker.com)?')" y FT_INSTALL_DOCKER
   [ "$want_docker" = y ] || die "$(t 'Docker is required. Install it and run this installer again.' 'Docker потрібен. Встановіть його й запустіть інсталятор ще раз.')"
@@ -419,7 +419,7 @@ else
       MikroTik) wan_def=""; wan_hint="MikroTik: /interface print detail (ifindex)" ;;
       *) wan_def=""; wan_hint=$(t 'interface index of the internet uplink' 'індекс інтерфейсу, що веде в інтернет') ;;
     esac
-    say "  ${D}$(t 'WAN interface index tells FlowTrack which traffic goes to the internet. Leave empty if unsure — private/public addresses are used instead.' 'Індекс WAN-інтерфейсу підказує FlowTrack, який трафік іде в інтернет. Якщо не впевнені — залиште порожнім, тоді напрямок визначиться за приватними/публічними адресами.')${N}"
+    say "  ${D}$(t 'WAN interface index tells FlowSphera which traffic goes to the internet. Leave empty if unsure — private/public addresses are used instead.' 'Індекс WAN-інтерфейсу підказує FlowSphera, який трафік іде в інтернет. Якщо не впевнені — залиште порожнім, тоді напрямок визначиться за приватними/публічними адресами.')${N}"
     say "  ${D}$wan_hint${N}"
     ask WAN_IFS "$(t 'WAN interface index(es), comma-separated' 'Індекс(и) WAN-інтерфейсу через кому')" "$wan_def" opt_ints "$(t 'Numbers separated by commas, e.g. 1 or 1,5 — or leave empty.' 'Числа через кому, напр. 1 або 1,5 — або залиште порожнім.')" FT_WAN_IFS
     [ "$WAN_IFS" = "-" ] && WAN_IFS=""
@@ -484,8 +484,8 @@ fetch_core() {
          || { echo "cannot download $file — on a server without internet access use --core with that file"; return 1; }
   fi
   got=$(sha256sum "$app/ftcore.abi3.so" | cut -d' ' -f1)
-  [ "$got" = "$want" ] || { echo "the FlowTrack core does not match ftcore.lock ($file expected, sha256 $got)"; return 1; }
-  python3 -c "import sys; sys.path.insert(0, '$app'); import ftcore; assert not ftcore.TESTING; print('FlowTrack core', ftcore.__version__)"
+  [ "$got" = "$want" ] || { echo "the FlowSphera core does not match ftcore.lock ($file expected, sha256 $got)"; return 1; }
+  python3 -c "import sys; sys.path.insert(0, '$app'); import ftcore; assert not ftcore.TESTING; print('FlowSphera core', ftcore.__version__)"
 }
 
 fetch_code() {
@@ -498,7 +498,7 @@ fetch_code() {
   else
     mkdir "$tmp/src"; curl -fsSL "$FT_SOURCE" | tar -xz -C "$tmp/src"
     d=$(dirname "$(find "$tmp/src" -maxdepth 2 -name api.py | head -1)")
-    [ -f "$d/collector.py" ] && [ -d "$d/web" ] || { echo "FlowTrack sources not found in $FT_SOURCE"; return 1; }
+    [ -f "$d/collector.py" ] && [ -d "$d/web" ] || { echo "FlowSphera sources not found in $FT_SOURCE"; return 1; }
     cp -a "$d/." "$tmp/app/"
   fi
   rm -rf "$tmp/app/.git"; rm -f "$tmp/app"/ftcore*.so
@@ -509,7 +509,7 @@ fetch_code() {
   find "$PREFIX/app" -name __pycache__ -prune -exec rm -rf {} +
   chown -R root:root "$PREFIX/app"; chmod -R go-w "$PREFIX/app"; chmod +x "$PREFIX/app/deploy/geoip-update.sh"
 }
-step "$(t 'Downloading FlowTrack' 'Завантаження FlowTrack')" fetch_code
+step "$(t 'Downloading FlowSphera' 'Завантаження FlowSphera')" fetch_code
 
 make_venv() {
   # rebuild a missing or broken venv (e.g. one that was moved — venvs hard-code their path)
@@ -522,18 +522,18 @@ make_venv() {
   # sign-in through Active Directory / LDAP (1.12)
   "$PREFIX/venv/bin/python" -m pip install -q "ldap3>=2.9,<3"
   "$PREFIX/venv/bin/python" -c 'import maxminddb, boto3, paramiko, cryptography, reportlab, ldap3'
-  # decoding and license checks moved into the compiled core (FlowTrack 1.2)
+  # decoding and license checks moved into the compiled core (FlowSphera 1.2)
   "$PREFIX/venv/bin/python" -m pip uninstall -y -q netflow >/dev/null 2>&1 || true
 }
 step "$(t 'Python environment' 'Python-оточення')" make_venv
 
-# FlowTrack 1.1 and earlier had a separate Pro module; every edition has every feature now
+# FlowSphera 1.1 and earlier had a separate Pro module; every edition has every feature now
 rm -rf "$PREFIX/pro"
 
 
 if [ ! -s "$PREFIX/geoip/dbip-city.mmdb" ] || [ "$MODE" = upgrade ]; then
   if ! step "$(t 'GeoIP databases (DB-IP Lite)' 'Бази GeoIP (DB-IP Lite)')" env FT_GEOIP_DIR="$PREFIX/geoip" "$PREFIX/app/deploy/geoip-update.sh"; then
-    warn "$(t 'GeoIP download failed — FlowTrack works without countries/cities; the daily timer will retry.' 'Не вдалося завантажити GeoIP — FlowTrack працює без країн/міст; щоденний таймер спробує знову.')"
+    warn "$(t 'GeoIP download failed — FlowSphera works without countries/cities; the daily timer will retry.' 'Не вдалося завантажити GeoIP — FlowSphera працює без країн/міст; щоденний таймер спробує знову.')"
   fi
 fi
 
@@ -594,7 +594,7 @@ ensure_tls() {
     for h in "$(hostname 2>/dev/null)" "$(hostname -f 2>/dev/null)"; do [ -n "$h" ] && case ",$san," in *",DNS:$h,"*) ;; *) san="$san,DNS:$h" ;; esac; done
     for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel)/ {split($4, a, "/"); print a[1]}'); do san="$san,IP:$ip"; done
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 -sha256 \
-      -subj "/CN=$(hostname 2>/dev/null || echo flowtrack)/O=FlowTrack" -addext "subjectAltName=$san" \
+      -subj "/CN=$(hostname 2>/dev/null || echo flowtrack)/O=FlowSphera" -addext "subjectAltName=$san" \
       -addext "keyUsage=digitalSignature" -addext "extendedKeyUsage=serverAuth" -keyout "$key.tmp" -out "$cert.tmp"
     mv "$key.tmp" "$key"; mv "$cert.tmp" "$cert"
   fi
@@ -619,7 +619,7 @@ clickhouse_up() {
   case "$BACKUP_DIR" in /*) ;; *) echo "--backup-dir: an absolute path is expected: $BACKUP_DIR"; return 1 ;; esac
   mkdir -p "$BACKUP_DIR"; chown 101:101 "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
   set_env FT_BACKUP_DIR "$BACKUP_DIR"
-  # FlowTrack's ClickHouse settings (quiet diagnostic logs, small caches, the backups folder), mounted into config.d
+  # FlowSphera's ClickHouse settings (quiet diagnostic logs, small caches, the backups folder), mounted into config.d
   mkdir -p "$ETC/clickhouse"
   if ! cmp -s "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; then
     cp "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; chmod 644 "$ETC/clickhouse/flowtrack.xml"; conf_changed=1
@@ -653,7 +653,7 @@ clickhouse_up() {
     sleep 2
   done
   curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 || { echo "ClickHouse did not answer within 120 s"; docker logs --tail 30 "$CH_NAME"; return 1; }
-  # diagnostic log tables left by older versions are no longer written: drop them (FlowTrack data is untouched)
+  # diagnostic log tables left by older versions are no longer written: drop them (FlowSphera data is untouched)
   for t in trace_log text_log metric_log asynchronous_metric_log processors_profile_log query_thread_log query_views_log part_log session_log error_log; do
     curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/" --data-binary "DROP TABLE IF EXISTS system.$t" >/dev/null 2>&1 || true
   done
@@ -670,7 +670,7 @@ install_units() {
   # `flowtrack-license status|request|activate FILE|deactivate` for servers without a browser at hand
   cat > /usr/local/bin/flowtrack-license <<WRAP
 #!/bin/sh
-# FlowTrack license on this server: status | request | activate FILE|CODE | deactivate
+# FlowSphera license on this server: status | request | activate FILE|CODE | deactivate
 [ "\$(id -u)" = 0 ] || exec sudo "\$0" "\$@"
 # the license server setting the services read from $ETC/env (only that, not the database password)
 run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" \$(grep -sE '^FT_LICENSE_SERVER(_PIN)?=[^ ]*\$' "$ETC/env") "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
@@ -684,7 +684,7 @@ WRAP
   echo "$L" > "$ETC/install-lang"
   # a larger UDP receive buffer absorbs export bursts (the collector asks for 32 MB; the kernel default cap is ~200 KB)
   if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 33554432 ]; then
-    printf '%s\n' '# FlowTrack collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowtrack.conf
+    printf '%s\n' '# FlowSphera collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowtrack.conf
     sysctl -q -w net.core.rmem_max=33554432 || true
   fi
 }
@@ -727,7 +727,7 @@ start_all() {
   done
   systemctl status --no-pager $UNITS; journalctl -u flowtrack-collector -u flowtrack-web -n 30 --no-pager; return 1
 }
-step "$(t 'Starting FlowTrack' 'Запуск FlowTrack')" start_all
+step "$(t 'Starting FlowSphera' 'Запуск FlowSphera')" start_all
 
 # the license last: the install or upgrade above is complete either way; a refused key leaves the previous edition
 install_license() {
@@ -741,15 +741,15 @@ except ValueError as ex:
 lic = ed["license"] or {}
 print("licensed to", lic.get("customer"))'
 }
-if [ -n "$LIC_KEY" ] && ! step "$(t 'FlowTrack license' 'Ліцензія FlowTrack')" install_license; then
+if [ -n "$LIC_KEY" ] && ! step "$(t 'FlowSphera license' 'Ліцензія FlowSphera')" install_license; then
   die "$(t 'The license was not activated' 'Ліцензію не активовано'): $(tail -n 1 "$LOG")
-  $(t 'FlowTrack is installed and running with its previous edition. Check the code and run the command again, or enter it in Settings → License.' 'FlowTrack встановлено й запущено з попередньою редакцією. Перевірте код і запустіть команду ще раз або введіть його у «Налаштування → Ліцензія».')"
+  $(t 'FlowSphera is installed and running with its previous edition. Check the code and run the command again, or enter it in Settings → License.' 'FlowSphera встановлено й запущено з попередньою редакцією. Перевірте код і запустіть команду ще раз або введіть його у «Налаштування → Ліцензія».')"
 fi
 
 # ------------------------------------------------------------------ done
 say ""
 FT_VERSION=$(cat "$PREFIX/app/VERSION" 2>/dev/null || echo dev)
-say "${G}${B}$(t "FlowTrack $FT_VERSION is running." "FlowTrack $FT_VERSION працює.")${N}"
+say "${G}${B}$(t "FlowSphera $FT_VERSION is running." "FlowSphera $FT_VERSION працює.")${N}"
 say ""
 for ip in $(bind_ips "$WEB_BIND"); do say "  ${B}$PROTO://$ip:$WEB_PORT${N}"; done
 if [ "$USE_TLS" = yes ]; then
@@ -770,15 +770,15 @@ import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")
 import common, licensing
 e = common.edition(); lic = e["license"] or {}
 if e["status"] == "active":
-    print("FlowTrack Pro —", lic.get("customer"), "— until", time.strftime("%Y-%m-%d", time.gmtime(lic["expires"])))
+    print("FlowSphera Pro —", lic.get("customer"), "— until", time.strftime("%Y-%m-%d", time.gmtime(lic["expires"])))
 else:
-    print("FlowTrack Community — up to %d records/s" % e["rps"] + ("" if e["status"] == "community" else " (" + e["status"] + ": " + e["message"] + ")"))
+    print("FlowSphera Community — up to %d records/s" % e["rps"] + ("" if e["status"] == "community" else " (" + e["status"] + ": " + e["message"] + ")"))
 print(licensing.instance_id()); print(licensing.request_code())' 2>/dev/null || true)
 if [ -n "$EDITION" ]; then
   say "  $(t 'Edition' 'Редакція'): ${B}$(printf '%s\n' "$EDITION" | sed -n 1p)${N}"
   say "  $(t 'Instance ID' 'ID інсталяції'): $(printf '%s\n' "$EDITION" | sed -n 2p)"
-  case "$EDITION" in "FlowTrack Pro"*) ;; *)
-    say "  ${D}$(t 'FlowTrack Pro: send this activation request to your vendor, then run  sudo flowtrack license activate FILE  (or use Settings → License):' 'FlowTrack Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowtrack license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
+  case "$EDITION" in "FlowSphera Pro"*) ;; *)
+    say "  ${D}$(t 'FlowSphera Pro: send this activation request to your vendor, then run  sudo flowtrack license activate FILE  (or use Settings → License):' 'FlowSphera Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowtrack license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
     say "  $(printf '%s\n' "$EDITION" | sed -n 3p)" ;;
   esac
 fi
@@ -848,7 +848,7 @@ say "$(t 'Upgrade:' 'Оновлення:')  sudo flowtrack upgrade      $(t 'Rec
 }
 
 uninstall() {
-  say ""; warn "$(t 'This removes the FlowTrack services and the ClickHouse container.' 'Буде видалено сервіси FlowTrack і контейнер ClickHouse.')"
+  say ""; warn "$(t 'This removes the FlowSphera services and the ClickHouse container.' 'Буде видалено сервіси FlowSphera і контейнер ClickHouse.')"
   local sure keep
   if [ "$YES" = 1 ]; then sure=y; keep=${FT_KEEP_DATA:-y}
   else
@@ -868,8 +868,8 @@ uninstall() {
     else rm -rf "$PREFIX/app" "$PREFIX/venv"; fi
   }
   local bk; bk=$(envget FT_BACKUP_DIR 2>/dev/null || true); bk=${bk:-/var/backups/flowtrack}
-  step "$(t 'Removing FlowTrack' 'Видалення FlowTrack')" remove_all
-  ok "$(t 'FlowTrack removed.' 'FlowTrack видалено.')$([ "$keep" = y ] && t " Data kept in $PREFIX/clickhouse and $ETC." " Дані збережено в $PREFIX/clickhouse та $ETC.")"
+  step "$(t 'Removing FlowSphera' 'Видалення FlowSphera')" remove_all
+  ok "$(t 'FlowSphera removed.' 'FlowSphera видалено.')$([ "$keep" = y ] && t " Data kept in $PREFIX/clickhouse and $ETC." " Дані збережено в $PREFIX/clickhouse та $ETC.")"
   if [ -d "$bk" ]; then say "  $(t "Backups are kept in $bk (delete the folder yourself when they are not needed)." "Бекапи лишаються в $bk (видаліть теку самі, коли вони не потрібні).")"; fi
 }
 

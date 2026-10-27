@@ -1,8 +1,8 @@
 # Editions and licensing
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
-| | **FlowTrack Community** (free) | **FlowTrack Pro** (license for one server) |
+| | **FlowSphera Community** (free) | **FlowSphera Pro** (license for one server) |
 |---|---|---|
 | Records per second | up to **5,000** (averaged over a minute, so bursts pass) | no limit, or per license |
 | Data kept (flows and every total built from them) | **30 days** | per license, e.g. 90 days |
@@ -17,15 +17,15 @@ license ends, new records are kept 30 days, records received under the license k
 as its own term (records are raised, never lowered), and while it is active everything stored is shown.
 
 **Activation takes a minute.** After the purchase you receive a **license key** (`FTK-…`). Activate it on the server
-where FlowTrack runs, in any of three ways:
+where FlowSphera runs, in any of three ways:
 
 - **Settings → License** (administrators): paste the key and press *Activate*;
 - on the server: `sudo flowtrack license activate FTK-…`;
 - while installing or upgrading: `… install.sh | sudo bash -s -- --license FTK-…`.
 
-FlowTrack fetches the license from the FlowTrack license server and the new limits apply at once. The license is
+FlowSphera fetches the license from the FlowSphera license server and the new limits apply at once. The license is
 bound to that server: it holds there and nowhere else, so a copied disk or a shared key does not work on another
-machine. Once a day FlowTrack confirms the license with the license server and picks up a renewal by itself — nothing
+machine. Once a day FlowSphera confirms the license with the license server and picks up a renewal by itself — nothing
 to re-enter when you extend the subscription (*Check for renewal* in Settings → License, or
 `sudo flowtrack license renew`, asks at once). If the server cannot be reached for a while, the license keeps working;
 only after 30 days without a confirmation do the Community limits apply until it is reached again.

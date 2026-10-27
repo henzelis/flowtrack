@@ -1,4 +1,4 @@
-"""The compiled decoder on IPFIX the Python netflow library (FlowTrack <= 1.1) could not read, and the records/s
+"""The compiled decoder on IPFIX the Python netflow library (FlowSphera <= 1.1) could not read, and the records/s
 limit inside it. Run: python -m unittest discover -s tests"""
 import os
 import struct

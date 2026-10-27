@@ -74,7 +74,7 @@ class Message(unittest.TestCase):
         self.assertIn('x &amp; y', m)
         self.assertLess(len(m), 4096)
         self.assertIn('more events', m)
-        self.assertTrue(m.endswith('Open the events in FlowTrack</a>'))
+        self.assertTrue(m.endswith('Open the events in FlowSphera</a>'))
         self.assertEqual(m.count('<b>'), m.count('</b>'))
 
 
@@ -178,7 +178,7 @@ class Email(unittest.TestCase):
     def test_letter(self):
         ev = [{'sev': 'warn', 'title': 'Port scan', 'text': 'x <b> & y'}, {'sev': 'crit', 'title': 'Flood\r\nBcc: evil@x.y', 'text': 'z'}]
         m = N.format_mail(ev, 3, mail_cfg(25)['email'], 'https://ft.example')
-        self.assertEqual(m['Subject'], 'FlowTrack: 🟠 Port scan +4')
+        self.assertEqual(m['Subject'], 'FlowSphera: 🟠 Port scan +4')
         self.assertEqual(m['To'], 'a@example.com, b@example.com')
         self.assertIsNone(m['Bcc'])
         plain, rich = m.get_body(('plain',)).get_content(), m.get_body(('html',)).get_content()
@@ -192,7 +192,7 @@ class Email(unittest.TestCase):
         N.test_mail(mail_cfg(self.port))
         self.assertEqual(len(self.sink.mails), n + 1)
         got = email.message_from_bytes(self.sink.mails[-1]['data'], policy=email.policy.default)
-        self.assertEqual(got['Subject'], 'FlowTrack: test message')
+        self.assertEqual(got['Subject'], 'FlowSphera: test message')
         self.assertEqual(len(self.sink.mails[-1]['rcpt']), 2)
         for kw, says in (({'password': 'wrong'}, 'login or the password'), ({'to': 'x@bad.example'}, 'refused the recipients'),
                          ({'security': 'starttls'}, 'STARTTLS'), ({'port': 1}, 'No connection')):
@@ -215,7 +215,7 @@ class Email(unittest.TestCase):
                 break
             time.sleep(0.1)
         got = email.message_from_bytes(self.sink.mails[-1]['data'], policy=email.policy.default)
-        self.assertEqual(got['Subject'], 'FlowTrack: 🟠 port_scan')
+        self.assertEqual(got['Subject'], 'FlowSphera: 🟠 port_scan')
 
 
 if __name__ == '__main__':

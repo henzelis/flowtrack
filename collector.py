@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FlowTrack collector: NetFlow v5/v9 and IPFIX -> enrichment -> ClickHouse.
+"""FlowSphera collector: NetFlow v5/v9 and IPFIX -> enrichment -> ClickHouse.
 
 - Every record is stored as received: FortiOS (and NetFlow v9/IPFIX in general) export
   DELTA counters per active-timeout interval, so traffic = sum of records.
@@ -850,7 +850,7 @@ class Receiver:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
         ed = edition()
-        log(f"FlowTrack {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
+        log(f"FlowSphera {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
         self.retention_lock = threading.Lock()   # moving a big table from before 1.3.1 takes a while: receive meanwhile
         self.retention_ready = threading.Event()  # set after the first successful run (rollups' history waits for it)
         threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()

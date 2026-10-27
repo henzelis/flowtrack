@@ -1,8 +1,8 @@
-"""FlowTrack licensing: the identity of this installation, activation requests, and licenses bound to it.
+"""FlowSphera licensing: the identity of this installation, activation requests, and licenses bound to it.
 
 Every installation has an Instance ID derived from the machine (/etc/machine-id), so it survives a reinstall on the
 same server. A license is issued for one activation request, which carries the Instance ID and salted hashes of the
-hardware: the board UUID and up to two network cards. FlowTrack accepts a license only on the installation it was
+hardware: the board UUID and up to two network cards. FlowSphera accepts a license only on the installation it was
 issued for — a copied disk or a shared key does not work elsewhere. The check needs no network: activation works
 the same online and in closed networks, the codes are short enough to type.
 
@@ -13,11 +13,11 @@ Codes are Crockford base32 in groups of five, with a prefix that names them:
   FTK-…  license key           a purchase, activated online: the license server issues the license for this server
   FTS-…  lease                 the license server's signed confirmation that an online license holds until a date
 
-Online licenses (from a license key) need the license server: FlowTrack checks in every day and receives a new
+Online licenses (from a license key) need the license server: FlowSphera checks in every day and receives a new
 lease; without one for longer than the lease (30 days) the Community limits apply. Offline licenses (FTL-… from the
 vendor) need no network.
 
-The work is done by the compiled FlowTrack core (`ftcore`), which also holds the vendor's public key and the
+The work is done by the compiled FlowSphera core (`ftcore`), which also holds the vendor's public key and the
 Community limits; this module is its Python face.
 
 Command line (installed as `flowtrack-license`): licensing.py status | request | activate FILE|CODE|KEY|- | checkin | renew | deactivate
@@ -158,7 +158,7 @@ def last_checkin():
 
 def split_file(text):
     """Text of a .lic file -> (license code, lease code or ''). A file from the license server also carries the
-    server's first confirmation (FTS-…), so an online license works at once, before FlowTrack reaches the server."""
+    server's first confirmation (FTS-…), so an online license works at once, before FlowSphera reaches the server."""
     parts, cur = {'FTL': [], 'FTS': []}, 'FTL'
     for ln in (text or '').splitlines():
         s = ln.strip()
@@ -245,7 +245,7 @@ def _cli(argv):
         if r['released']:
             print('Deactivated: the license key can now be activated on another server.')
         else:
-            print('Return code (send it to your FlowTrack vendor):', r['return_code'])
+            print('Return code (send it to your FlowSphera vendor):', r['return_code'])
     else:
         sys.exit(__doc__)
 

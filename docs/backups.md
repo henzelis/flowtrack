@@ -1,6 +1,6 @@
 # Backups and restore
 
-[← FlowTrack](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
+[← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 *Settings → Backups* (admins) and `sudo flowtrack backup | restore` keep the flow data and every setting safe:
 
@@ -20,7 +20,7 @@
 - **Restore** (`sudo flowtrack restore [ID]`): collecting stops for the time of it, the current flow data is set aside
   until the backup is in place and comes back if the restore fails (`flowtrack restore --undo` after an interruption).
   `--only-settings`, `--only-data`; the license files only with `--with-license` (a license is bound to its server).
-  On a new server: install FlowTrack, set the same place in *Settings → Backups*, then
+  On a new server: install FlowSphera, set the same place in *Settings → Backups*, then
   `sudo flowtrack restore --from s3` (or `sftp`, `ftp`, a folder with `.ftbk` files) and pick the backup.
 - **Encrypted copies are trusted only encrypted.** While the server encrypts its copies, a copy on S3 / SFTP / FTP that
   is not encrypted is refused — whoever can write to that place could have put it there, and a restore runs as root.

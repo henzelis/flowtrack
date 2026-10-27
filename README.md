@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/media/banner-en.webp" alt="FlowTrack by TELESPHERA — see every flow, trust every number" width="100%">
+  <img src="docs/media/banner-en.webp" alt="FlowSphera by TELESPHERA — see every flow, trust every number" width="100%">
 </p>
 
 <p align="center">
@@ -17,18 +17,21 @@
   <a href="#works-with-your-equipment">Supported devices</a> ·
   <a href="#editions">Editions</a> ·
   <a href="#documentation">Docs</a> ·
-  <a href="mailto:henzelis@gmail.com?subject=FlowTrack">Contact</a>
+  <a href="mailto:henzelis@gmail.com?subject=FlowSphera">Contact</a>
 </p>
 
-**FlowTrack** turns the NetFlow, IPFIX and sFlow your firewalls, routers and switches already send into a clear, live
+**FlowSphera** turns the NetFlow, IPFIX and sFlow your firewalls, routers and switches already send into a clear, live
 picture of your network: who talks to whom, how much, over which service, from where and along which path. It runs on
 your own server, installs with one command and is ready in minutes.
+
+> FlowSphera was called **FlowTrack** until version 1.17. Same product, same repository, same `flowtrack` command:
+> an existing installation upgrades as before with `sudo flowtrack upgrade`.
 
 <p align="center">
   <img src="docs/media/en/live-map.webp" alt="Live connection map: new connections arrive as arcs" width="100%">
 </p>
 
-## Why FlowTrack
+## Why FlowSphera
 
 <table>
 <tr>
@@ -105,7 +108,7 @@ words. Quiet weekends do not pass for a decline, a noisy link is called unsteady
 
 <p align="center"><img src="docs/media/en/capacity.webp" alt="Capacity: links near full, the first to fill, the fastest growth, how much the flows see; the trend meeting the capacity on a date; the busy hours of the week" width="100%"></p>
 
-**The interfaces' own counters.** With SNMP on, FlowTrack reads every interface's octet counters each minute: the
+**The interfaces' own counters.** With SNMP on, FlowSphera reads every interface's octet counters each minute: the
 figures are every byte the port carried and the busiest minute, not only what the device exports — and it compares
 the two. When the flows see only part of a link (an interface without a sampler, traffic exported twice), the page
 says so at the top. Below: every link with its busy-hour load, trend, the date it fills and what the flows see; the
@@ -115,7 +118,7 @@ hosts and services that drive the growth; and the same in your scheduled reports
 
 ### QoS — see how your traffic is prioritised
 
-Every packet carries a class (DSCP) that tells the network what to put first — voice before downloads. FlowTrack shows
+Every packet carries a class (DSCP) that tells the network what to put first — voice before downloads. FlowSphera shows
 how much of your traffic is marked and how, which classes cross each interface, which services fall into each class
 (is Zoom really voice and video, or best effort?), and what your devices re-mark on the way through. A class is a
 filter like any other: `dscp:EF` narrows every page to it.
@@ -158,7 +161,7 @@ can be shared.
 
 Port scans, password guessing on SSH / RDP / management ports, floods and DDoS against your usual peak, inside hosts
 that scan, contact with addresses on eight public reputation lists (plus your own), sustained uploads, new countries
-and exporter health. FlowTrack works out who opened each connection and which of your services are public, so busy
+and exporter health. FlowSphera works out who opened each connection and which of your services are public, so busy
 web sites stay quiet. New events go to Telegram (your own bot), e-mail, webhooks (Slack, Mattermost, Discord or your
 own system) and your SIEM as syslog (CEF or JSON).
 
@@ -191,9 +194,9 @@ filters on your screen, with one click.
 ### Fits into your company
 
 **Sign in with Active Directory or LDAP**: the sign-in page asks how to sign in — your directory or a local account —
-and the role comes from the user's groups (nested ones too); LDAPS / STARTTLS, a check that shows what FlowTrack finds
+and the role comes from the user's groups (nested ones too); LDAPS / STARTTLS, a check that shows what FlowSphera finds
 for a user before you switch it on. **API tokens** let scripts and monitoring (Zabbix, Grafana, your own) read
-FlowTrack — or change it, with a token that may — without a password; every host of a network with its upload and
+FlowSphera — or change it, with a token that may — without a password; every host of a network with its upload and
 download for any period comes as JSON or a CSV file for Excel or billing ([how](docs/api.md#export-every-host-of-a-network)). **Webhooks** send new events to Slack,
 Mattermost, Rocket.Chat, Discord or your own system (signed with HMAC), and **syslog** in CEF or JSON feeds Splunk,
 QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog or Wazuh.
@@ -207,7 +210,7 @@ QRadar, ArcSight, Microsoft Sentinel, Elastic, Graylog or Wazuh.
 
 ### Backups — your history is safe
 
-Every night FlowTrack backs up the flow data and every setting on its own: a full backup once a week, only the changes
+Every night FlowSphera backs up the flow data and every setting on its own: a full backup once a week, only the changes
 on the other days. Copies go to a folder on the server and, if you like, to S3-compatible storage, SFTP or FTP —
 encrypted with your passphrase (AES-256-GCM). One click checks that a backup is whole; another restores it — on the
 same server or on a brand-new one after a disk failure.
@@ -216,13 +219,13 @@ same server or on a brand-new one after a disk failure.
 
 ### Fast on a busy network, over days
 
-A day of a busy network is hundreds of millions of flow records. FlowTrack keeps summary tables — per 5 minutes and
+A day of a busy network is hundreds of millions of flow records. FlowSphera keeps summary tables — per 5 minutes and
 per hour, filled as the records arrive — and every page over a day or more reads those instead of the records. The
 numbers stay the same: before each release every summary table is checked row by row against the records.
 
-<p align="center"><img src="docs/media/en/perf-day.svg" alt="A day on screen with 216 million records in it: Overview 35 s → 3 s, Flows 31 s → 3 s, the host page 32 s → 8 s, Through device 21 s → 5 s, QoS 11 s → 0.6 s — FlowTrack 1.16.2 against 1.17.0" width="100%"></p>
+<p align="center"><img src="docs/media/en/perf-day.svg" alt="A day on screen with 216 million records in it: Overview 35 s → 3 s, Flows 31 s → 3 s, the host page 32 s → 8 s, Through device 21 s → 5 s, QoS 11 s → 0.6 s — FlowSphera 1.16.2 against 1.17.0" width="100%"></p>
 
-Measured in FlowTrack's own test lab: a synthetic network sending 5,000 records/s (the most Community stores) for 12
+Measured in FlowSphera's own test lab: a synthetic network sending 5,000 records/s (the most Community stores) for 12
 hours — 216 million records — on 6 virtual cores of a laptop-class CPU, nothing cached. All the figures: [docs/performance.md](docs/performance.md).
 
 ## Works with your equipment
@@ -242,7 +245,7 @@ curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh 
 ```
 
 The installer (English or Ukrainian) sets up everything, asks a few questions with sensible defaults and finishes with
-the address of your FlowTrack and the configuration for your exporter. Later: `sudo flowtrack upgrade` — settings,
+the address of your FlowSphera and the configuration for your exporter. Later: `sudo flowtrack upgrade` — settings,
 users and data stay.
 
 - **Runs on** Debian / Ubuntu and Fedora / RHEL / Rocky / Alma, x86_64 or arm64.
@@ -262,7 +265,7 @@ Unattended install, upgrades, all server commands: [docs/install.md](docs/instal
 | Activation | — | a license key, activated in a minute in Settings → License |
 
 5,000 records/s covers homes, small and medium offices; a busy 1 Gbit/s internet edge typically exports a few thousand.
-**For a Pro license, a demo or help with deployment: [henzelis@gmail.com](mailto:henzelis@gmail.com?subject=FlowTrack%20Pro).**
+**For a Pro license, a demo or help with deployment: [henzelis@gmail.com](mailto:henzelis@gmail.com?subject=FlowSphera%20Pro).**
 Details: [docs/editions.md](docs/editions.md).
 
 ## Documentation
@@ -271,7 +274,7 @@ Details: [docs/editions.md](docs/editions.md).
 |---|---|
 | [Install and upgrade](docs/install.md) | one-line, unattended, upgrade, server commands, requirements |
 | [Exporter configuration](docs/exporters.md) | FortiGate, Cisco, MikroTik, Juniper, Linux and more |
-| [Features in detail](docs/features.md) | everything FlowTrack collects, computes and shows |
+| [Features in detail](docs/features.md) | everything FlowSphera collects, computes and shows |
 | [Backups and restore](docs/backups.md) | schedule, S3 / SFTP / FTP copies, encryption, restore on a new server |
 | [Configuration](docs/configuration.md) | `/etc/flowtrack/env` |
 | [Security](docs/security.md) | passwords, sessions, HTTPS, what runs where |
@@ -283,9 +286,9 @@ Details: [docs/editions.md](docs/editions.md).
 
 ## License
 
-[Elastic License 2.0](LICENSE): free to use, run and modify, including in companies; not allowed: offering FlowTrack as
-a hosted service or circumventing the license checks. The FlowTrack core (`ftcore`) ships compiled under the FlowTrack
+[Elastic License 2.0](LICENSE): free to use, run and modify, including in companies; not allowed: offering FlowSphera as
+a hosted service or circumventing the license checks. The FlowSphera core (`ftcore`) ships compiled under the FlowSphera
 End User License Agreement. Versions up to 1.1.0 were published under MIT and stay so. IP geolocation by
-[DB-IP](https://db-ip.com), licensed under CC BY 4.0. Fonts Manrope and JetBrains Mono ship with FlowTrack under the
+[DB-IP](https://db-ip.com), licensed under CC BY 4.0. Fonts Manrope and JetBrains Mono ship with FlowSphera under the
 [SIL Open Font License 1.1](web/fonts/). PDF reports are made with [ReportLab](https://www.reportlab.com) (BSD).
 Screenshots show demo data, no real network.

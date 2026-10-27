@@ -1,5 +1,5 @@
 """1.11.0: API tokens (scopes, what a token can never do, wrong tokens counted with failed logins, end dates) through
-the real HTTP handler, webhooks (FlowTrack JSON / Slack / Discord, HMAC signature, extra header, errors) against a
+the real HTTP handler, webhooks (FlowSphera JSON / Slack / Discord, HMAC signature, extra header, errors) against a
 local receiver, and the SIEM channel (RFC 5424 + CEF / JSON over UDP, TCP and TLS, no hourly limit).
 Run: python -m unittest discover -s tests"""
 import hashlib
@@ -150,7 +150,7 @@ class Webhooks(unittest.TestCase):
         notify.webhook_send(c['webhook'], notify.webhook_body(c['webhook'], ev, 2, c['link']))
         h, body = Receiver.got[0]
         d = json.loads(body)
-        self.assertEqual((d['source'], d['more'], d['link']), ('FlowTrack', 2, 'https://ft.example.com'))
+        self.assertEqual((d['source'], d['more'], d['link']), ('FlowTrack', 2, 'https://ft.example.com'))      # a field machines read: the former name stays
         self.assertEqual(d['events'][0]['details'], {'src': '203.0.113.5', 'hits': 3})
         self.assertEqual(d['events'][0]['severity'], 'warn')
         want = hmac.new(b's3cret', h['X-FlowTrack-Timestamp'].encode() + b'.' + body, hashlib.sha256).hexdigest()
@@ -301,7 +301,7 @@ class Siem(unittest.TestCase):
 
     def test_cef_without_country_has_no_empty_labels(self):
         m = self.m(port=self.udp.server_address[1])
-        line = notify.siem_lines(m, [{'kind': 'test', 'sev': 'info', 'title': 'FlowTrack', 'text': 'hello'}])[0].decode()
+        line = notify.siem_lines(m, [{'kind': 'test', 'sev': 'info', 'title': 'FlowSphera', 'text': 'hello'}])[0].decode()
         self.assertNotIn('Label', line)
         self.assertIn('msg=hello', line)
 
