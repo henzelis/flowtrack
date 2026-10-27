@@ -87,6 +87,23 @@ inspect, Shift+click to filter, down to the raw records with NAT, ASN and interf
 
 <p align="center"><img src="docs/media/en/flows.webp" alt="Flows page" width="100%"></p>
 
+### Conversations — who talks to whom
+
+Every pair of an inside host and whom it talks to, over any period: our hosts → the services → who owns the addresses
+outside (or the countries, or the addresses), as a flow, a chord or a matrix with exact bytes. Cards tell how many
+pairs there are against the period before, the biggest one, the countries — and the **new conversations**: a host
+talking to an owner it had not talked to in the 7 days before, the first sign of a new cloud service, an infected
+machine or data leaving. Every pair with both directions, a search, «Only new» and CSV; a click filters every page.
+
+<p align="center"><img src="docs/media/en/conversations.webp" alt="Conversations: pairs against the period before, the biggest pair, new conversations, countries; who talks to whom as a flow from hosts through services to the owners outside" width="100%"></p>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/media/en/conversations-chord.webp" alt="Who talks to whom as a chord"></td>
+<td width="50%"><img src="docs/media/en/conversations-new.webp" alt="The biggest pairs over time and the new conversations"></td>
+</tr>
+</table>
+
 ### Through device — inside one firewall
 
 Input interface → device → output interface, the hosts behind each, and what each path carries.
@@ -134,8 +151,8 @@ single host.
 
 ### Usage — who used how much
 
-What each host downloaded and uploaded this month, last month or over the last days — against the same time before
-it: totals and the change, the days, who uses most, who grew or dropped, each of your networks. Narrow it to a network,
+What each host downloaded and uploaded over the period at the top — an hour, a day, a month or the dates you choose —
+against the same time before it: totals and the change, the days, who uses most, who grew or dropped, each of your networks. Narrow it to a network,
 a device or a service like any page; the full list of hosts downloads as a CSV for Excel or billing.
 
 <p align="center"><img src="docs/media/en/usage.webp" alt="Usage: downloaded and uploaded against the week before, day by day, who uses most, the biggest changes, by network" width="100%"></p>
@@ -179,7 +196,7 @@ The same two charts open the *Security events* part of every PDF report:
 ### Reports — by e-mail, on schedule or for any period
 
 A PDF for the management or the duty engineer: totals against the period before, traffic over time, the busiest hosts,
-outside networks, services, countries, your networks, link capacity with the date each link fills, security events and the
+outside networks, the conversations and the new ones, services, countries, your networks, link capacity with the date each link fills, security events and the
 devices. Daily, weekly or monthly on
 the day and hour you choose, in English or Ukrainian — or, after an attack or an outage, for exactly the period and
 filters on your screen, with one click.

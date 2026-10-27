@@ -3,7 +3,7 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 1.18.0 — 2026-10-27
 
 **FlowTrack is now FlowSphera** (FlowSphera by TELESPHERA): a name of its own — «FlowTrack» is also the name of
 unrelated products. Only the name changes: the logo, the repository, the `flowtrack` command, the folders, the
