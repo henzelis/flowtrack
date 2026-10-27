@@ -23,7 +23,13 @@
 - Recommended server sizes for each range of records/s, measured on real hardware
 
 **Features**
-- Host names from DHCP leases (FortiGate API); SNMP interface counters cross-checked with the flows (exact link load,
-  bursts shorter than 5 minutes)
+- Host names from DHCP leases (FortiGate API)
 - FortiGate application names from `APPLICATION_TAG` (already stored with every record, not shown yet)
-- DSCP / traffic class: breakdown and colouring by QoS marking
+
+**Reliability**
+- A backup checks the free disk before it starts and refuses with the reason when the copy would not fit — a full
+  backup on the same disk can leave the database no room
+- When the summary tables cannot be filled (no disk or memory for their temporary data), an event and a notice in
+  Settings say so — today only the collector's log does, and long periods stay slow meanwhile
+- The summary tables after an unclean stop (power cut, killed database): records stored in the last seconds can be
+  missing from the 5-minute totals — find such buckets and sum them up again
