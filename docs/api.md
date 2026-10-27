@@ -104,6 +104,12 @@ priority threshold, kinds and hourly limit as Telegram and e-mail (the SIEM chan
 Mattermost / Rocket.Chat** (`{"text": …}`) and **Discord** (`{"content": …}`) — for those, paste their incoming
 webhook address. An optional extra header (`Authorization: Bearer …`, `X-Api-Key: …`) is sent with each request.
 
+> **Identifiers keep the former name.** FlowSphera was called FlowTrack until 1.17; what other systems match on stays
+> exactly as it was, so existing rules and scripts keep working: the webhook JSON `"source": "FlowTrack"`, the headers
+> `X-FlowTrack-Timestamp` / `X-FlowTrack-Signature`, the SIEM line `CEF:0|FlowTrack|FlowTrack|…` and the syslog app name
+> `FlowTrack`, the `User-Agent: FlowTrack/<version>`. The API itself (paths, fields, tokens `ftapi_…`) and the database
+> (`flowtrack`, its tables and columns) did not change either.
+
 ```json
 {"source": "FlowSphera", "version": "1.11.0", "link": "https://flowtrack.example.com:3030", "more": 0,
  "events": [{"kind": "port_scan", "severity": "warn", "title": "Port scan",
