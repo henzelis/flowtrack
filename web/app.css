@@ -765,7 +765,8 @@ table.evr td.evkey .chk{margin-top:4px;font-size:12px}
 .login .login-h{margin:0;font-size:15px;font-weight:600;color:var(--ink2)}
 /* (1.18.0) Conversations */
 .cvtools{display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
-.cvtools .netviews{display:inline-flex;align-items:center;gap:8px}
+.cvtools .netviews{display:inline-flex;align-items:stretch;gap:8px;margin:0}     /* (1.18.0) not .netviews' -4px of Path analysis: one line with #cvRight */
+.cvtools .lampbtn{align-self:stretch}
 .cvgraph{height:470px;position:relative}
 .cvseries{height:350px}
 .kcard.cvwarn{border-color:rgba(255,195,77,.45)} .kcard.cvwarn .v{color:var(--warn)}
