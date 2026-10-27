@@ -1,5 +1,5 @@
 # The compiled FlowSphera core this version runs with: release core-v<version> on GitHub, SHA-256 of each build.
 # The installer downloads the file for the server's CPU and refuses one that does not match.
-version 1.6.0
-x86_64 3142a9388cea97c7eeed7866e285c22f1971f7ddbdc94accd417e80c97f83756
-aarch64 2eac1c655afb67904cc09884c6a2a4d7bb972d011f9bdc578c3dcfd360b5ce01
+version 1.7.0
+x86_64 ef1d30e717b6da97b82887c031ed170c59e6c8202abe30cfdce4976b71804cb5
+aarch64 d0ba2870f3fe9fac6ce69acd9d19b26b78b60da8a2004671d0588001f866ec40

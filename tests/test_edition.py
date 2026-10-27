@@ -43,7 +43,7 @@ def pack(lic):
     return body + bytes([len(cust)]) + cust
 
 
-def issue(hw=HERE, days=365, sk=SK, **kw):
+def issue(hw=HERE, days=365, sk=SK, name='FlowTrack', **kw):
     now = int(time.time())
     lic = dict(id=os.urandom(6), edition='pro', issued=now, expires=now + days * 86400 + 3600,   # an hour of margin: days_left must not depend on test speed
                rps=None, retention_days=90,
@@ -51,18 +51,19 @@ def issue(hw=HERE, days=365, sk=SK, **kw):
                customer='ТОВ «Тест»')
     lic.update(kw)
     body = pack(lic)
-    prefix = b'FlowTrack license v3\0' if lic.get('lease_days') is not None else b'FlowTrack license v2\0'
+    # (1.18.0) the signature's domain: FlowTrack (licenses issued up to 1.17) or FlowSphera (from 1.18)
+    prefix = f"{name} license {'v3' if lic.get('lease_days') is not None else 'v2'}\0".encode()
     return licensing.encode('FTL', body + sk.sign(prefix + body))
 
 
-def lease(code, hw=HERE, until=None, issued=None, sk=ONLINE_SK):
+def lease(code, hw=HERE, until=None, issued=None, sk=ONLINE_SK, name='FlowTrack'):
     """A lease from the license server for license `code` on `hw`."""
     lic = licensing.verify(code)
     now = int(time.time())
     body = struct.pack('>B6s10sII', 1, bytes.fromhex(lic['id']), lic['binding'][:10] if hw is HERE else
                        licensing.parse_request(licensing.request_code(hw))['binding'][:10],
                        issued or now, until or now + 30 * 86400)
-    return licensing.encode('FTS', body + sk.sign(b'FlowTrack lease v1\0' + body))
+    return licensing.encode('FTS', body + sk.sign(f'{name} lease v1\0'.encode() + body))
 
 
 class Base(unittest.TestCase):
@@ -101,7 +102,7 @@ class Codes(unittest.TestCase):
         self.assertRegex(r['instance'], r'^[0-9A-Z]{4}(-[0-9A-Z]{4}){3}$')
         bare = licensing.parse_request(licensing.request_code({'machine': 'b' * 32, 'board': '', 'macs': []}))
         self.assertEqual((bare['board'], bare['nics']), (False, 0))
-        with self.assertRaisesRegex(ValueError, 'not a FlowTrack activation request'):
+        with self.assertRaisesRegex(ValueError, 'not a FlowSphera activation request'):
             licensing.parse_request('FTL-' + req[4:])
 
     def test_real_hardware(self):
@@ -155,15 +156,15 @@ class Edition(Base):
         self.assertEqual(common.edition()['status'], 'active')
 
     def test_forged_or_altered(self):
-        with self.assertRaisesRegex(ValueError, 'not issued by FlowTrack'):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowSphera'):
             common.save_license(issue(sk=OTHER_SK))
         data = bytearray(licensing.decode('FTL', issue(rps=5000)))
         data[17] ^= 1                                       # the records/s limit, with a valid checksum
-        with self.assertRaisesRegex(ValueError, 'not issued by FlowTrack'):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowSphera'):
             common.save_license(licensing.encode('FTL', bytes(data)))
         with self.assertRaisesRegex(ValueError, 'mistyped'):
             common.save_license(issue()[:-7])
-        with self.assertRaisesRegex(ValueError, 'not a FlowTrack license'):
+        with self.assertRaisesRegex(ValueError, 'not a FlowSphera license'):
             common.save_license('hello')
         self.assertEqual(common.edition()['status'], 'community')
         with open(common.LICENSE_FILE, 'w') as f:            # a license that went bad on disk
@@ -270,7 +271,7 @@ class Online(Base):
             ftcore.save_lease(lease(code, sk=OTHER_SK), licensing.STATE_DIR)
 
     def test_online_key_signs_only_online_licenses(self):
-        with self.assertRaisesRegex(ValueError, 'not issued by FlowTrack'):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowSphera'):
             common.save_license(issue(sk=ONLINE_SK))                     # an offline (v2) license: master key only
         code = issue(lease_days=30)                                        # the master key may sign online ones
         ftcore.save_lease(lease(code, sk=SK), licensing.STATE_DIR)         # and their leases
@@ -320,6 +321,34 @@ class Online(Base):
         common.save_license(code)
         common.deactivate_license()
         self.assertIsNone(ftcore.lease(licensing.STATE_DIR))
+
+
+class NewName(Base):
+    """(1.18.0) FlowTrack became FlowSphera: licenses and leases signed under either name are genuine, in any mix
+    (an old license confirmed by an updated server, a new license with a lease from before); any other name is not."""
+    def test_offline_license_of_each_name(self):
+        for name in ('FlowTrack', 'FlowSphera'):
+            ed = common.save_license(issue(name=name, rps=20000))
+            self.assertEqual((name, ed['status'], ed['rps']), (name, 'active', 20000))
+
+    def test_online_license_and_lease_in_any_mix(self):
+        for lic_name in ('FlowTrack', 'FlowSphera'):
+            for lease_name in ('FlowTrack', 'FlowSphera'):
+                code = issue(sk=ONLINE_SK, lease_days=30, name=lic_name)
+                ftcore.save_lease(lease(code, name=lease_name), licensing.STATE_DIR)
+                ed = common.save_license(code)
+                self.assertEqual(((lic_name, lease_name), ed['status'], ed['license']['online']), ((lic_name, lease_name), 'active', True))
+
+    def test_another_name_is_forged(self):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowSphera'):
+            common.save_license(issue(name='Telesphera'))
+        code = issue(sk=ONLINE_SK, lease_days=30, name='FlowSphera')
+        with self.assertRaisesRegex(ValueError, 'not issued by the FlowSphera license server'):
+            ftcore.save_lease(lease(code, name='Telesphera'), licensing.STATE_DIR)
+
+    def test_v2_needs_the_vendor_key_under_either_name(self):
+        with self.assertRaisesRegex(ValueError, 'not issued by FlowSphera'):
+            common.save_license(issue(sk=ONLINE_SK, name='FlowSphera'))     # the server's key signs online (v3) licenses only
 
 
 class Limit(Base):

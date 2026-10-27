@@ -10,6 +10,8 @@ unrelated products. Only the name changes: the logo, the repository, the `flowtr
 services and the database stay as they are, and an installation upgrades as before (`sudo flowtrack upgrade`). What
 other systems read stays too: SIEM / syslog lines (`CEF:0|FlowTrack|FlowTrack|…`, app name `FlowTrack`), the webhook
 JSON `"source": "FlowTrack"` and its `X-FlowTrack-*` headers — rules and signature checks keep working.
+Licenses: every license and online confirmation issued for FlowTrack keeps working, and the new ones are issued for
+FlowSphera (core 1.7.0 accepts both); the codes stay `FTL-…` / `FTK-…`, the Instance ID stays the same.
 
 ### Added
 - **Conversations** — a page of its own: who talks to whom over the period. Four cards (how many pairs and against
