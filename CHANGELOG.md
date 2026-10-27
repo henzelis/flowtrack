@@ -20,6 +20,10 @@ in Settings → General, at the bottom of every page, in the collector log and b
 
 ### Changed
 - Charts: ECharts 6.0 (was 5.5). Every page looks as before; the Chord view needs it.
+- **Charts, maps and graphs wait with a picture of their own** while their data is read — a line being drawn, bars
+  growing, a heat map pulsing, places lighting up, bands running between the columns of a flow or round a chord —
+  instead of the rows of a table to come, which only tables show now (Conversations, Usage, Capacity, QoS, Events,
+  Top hosts, Through device).
 
 ## 1.17.2 — 2026-10-26
 

@@ -283,8 +283,8 @@ tr.detail td{background:rgba(0,0,0,.22);white-space:normal}
 /* states: loading, errors, footer */
 .loading{position:relative;min-height:60px}
 /* (1.8.5) waiting: a .loading box gets a decoding table or a spinning ring (app.js waitFill), shown after 0.4 s */
-.loading > .wdec,.loading > .wring{opacity:0;transition:opacity .25s}
-.loading.wshow > .wdec,.loading.wshow > .wring{opacity:1}
+.loading > .wdec,.loading > .wring,.loading > .wgfx{opacity:0;transition:opacity .25s}
+.loading.wshow > .wdec,.loading.wshow > .wring,.loading.wshow > .wgfx{opacity:1}
 .wfade{animation:wfade .35s ease-out}
 @keyframes wfade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
 /* (1.8.7) the answer after a wait fills in (app.js wSettle): rows settle one after another, bars grow to their value */
@@ -794,3 +794,27 @@ table.cvt tr.cvnewrow td{background:rgba(255,195,77,.05)}
 #cvSerLeg .link{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2)}
 #cvSerLeg i{width:14px;height:3px;border-radius:2px;display:inline-block}
 @media (max-width:700px){.cvgraph{height:420px} .cvq{width:100%}}
+/* (1.18.0) waiting pictures of graphics (waitGfx): tables decode rows, charts / maps / graphs draw themselves */
+.wgfx{display:block;width:100%;height:100%;min-height:200px}
+.wgfx line.wg-grid{stroke:var(--hair);stroke-width:1;vector-effect:non-scaling-stroke}
+.wg-line .wg-l1,.wg-line .wg-l2{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.wg-line .wg-l1{stroke:var(--down);stroke-width:2} .wg-line .wg-l2{stroke:var(--up);stroke-width:1.6;opacity:.8}
+.wg-line .wg-area{fill:rgba(39,211,245,.08)}
+.wg-line .wg-reveal{animation:wgReveal 2.6s ease-in-out infinite}      /* drawn left to right (a dash on a non-scaling stroke breaks up) */
+@keyframes wgReveal{0%{clip-path:inset(0 100% 0 0);opacity:.9}55%{clip-path:inset(0 0 0 0);opacity:.9}85%{clip-path:inset(0 0 0 0);opacity:.3}100%{clip-path:inset(0 0 0 0);opacity:0}}
+.wg-line .wg-scan{stroke:rgba(130,175,255,.35);stroke-width:1;vector-effect:non-scaling-stroke;animation:wgScan 2.6s linear infinite}
+@keyframes wgPulse{0%,100%{opacity:.2}50%{opacity:1}}
+@keyframes wgScan{from{transform:translateX(0)}to{transform:translateX(100px)}}
+.wg-bars{display:flex;align-items:flex-end;gap:5px;padding:10px 4px 0;box-sizing:border-box;border-bottom:1px solid var(--hair)}
+.wg-bars i{flex:1;height:calc(var(--h) * 100%);border-radius:3px 3px 0 0;background:linear-gradient(to top,rgba(39,211,245,.55),rgba(255,159,67,.45));transform-origin:bottom;animation:wgGrow 2.2s ease-in-out infinite}
+@keyframes wgGrow{0%{transform:scaleY(.08);opacity:.35}50%{transform:scaleY(1);opacity:.85}100%{transform:scaleY(.08);opacity:.35}}
+.wg-heat{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;min-height:0;height:auto;padding:6px 0}
+.wg-heat i{aspect-ratio:1.4;border-radius:3px;background:#2F7BFF;opacity:.08;animation:wgCell 2.4s ease-in-out infinite}
+@keyframes wgCell{0%,100%{opacity:.07}50%{opacity:var(--o)}}
+.wg-map .wg-dot{fill:var(--ext);transform-box:fill-box;transform-origin:center;animation:wgPing 2.8s ease-out infinite;opacity:.2}
+@keyframes wgPing{0%{opacity:.15;transform:scale(.6)}25%{opacity:1;transform:scale(1.6)}60%,100%{opacity:.15;transform:scale(.6)}}
+.wg-flow .wg-band,.wg-chord .wg-band{fill:none;opacity:.4;stroke-dasharray:1 1;stroke-dashoffset:1;animation:wgBand 3.4s ease-in-out infinite}
+@keyframes wgBand{0%{stroke-dashoffset:1;opacity:.45}35%{stroke-dashoffset:0;opacity:.45}80%{stroke-dashoffset:0;opacity:.18}100%{stroke-dashoffset:0;opacity:0}}
+.wg-node{fill:rgba(130,175,255,.25);animation:wgPulse 2.4s ease-in-out infinite} .wg-node.int{fill:rgba(139,92,255,.6)} .wg-node.ext{fill:rgba(46,229,157,.55)}
+.wg-arc{fill:none;stroke-width:12px;stroke-linecap:butt;opacity:.6;animation:wgPulse 2.4s ease-in-out infinite} .wg-arc.int{stroke:var(--int)} .wg-arc.ext{stroke:var(--ext)}
+@media (prefers-reduced-motion:reduce){.wgfx *{animation:none!important;stroke-dashoffset:0!important}}

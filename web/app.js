@@ -567,7 +567,7 @@ function wSettle(el){
 // system.processes) and cancels. Nothing shows for the first 0.4 s; one 30 fps canvas at most; stops when hidden.
 const WAIT = {n:0, since:0, page:null, prog:null, poll:0, tick:0, cancelled:false};
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)');
-const RING_IDS = new Set(['svcBox', 'protoBox', 'pBox', 'pL7', 'tDonut']);
+const RING_IDS = new Set(['svcBox', 'protoBox', 'pBox', 'pL7', 'tDonut', 'evPie', 'qDonut']);
 function waitBegin(page){ if (page !== PAGE_ID) return; if (!WAIT.n++) { WAIT.since = Date.now(); WAIT.page = page; WAIT.prog = null; WAIT.cancelled = false; } waitKick(); }
 function waitEnd(page){ if (page !== WAIT.page) return; WAIT.n = Math.max(0, WAIT.n - 1); if (!WAIT.n) waitPill(); }
 function waitReset(){ WAIT.n = 0; WAIT.page = PAGE_ID; WAIT.prog = null; WAIT.cancelled = false; waitPill(); }     // a new page: the old requests no longer count
@@ -616,10 +616,53 @@ async function waitCancel(){
 const W_AZ = 'ABCDEFGHKLMNPQRSTUVWXYZ';
 const wScr = tpl => tpl.replace(/[0-9]/g, () => String(Math.floor(Math.random() * 10))).replace(/[A-Za-z]/g, () => W_AZ[Math.floor(Math.random() * W_AZ.length)]);
 const W_ROWS = ['443|TCP·HTTPS|106 GB', '61000|UDP·QUIC|84.1 GB', '53|UDP·DNS|43.6 GB', '8443|TCP·MGMT|15.8 GB', '51820|UDP·WG|9.73 GB', '80|TCP·HTTP|8.38 GB'];
+// (1.18.0) the waiting pictures of graphics: drawn in SVG, moved by CSS (still under prefers-reduced-motion)
+const W_RND = (a, b) => a + Math.random() * (b - a);
+function waitGfx(kind){
+  const svg = (vb, body, ar = 'none') => `<svg class="wgfx wg-${kind}" viewBox="${vb}" preserveAspectRatio="${ar}" aria-hidden="true">${body}</svg>`;
+  if (kind === 'line') {     // a time series being drawn over the axes, two lines, a soft area under the first
+    const wave = (base, amp) => { let y = base, d = ''; for (let i = 0; i <= 24; i++) { y = Math.max(6, Math.min(36, y + W_RND(-amp, amp))); d += `${i ? 'L' : 'M'}${(i * 100 / 24).toFixed(1)} ${y.toFixed(1)}`; } return d; };
+    const a = wave(24, 5), b = wave(30, 3);
+    return svg('0 0 100 40', [8, 16, 24, 32].map(y => `<line class="wg-grid" x1="0" x2="100" y1="${y}" y2="${y}"/>`).join('')
+      + `<g class="wg-reveal"><path class="wg-area" d="${a} L100 40 L0 40 Z"/><path class="wg-l1" d="${a}"/><path class="wg-l2" d="${b}"/></g><line class="wg-scan" x1="0" x2="0" y1="0" y2="40"/>`);
+  }
+  if (kind === 'bars') return `<div class="wgfx wg-bars" aria-hidden="true">${Array.from({length:24}, (_, i) => `<i style="--h:${W_RND(.2, .95).toFixed(2)};animation-delay:${(i * .06).toFixed(2)}s"></i>`).join('')}</div>`;
+  if (kind === 'heat') return `<div class="wgfx wg-heat" aria-hidden="true">${Array.from({length:7 * 24}, () => `<i style="animation-delay:${W_RND(0, 2.4).toFixed(2)}s;--o:${W_RND(.15, .8).toFixed(2)}"></i>`).join('')}</div>`;
+  if (kind === 'map') {      // places lighting up over a faint grid of latitudes
+    const pts = [[22, 38], [27, 44], [48, 30], [51, 33], [55, 31], [57, 36], [62, 40], [74, 42], [80, 62], [30, 66], [86, 30], [44, 52]];
+    return svg('0 0 100 60', [12, 24, 36, 48].map(y => `<line class="wg-grid" x1="0" x2="100" y1="${y}" y2="${y}"/>`).join('')
+      + pts.map(([x, y], i) => `<circle class="wg-dot" cx="${x}" cy="${y}" r="1.2" style="animation-delay:${(i * .23).toFixed(2)}s"/>`).join(''), 'xMidYMid meet');
+  }
+  if (kind === 'flow') {     // our hosts → services → peers: bands run left to right, column after column
+    const col = (x, n) => { const g = 380 / n; return Array.from({length:n}, (_, i) => ({x, y:10 + i * g, h:g * W_RND(.45, .8)})); };
+    const L = col(150, 7), M = col(495, 5), R = col(840, 7);
+    const band = (a, b, k, d) => { const y0 = a.y + a.h / 2, y1 = b.y + b.h / 2, x0 = a.x + 12, x1 = b.x, mx = (x0 + x1) / 2;
+      return `<path class="wg-band" pathLength="1" d="M${x0} ${y0}C${mx} ${y0} ${mx} ${y1} ${x1} ${y1}" style="stroke:${PAL[k % 7]};stroke-width:${W_RND(4, 18).toFixed(0)}px;animation-delay:${d.toFixed(2)}s"/>`; };
+    let bands = '';
+    L.forEach((a, i) => { bands += band(a, M[i % 5], i % 5, i * .12); if (i < 3) bands += band(a, M[(i + 2) % 5], (i + 2) % 5, .2 + i * .12); });
+    R.forEach((b, i) => { bands += band(M[i % 5], b, i % 5, .9 + i * .12); });
+    const node = (n, cls) => n.map(p => `<rect class="wg-node ${cls}" x="${p.x}" y="${p.y}" width="12" height="${p.h.toFixed(0)}" rx="3"/>`).join('');
+    return svg('0 0 1000 400', bands + node(L, 'int') + node(M, 'svc') + node(R, 'ext'), 'xMidYMid meet');
+  }
+  if (kind === 'chord') {    // arcs round the circle, chords drawn between them
+    const cx = 500, cy = 200, r = 160, P = a => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    let arcs = '', chords = '', a0 = -Math.PI / 2;
+    const segs = Array.from({length:12}, (_, i) => { const w = W_RND(.25, .55), s = [a0, a0 + w]; a0 += w + .06; return s; });
+    segs.forEach(([s, e], i) => { const [x0, y0] = P(s), [x1, y1] = P(e); arcs += `<path class="wg-arc ${i < 6 ? 'ext' : 'int'}" d="M${x0.toFixed(1)} ${y0.toFixed(1)}A${r} ${r} 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)}"/>`; });
+    // a host (left half) to an owner on the right at a mirrored height: the chord bends through the middle, not straight
+    for (let i = 0; i < 9; i++) { const a = segs[6 + i % 6], b = segs[(17 - i - (i > 5 ? 2 : 0)) % 6], [x0, y0] = P((a[0] + a[1]) / 2), [x1, y1] = P((b[0] + b[1]) / 2);
+      chords += `<path class="wg-band" pathLength="1" d="M${x0.toFixed(1)} ${y0.toFixed(1)}Q${cx} ${cy} ${x1.toFixed(1)} ${y1.toFixed(1)}" style="stroke:${PAL[i % 5]};stroke-width:${W_RND(4, 14).toFixed(0)}px;animation-delay:${(i * .18).toFixed(2)}s"/>`; }
+    return svg('0 0 1000 400', chords + arcs, 'xMidYMid meet');
+  }
+  return '';
+}
 function waitFill(el){
   if (el.dataset.w || el.children.length) return;
   el.dataset.w = '1';
   if (RING_IDS.has(el.id)) { el.innerHTML = `<div class="wring" aria-hidden="true"><div class="wr"><b>0%</b></div><div class="wleg">${[0, 1, 2, 3, 4].map(i => `<div><i style="background:${PAL[i]}"></i><span data-s="PROTOCOL"></span><span data-s="00%"></span></div>`).join('')}</div></div>`; return; }
+  // (1.18.0) Yegor's rule: the decoding rows are for TABLES only; a chart, a map or a graph waits with a picture of
+  // its own kind, named by its box (data-wait = line | bars | heat | map | flow | chord)
+  if (el.dataset.wait) { el.innerHTML = waitGfx(el.dataset.wait); return; }
   // a KPI tile: one number; any other box is a table to come (an empty box is low, so its height says nothing)
   if (el.classList.contains('kcard')) { el.innerHTML = `<div class="wdec wone" aria-hidden="true"><span class="wval" data-s="${['128.4 GB', '2 417', '96.1 Mbit/s', '35 812'][Math.floor(Math.random() * 4)]}"></span></div>`; return; }   // a KPI tile: one number
   const hgt = el.getBoundingClientRect().height, n = hgt > 200 ? Math.min(8, Math.floor(hgt / 30)) : 6;
@@ -1164,8 +1207,8 @@ function vCapacity(){
   v.innerHTML = `<div class="grid">
     <section class="glass panel s12 caphead">${ph(CAP_ICON, T('page::Capacity'), T('how full each link is on its busy days and where it is heading · all its traffic · whole days · the device and interface filters apply'), '<span id="capDaysBox"></span>', true)}</section>
     <div id="capKpi" style="display:contents"></div>
-    <section class="glass panel s8" id="capDetailS">${ph('chart', `<span id="capDetT">${T('Trend and forecast')}</span>`, `<span id="capDetSub">${T('daily 95th percentile, the trend of the busy days and where it meets the capacity')}</span>`, '<span id="capPickBox"></span><span id="capDirBox"></span>')}<div id="capChart" class="loading"></div><p class="capsay" id="capSay"></p></section>
-    <section class="glass panel s4">${ph('pulse', T('When it is busy'), T('busiest 5 minutes of each hour, averaged over the weeks'))}<div id="capHeat" class="loading"></div></section>
+    <section class="glass panel s8" id="capDetailS">${ph('chart', `<span id="capDetT">${T('Trend and forecast')}</span>`, `<span id="capDetSub">${T('daily 95th percentile, the trend of the busy days and where it meets the capacity')}</span>`, '<span id="capPickBox"></span><span id="capDirBox"></span>')}<div id="capChart" class="loading" data-wait="line"></div><p class="capsay" id="capSay"></p></section>
+    <section class="glass panel s4">${ph('pulse', T('When it is busy'), T('busiest 5 minutes of each hour, averaged over the weeks'))}<div id="capHeat" class="loading" data-wait="heat"></div></section>
     <section class="glass panel s6">${ph('users', T('Hosts on this link'), `<span id="capHalfH">${T('recent half of the period against the earlier one')}</span>`)}<div id="capHosts" class="loading"></div></section>
     <section class="glass panel s6">${ph('grid', T('Services on this link'), `<span id="capHalfS">${T('recent half of the period against the earlier one')}</span>`)}<div id="capSvcs" class="loading"></div></section>
     <section class="glass panel s12">${ph('list', T('All links'), T('the fullest first · click a row to see it above'))}<div id="capTable" class="loading"></div></section></div>`;
@@ -1325,7 +1368,7 @@ function vUsage(){
   v.innerHTML = `<div class="grid">
     <section class="glass panel s12 caphead">${ph(USAGE_ICON, T('Usage'), T('what each inside host downloaded and uploaded · the filters and the traffic selector at the top apply'), '<span id="uPerBox"></span>', true)}</section>
     <div id="uKpi" style="display:contents"></div>
-    <section class="glass panel s8">${ph('chart', T('Day by day'), `<span id="uChartSub">${T('downloaded and uploaded')}</span>`)}<div id="uChart" class="loading" style="height:420px"></div><p class="note" id="uNote"></p></section>
+    <section class="glass panel s8">${ph('chart', T('Day by day'), `<span id="uChartSub">${T('downloaded and uploaded')}</span>`)}<div id="uChart" class="loading" data-wait="bars" style="height:420px"></div><p class="note" id="uNote"></p></section>
     <section class="glass panel s4">${ph('users', T('Who uses most'), T('the 10 busiest hosts · click for details'))}<div id="uTop" class="loading"></div></section>
     <section class="glass panel s6">${ph('pulse', T('Biggest changes'), `<span id="uMovSub">${T('against the period before')}</span>`)}<div id="uMov" class="loading"></div></section>
     <section class="glass panel s6">${ph('grid', T('By network'), T('your named networks · Settings → Flow configuration'))}<div id="uNets" class="loading"></div></section>
@@ -1413,7 +1456,7 @@ function vQos(){
   v.innerHTML = `<div class="grid">
     <section class="glass panel s12 caphead">${ph(QOS_ICON, T('QoS'), T('how the traffic is marked (DSCP) as it enters each device · the period and the filters at the top apply · click a class to filter by it'), '', true)}</section>
     <div id="qKpi" style="display:contents"></div>
-    <section class="glass panel s8">${ph('chart', T('Classes over time'), T('traffic of each class'))}<div id="qChart" class="loading" style="height:340px"></div></section>
+    <section class="glass panel s8">${ph('chart', T('Classes over time'), T('traffic of each class'))}<div id="qChart" class="loading" data-wait="line" style="height:340px"></div></section>
     <section class="glass panel s4">${ph('pie', T('Share of each class'), T('of the traffic in the period'))}<div id="qDonut" class="loading" style="height:340px"></div></section>
     <section class="glass panel s6">${ph('ip', T('Interfaces'), T('the class mix of what enters each interface'))}<div id="qIfs" class="loading"></div></section>
     <section class="glass panel s6">${ph('pulse', T('Re-marked by the devices'), T('class on the way in → class on the way out'))}<div id="qRemark" class="loading"></div></section>
@@ -1480,7 +1523,7 @@ function vPaths(){
     </div>
     <section class="glass panel s7">${ph('conv', T('Paths'), T('input → output interface · click to filter'))}<div id="pTable" class="loading"></div></section>
     <section class="glass panel s5">${ph('ip', T('Interfaces'), T('traffic entering and leaving each interface'))}<div id="pIfs" class="loading"></div></section>
-    <section class="glass panel s12">${ph('pulse', T('Interface load'), T('all traffic through each interface against its capacity · 5-minute averages · the fullest first'))}<div id="pLoad" class="loading"></div></section></div>`;
+    <section class="glass panel s12">${ph('pulse', T('Interface load'), T('all traffic through each interface against its capacity · 5-minute averages · the fullest first'))}<div id="pLoad" class="loading" data-wait="line"></div></section></div>`;
   wireSeg('pMetricSeg', m => { if (m === state.metric) return; state.metric = m; render(); });
   wireSeg('pColorSeg', m => { if (m === (state.ringColor || 'dir')) return; state.ringColor = m; render(); });
   wireSeg('pScaleSeg', m => { if (m === state.scale) return; state.scale = m; render(); });
@@ -2330,7 +2373,7 @@ function vTalkers(){
     <div class="col s4">
       <section class="glass panel">${ph('pie', byNet ? T('Top networks traffic') : T('Top hosts traffic'), T('share of the total volume'))}<div id="tDonut" class="loading"></div></section>
       <section class="glass panel">${ph('grid', T('By service'), T('share of traffic · click to filter'))}<div id="tSvc" class="loading"></div></section>
-      <section class="glass panel">${ph('globe', T('Where the traffic goes'), T('destination countries'))}<div id="tGeo" class="loading"></div></section>
+      <section class="glass panel">${ph('globe', T('Where the traffic goes'), T('destination countries'))}<div id="tGeo" class="loading" data-wait="map"></div></section>
       <section class="glass panel">${ph('search', T('Quick actions'), '<span id="qaFor">—</span>')}<div class="qa" id="qa"></div></section>
     </div>
     <section class="glass panel s12">${ph('list', byNet ? T('Top networks in detail') : T('Top hosts in detail'), T('main service and protocol of each · click to filter'), `<button class="lnk" id="toFlows2">${T('Flows →')}</button>`)}<div id="tDetail" class="loading"></div></section></div>`;
@@ -2561,7 +2604,7 @@ function vThreats(){
   v.innerHTML = `<div class="grid">
     <section class="glass panel s12 caphead">${ph('shield', T('Events and anomalies'), T('in the chosen period and filters · scans, password guessing and floods are checked every 10 minutes'), `<button class="btn" id="evAllTop">${T('All events')} →</button>`, true)}</section>
     <div id="evKpi" style="display:contents"></div>
-    <section class="glass panel s8 evfill">${ph('chart', T('Events over time'), `<span id="evChartSub">${T('how many began, by kind · click a kind to show only it')}</span>`)}<div id="evChart" class="loading" style="height:320px"></div><p class="note" id="evChartNote" hidden></p></section>
+    <section class="glass panel s8 evfill">${ph('chart', T('Events over time'), `<span id="evChartSub">${T('how many began, by kind · click a kind to show only it')}</span>`)}<div id="evChart" class="loading" data-wait="bars" style="height:320px"></div><p class="note" id="evChartNote" hidden></p></section>
     <section class="glass panel s4">${ph('pie', T('By kind'), `<span id="evPieSub">${T('of the events in the period')}</span>`)}<div id="evPie" class="loading"></div></section>
     <section class="glass panel s8">${ph('list', T('Latest events'), `<span id="evListSub">${T('the newest 30')}</span>`)}<div id="alBox" class="loading"></div></section>
     <section class="glass panel s4">${ph('search', T('What is watched'), '', isAdmin() ? `<button class="btn" id="evCfg">${T('Configure')}</button>` : '')}<div id="watchBox" class="loading"></div></section></div>`;
@@ -4366,8 +4409,8 @@ function vConversations(){
     <section class="glass panel s12 caphead">${ph('conv', T('Conversations'), T('who talks to whom · the filters and the traffic selector at the top apply'), '', true)}</section>
     <div id="cvKpi" style="display:contents"></div>
     <section class="glass panel s12" id="cvSec">${ph('conv', T('Who talks to whom'), `<span id="cvSub"></span>`, `<span class="cvtools"><span id="cvViews" class="netviews"></span>${internal ? '' : seg('cvRight', CONV_RIGHT(), right)}</span>`, false, maxBtn())}
-      <div id="cvGraph" class="chart cvgraph loading"></div><div class="legend" id="cvLeg"></div></section>
-    <section class="glass panel s8">${ph('chart', T('The biggest pairs over time'), T('the 5 biggest pairs · drag across the chart to choose a stretch of time'))}<div id="cvSeries" class="chart cvseries loading"></div><div class="legend" id="cvSerLeg"></div></section>
+      <div id="cvGraph" class="chart cvgraph loading" data-wait="${{flow:'flow', chord:'chord', matrix:'heat'}[curView()] || 'flow'}"></div><div class="legend" id="cvLeg"></div></section>
+    <section class="glass panel s8">${ph('chart', T('The biggest pairs over time'), T('the 5 biggest pairs · drag across the chart to choose a stretch of time'))}<div id="cvSeries" class="chart cvseries loading" data-wait="line"></div><div class="legend" id="cvSerLeg"></div></section>
     <section class="glass panel s4">${ph('pulse', T('New conversations'), `<span id="cvNewSub"></span>`)}<div id="cvNew" class="loading"></div></section>
     <section class="glass panel s12">${ph('list', T('All conversations'), `<span id="cvAllSub"></span>`, `<span class="cvtbar">${seg('cvOnly', [['all', T('All')], ['new', T('Only new')]], only)}<input type="search" id="cvQ" class="cvq" placeholder="${T('host, address, owner, service, country')}" aria-label="${T('Search the conversations')}"><a class="btn" id="cvCsv" href="#">${T('Download CSV')}</a></span>`)}<div id="cvTable" class="loading"></div></section></div>`;
   const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
