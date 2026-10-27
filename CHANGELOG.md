@@ -26,14 +26,33 @@ FlowSphera (core 1.7.0 accepts both); the codes stay `FTL-…` / `FTK-…`, the 
   outside address: one rebuild of that table at the upgrade.
 - *Overview* and *Flows*: **All conversations →** on the Top conversations panel.
 
+- **Reports** have a **Conversations** part: the biggest pairs (inside host, whom it talks to, country, both ways,
+  share) and the new conversations. Reports made before get it switched on once.
+
 ### Changed
 - Charts: ECharts 6.0 (was 5.5). Every page looks as before; the Chord view needs it.
 - **Charts, maps and graphs wait with a picture of their own** while their data is read — a line being drawn, bars
   growing, a heat map pulsing, places lighting up, bands running between the columns of a flow or round a chord —
   instead of the rows of a table to come, which only tables show now (Conversations, Usage, Capacity, QoS, Events,
   Top hosts, Through device).
+- **Usage follows the period at the top**, like every page: its own period switch and the head panel are gone; up to
+  two days the chart is hour by hour, then day by day, from 92 days month by month.
+- **Filters read as they are typed**: a filter chip shows `l7:STUN`, `-ip:10.0.0.5`, `net:Office` — what the search box
+  takes — with the human name as its tooltip (it said «protocol: STUN» while the box wanted `l7:STUN`).
+- **Top hosts**: the trend chart comes first and the table under it, as graphics come first on every page; the
+  Hosts | Networks switch sits on the chart.
+- Conversations and QoS: no head panel with only the page's name in it (the other pages have none).
+- **New report**: the parts to include fill three even columns, «Send on schedule» sits next to the schedule.
+- Reports and downloads say **FlowSphera**: the PDF heading (it said FLOWTRACK) and the file names
+  (`flowsphera-report-….pdf`, `flowsphera-….csv`).
 
 ### Fixed
+- **A protocol's name typed in the search box filtered nothing**: «STUN» (or «quic») became a *service* filter, and no
+  service is called STUN. A bare word that names a protocol is a protocol filter now; the service stays a suggestion.
+- **The web interface on port 443 (or NetFlow / sFlow on a port below 1024) failed after an upgrade**: the services
+  run as the user `flowtrack`, which may not open such a port — «Permission denied», restarted every 3 seconds
+  (500,000 times on one server). Both services get exactly the capability to open a port below 1024
+  (`CAP_NET_BIND_SERVICE`); `sudo flowtrack upgrade` puts it in. The log now says what is missing.
 - **Backups to FTP with a folder given without a leading `/`** (e.g. `backups/flowsphera`) failed from the second
   copy on with «cannot create the folder … 550»: the folder already existed, and each step into it moved the place the
   next one was looked for. Such a folder is now always taken from the FTP user's own folder.

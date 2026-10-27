@@ -416,7 +416,8 @@ def api_meta(q):
     oldest = ch("SELECT toUnixTimestamp(ts) AS t FROM flows WHERE ts >= now() - toIntervalDay({d:UInt16}) ORDER BY ts LIMIT 1", {'d': view_days()}, fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
             'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION,
-            'langs': languages(), 'networks': [{'net': x['net'], 'name': x['name']} for x in common.load_networks()]}
+            'langs': languages(), 'networks': [{'net': x['net'], 'name': x['name']} for x in common.load_networks()],
+            'l7': common.l7_names()}
 
 
 def edition_info(admin=False):
@@ -1745,6 +1746,14 @@ def _usage_period(q, tz):
     """(1.15.0) -> (t0, t1, kind, label key): this month so far, last month, or the last N whole local days (today so
     far included); never older than the edition keeps."""
     import datetime as _dt
+    floor = int(time.time()) - view_days() * 86400
+    if not q.get('period'):
+        # (1.18.0) the page's own period (the shared one at the top: a preset that ends now or chosen dates), as on
+        # every other page — Usage no longer has a period switch of its own (Yegor)
+        t0, t1, custom = period(q)
+        if t1 - t0 >= LONG:
+            t0 = t0 // 3600 * 3600
+        return max(t0, floor), t1, 'range', floor
     per = q1(q, 'period', '30')
     if per not in USAGE_PERIODS:
         raise BadRequest('bad period')
@@ -1758,13 +1767,12 @@ def _usage_period(q, tz):
         t0 = (t1 - _dt.timedelta(days=1)).replace(day=1)
     else:
         t0, t1 = day0 - _dt.timedelta(days=int(per) - 1), now
-    floor = int(time.time()) - view_days() * 86400
     return max(int(t0.timestamp()), floor), int(t1.timestamp()), per, floor
 
 
 def api_usage(q):
-    """(1.15.0) Usage by host: what each inside host downloaded and uploaded over a period (this month, last month or
-    the last 7 – 365 days, as far as the edition keeps data), against the same length of time before it; the totals
+    """(1.15.0) Usage by host: what each inside host downloaded and uploaded over a period (since 1.18.0 the page's
+    shared period; `period` = this month, last month or the last 7 – 365 days stays for other callers), against the same length of time before it; the totals
     day by day (month by month over 92 days) and the hosts, the busiest first (USAGE_ROWS; all of them:
     /api/top?dim=int_ip&limit=all, also as CSV). The filters and the traffic selector apply as on every page."""
     tz = _tz(q)
@@ -1777,9 +1785,9 @@ def api_usage(q):
     p['tz'] = tz
     span = t1 - t0
     pt0, pt1 = t0 - span, t0
-    bucket = 'day' if span <= 92 * 86400 else 'month'
-    bexpr = ("toUnixTimestamp(toStartOfDay(ts, {tz:String}))" if bucket == 'day'
-             else "toUnixTimestamp(toDateTime(toStartOfMonth(ts, {tz:String}), {tz:String}))")
+    bucket = 'hour' if span <= 2 * 86400 else 'day' if span <= 92 * 86400 else 'month'
+    bexpr = {'hour': "toUnixTimestamp(toStartOfHour(ts))", 'day': "toUnixTimestamp(toStartOfDay(ts, {tz:String}))",
+             'month': "toUnixTimestamp(toDateTime(toStartOfMonth(ts, {tz:String}), {tz:String}))"}[bucket]
     cur, prev = src(p, ['int_ip'], t0, t1), src(p, ['int_ip'], pt0, pt1)
     series = ch(f"""SELECT {bexpr} AS t, {UP_SQL} AS up, {DN_SQL} AS dn, uniqExact(cityHash64(int_ip)) AS hosts
         FROM {cur} AND ts < toDateTime({{t1:UInt32}}) GROUP BY t ORDER BY t""", dict(p, t1=t1), fmt='JSON', timeout=120, settings=CAP_SETTINGS)
@@ -2867,7 +2875,7 @@ class H(BaseHTTPRequestHandler):
                     tag = web_tag(self.token(), self.headers.get('X-FT-Tab'), self.headers.get('X-FT-Page'))
                     with web_query(tag, web_settings(u.path, q)):
                         res = fn(q)
-                    self._disposition = f'attachment; filename="flowtrack-{q1(q, "dim", "int_ip")}.csv"'
+                    self._disposition = f'attachment; filename="flowsphera-{q1(q, "dim", "int_ip")}.csv"'
                     return self.send(200, top_csv(q1(q, 'dim', 'int_ip'), res), 'text/csv; charset=utf-8')
                 body = CACHE.get(u.path, q)
                 if body is None:
@@ -3448,7 +3456,9 @@ if __name__ == '__main__':
     try:
         LISTENERS = open_listeners(BIND, PORT, socket.SOCK_STREAM, log=lambda m: print(f'[flowtrack-api] {m}', flush=True))
     except (OSError, ValueError) as e:
-        print(f'[flowtrack-api] cannot listen on FT_WEB_BIND={BIND!r} port {PORT}: {e}', flush=True)
+        low = ' — a port below 1024 needs CAP_NET_BIND_SERVICE in flowtrack-web.service (sudo flowtrack upgrade puts it there) or a port from 1024' \
+            if getattr(e, 'errno', None) == 13 and int(PORT) < 1024 else ''     # (1.18.0)
+        print(f'[flowtrack-api] cannot listen on FT_WEB_BIND={BIND!r} port {PORT}: {e}{low}', flush=True)
         sys.exit(1)
     WEB_LISTEN = describe_listeners(LISTENERS)
     servers = [Server(sock, H, ctx) for sock, _ in LISTENERS]

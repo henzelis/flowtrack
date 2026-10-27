@@ -804,6 +804,14 @@ def reload_port_names():
     return True
 
 
+def l7_names():
+    """(1.18.0) The L7 protocol names FlowSphera gives (the user's port names too) that are not also a service name
+    (DNS, NTP): a bare word in the search box that is one of them filters by protocol, not by service."""
+    services = {v[1] for v in PORTS.values() if v[1]}
+    names = {v[0] for v in PORTS.values()} | set(PORT_NAMES.values()) | set(PROTO_NAMES.values()) | {'TCP other', 'UDP other'}
+    return sorted(n for n in names if n not in services)
+
+
 def default_l7(proto, port):
     """The L7 protocol FlowSphera names for proto + port without the user's names."""
     hit = PORTS.get((proto, port))

@@ -1354,7 +1354,6 @@ async function capDetail(x, seq){
 // ===================== (1.15.0) Usage: what each inside host downloaded and uploaded over a period =====================
 // /api/usage — this month, last month or the last 7 – 365 days (as far as the edition keeps data), against the same
 // length of time before it; visual first (Yegor's rule): cards, the days, who uses most and who changed, the table last.
-const USAGE_PER = () => [['month', T('This month')], ['prev_month', T('Last month')], ['7', T('{n} d', {n:7})], ['30', T('{n} d', {n:30})], ['90', T('{n} d', {n:90})], ['180', T('{n} d', {n:180})], ['365', T('{n} d', {n:365})]];
 const usageChange = (cur, prev) => prev ? Math.round(100 * (cur - prev) / prev) : null;
 function usageDelta(cur, prev, big){        // ↑ 12% against the period before; new / — when there is nothing to compare with
   if (prev == null) return '';
@@ -1364,11 +1363,11 @@ function usageDelta(cur, prev, big){        // ↑ 12% against the period before
   return `<span class="udelta${big ? ' big' : ''}" style="color:${col}">${ch > 0 ? '↑' : ch < 0 ? '↓' : '='} ${ch > 300 ? '×' + Math.round(cur / prev).toLocaleString(LOC) : Math.abs(ch) + '%'}</span>`;
 }
 function vUsage(){
-  const v = document.getElementById('view'), per = state.usagePer || '30';
+  // (1.18.0) the shared period at the top, as on every page: no head panel and no period switch of its own (Yegor)
+  const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s12 caphead">${ph(USAGE_ICON, T('Usage'), T('what each inside host downloaded and uploaded · the filters and the traffic selector at the top apply'), '<span id="uPerBox"></span>', true)}</section>
     <div id="uKpi" style="display:contents"></div>
-    <section class="glass panel s8">${ph('chart', T('Day by day'), `<span id="uChartSub">${T('downloaded and uploaded')}</span>`)}<div id="uChart" class="loading" data-wait="bars" style="height:420px"></div><p class="note" id="uNote"></p></section>
+    <section class="glass panel s8">${ph('chart', T('Over the period'), `<span id="uChartSub">${T('downloaded and uploaded')}</span>`)}<div id="uChart" class="loading" data-wait="bars" style="height:420px"></div><p class="note" id="uNote"></p></section>
     <section class="glass panel s4">${ph('users', T('Who uses most'), T('the 10 busiest hosts · click for details'))}<div id="uTop" class="loading"></div></section>
     <section class="glass panel s6">${ph('pulse', T('Biggest changes'), `<span id="uMovSub">${T('against the period before')}</span>`)}<div id="uMov" class="loading"></div></section>
     <section class="glass panel s6">${ph('grid', T('By network'), T('your named networks · Settings → Flow configuration'))}<div id="uNets" class="loading"></div></section>
@@ -1376,13 +1375,10 @@ function vUsage(){
   const seq = renderSeq, done = (id, html) => { const el = fill(id, html); if (el) el.classList.remove('loading'); return el; };
   (async () => {
     let d;
-    const qs = {period:per, tz:capTz(), t:state.traffic, f:JSON.stringify(state.filters)};
+    const qs = {...periodParams(), tz:capTz(), t:state.traffic, f:JSON.stringify(state.filters)};
     try { d = await apiFetch(`api/usage?${new URLSearchParams(qs)}`); } catch (e) { done('uChart', errBox(e)); return; }
     if (seq !== renderSeq) return;
     if (d.error) { done('uChart', `<p class="err">${esc(d.error)}</p>`); return; }
-    fill('uPerBox', seg('uPer', USAGE_PER().map(([k, l]) => [k, l, /^\d+$/.test(k) && +k > d.max_days ? T('Your edition shows {n} days', {n:d.max_days}) : '']), d.period));
-    document.querySelectorAll('#uPer button').forEach(b => { if (/^\d+$/.test(b.dataset.v) && +b.dataset.v > d.max_days) b.disabled = true; });
-    wireSeg('uPer', k => { if (k === d.period) return; state.usagePer = k; render(); });
     const tot = d.total, prev = d.prev, all = tot.up + tot.dn, hs = d.hosts;
     const dateR = (a, b) => `${new Date(a * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short'})} – ${new Date((b - 1) * 1000).toLocaleDateString(LOC, {day:'numeric', month:'short', year:'numeric'})}`;
     // the cards
@@ -1397,7 +1393,7 @@ function vUsage(){
     // day by day (month by month): stacked bars, bytes
     const el = done('uChart', '');
     if (el && d.series.length) {
-      const c = mkChart(el), lab = t => new Date(t * 1000).toLocaleDateString(LOC, d.bucket === 'day' ? {day:'numeric', month:'short'} : {month:'short', year:'numeric'});
+      const c = mkChart(el), lab = t => d.bucket === 'hour' ? new Date(t * 1000).toLocaleTimeString(LOC, {hour:'2-digit', minute:'2-digit'}) : new Date(t * 1000).toLocaleDateString(LOC, d.bucket === 'day' ? {day:'numeric', month:'short'} : {month:'short', year:'numeric'});
       c.setOption({animation:false, grid:{left:14, right:10, top:30, bottom:4, containLabel:true},
         legend:{top:0, right:0, icon:'roundRect', itemWidth:14, itemHeight:6, textStyle:{color:C.ink2, fontFamily:'Manrope'}},
         tooltip:{...tipBase(), trigger:'axis', valueFormatter:v => fmtB(v)},
@@ -1405,7 +1401,7 @@ function vUsage(){
         yAxis:axisY(v => fmtB(v)),
         series:[{name:'↓ ' + T('Downloaded'), type:'bar', stack:'u', barMaxWidth:28, itemStyle:{color:C.down, borderRadius:[0, 0, 2, 2]}, data:d.series.map(r => r[2])},
                 {name:'↑ ' + T('Uploaded'), type:'bar', stack:'u', barMaxWidth:28, itemStyle:{color:C.up, borderRadius:[3, 3, 0, 0]}, data:d.series.map(r => r[1])}]});
-      fill('uChartSub', d.bucket === 'day' ? T('downloaded and uploaded, day by day') : T('downloaded and uploaded, month by month'));
+      fill('uChartSub', d.bucket === 'hour' ? T('downloaded and uploaded, hour by hour') : d.bucket === 'day' ? T('downloaded and uploaded, day by day') : T('downloaded and uploaded, month by month'));
     } else if (el) el.innerHTML = `<div class="empty">${T('No traffic under this filter')}</div>`;
     fill('uNote', d.cut ? T('The period starts {date}: older data is not kept by your edition ({n} days).', {date:new Date(d.from * 1000).toLocaleDateString(LOC), n:d.max_days}) : '');
     // who uses most: bars split in download / upload
@@ -1454,7 +1450,6 @@ const dscpLabel = (names, k) => k === 255 ? T('not reported') : dscpName(names, 
 function vQos(){
   const v = document.getElementById('view');
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s12 caphead">${ph(QOS_ICON, T('QoS'), T('how the traffic is marked (DSCP) as it enters each device · the period and the filters at the top apply · click a class to filter by it'), '', true)}</section>
     <div id="qKpi" style="display:contents"></div>
     <section class="glass panel s8">${ph('chart', T('Classes over time'), T('traffic of each class'))}<div id="qChart" class="loading" data-wait="line" style="height:340px"></div></section>
     <section class="glass panel s4">${ph('pie', T('Share of each class'), T('of the traffic in the period'))}<div id="qDonut" class="loading" style="height:340px"></div></section>
@@ -2363,12 +2358,14 @@ function vTalkers(){
   const v = document.getElementById('view');
   // Hosts | Networks (1.8.7): the same panels, grouped by inside host or by the user's named network
   const byNet = state.talkersBy === 'net', fk = byNet ? 'net' : 'ip', dim = byNet ? 'net' : 'int_ip', noNets = byNet && !(META.networks || []).length;
+  // (1.18.0) the trend first, the table under it: graphics on top on every page (Yegor)
   v.innerHTML = `<div class="grid">
     <div id="tKpi" class="s12 grid" style="grid-column:span 12"><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div><div class="glass kcard s3 loading"></div></div>
     <div class="col s8 fillcol">
-      <section class="glass panel">${ph('users', byNet ? T('Top networks') : T('Top hosts'), byNet ? T('your named networks by total volume · click a row to add the network to the filters') : T('by total volume · click a row to add the host to the filters'),
-        seg('tBySeg', [['ip', T('Hosts')], ['net', T('Networks'), T('Grouped by the networks named in Settings → Flow configuration')]], fk) + '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
-      <section class="glass panel grow">${ph('chart', byNet ? T('Top networks trend') : T('Top hosts trend'), T('top 5 and the rest'))}<div class="chart" id="cTop5"></div></section>
+      <section class="glass panel">${ph('chart', byNet ? T('Top networks trend') : T('Top hosts trend'), T('top 5 and the rest'),
+        seg('tBySeg', [['ip', T('Hosts')], ['net', T('Networks'), T('Grouped by the networks named in Settings → Flow configuration')]], fk))}<div class="chart" id="cTop5"></div></section>
+      <section class="glass panel grow">${ph('users', byNet ? T('Top networks') : T('Top hosts'), byNet ? T('your named networks by total volume · click a row to add the network to the filters') : T('by total volume · click a row to add the host to the filters'),
+        '<button class="lnk" id="tMore"></button>')}<div id="tBox" class="loading"></div></section>
     </div>
     <div class="col s4">
       <section class="glass panel">${ph('pie', byNet ? T('Top networks traffic') : T('Top hosts traffic'), T('share of the total volume'))}<div id="tDonut" class="loading"></div></section>
@@ -2384,7 +2381,7 @@ function vTalkers(){
   document.getElementById('tMore').onclick = () => { state.talkersAll = !state.talkersAll; render(); };
   const colorOf = new Map();
   let selected = null, topRows = [];
-  const csvName = `flowtrack-top-${byNet ? 'networks' : 'hosts'}-${isCustom() ? state.from + '-' + state.to : state.range}.csv`;
+  const csvName = `flowsphera-top-${byNet ? 'networks' : 'hosts'}-${isCustom() ? state.from + '-' + state.to : state.range}.csv`;
   const withF = (view, extra) => () => { putFilter({k:fk, v:selected.k, neg:false}); if (extra) extra(); state.view = view; render(); };
   const drawQa = () => {
     const h = selected; fill('qaFor', h ? T('for {name}', {name: esc(byNet ? h.k : h.name || h.k)}) : T('no data'));
@@ -3184,7 +3181,7 @@ function vSettings(){
 const REP_ICON = 'M4 2h7l3 3v11H4zM11 2v3h3M6.5 9h5M6.5 12h5';
 const REP_EVERY = () => [['day', T('Daily')], ['week', T('Weekly')], ['month', T('Monthly')]];
 const REP_SECTIONS = () => ({summary:T('Totals'), chart:T('Traffic over time'), hosts:T('Busiest inside hosts'), outside:T('Outside networks (AS)'),
-  services:T('Services'), countries:T('Countries'), networks:T('Your networks'), capacity:T('Link capacity'), events:T('Security events'), devices:T('Devices')});
+  conversations:T('Conversations'), services:T('Services'), countries:T('Countries'), networks:T('Your networks'), capacity:T('Link capacity'), events:T('Security events'), devices:T('Devices')});
 const REP_TRAFFIC = () => [['internet', T('Internet traffic')], ['internal', T('Traffic between inside hosts')], ['all', T('All traffic')]];
 // weekday names in the language of the page (0 = Monday, as on the server); 5 Jan 2026 was a Monday
 const WDAYS = () => [...Array(7)].map((_, i) => new Date(Date.UTC(2026, 0, 5 + i)).toLocaleDateString(LOC, {weekday:'long', timeZone:'UTC'}));
@@ -3217,7 +3214,7 @@ async function repDownload(q, btn, path = 'reports/pdf'){
   try {
     const r = await fetch(`api/${path}?` + new URLSearchParams(q));
     if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.status); }
-    const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'flowtrack-report.pdf';
+    const name = (/filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '') || [])[1] || 'flowsphera-report.pdf';
     const a = document.createElement('a'); a.href = URL.createObjectURL(await r.blob()); a.download = name; document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
     return '';
@@ -3301,7 +3298,7 @@ async function openPeriodReport(){
       <label>${T('Language')}<select id="opLang">${langs().map(([k, l]) => `<option value="${k}" ${LANG === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
     <div><label for="opF">${T('Filters')} <span class="nat">${T('— as in the search box; empty: all traffic')}</span></label><input id="opF" class="mono" value="${esc(repFilters(state.filters))}" placeholder="net:Office ip:10.0.0.5 -service:Telegram"></div>
     <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('What the report holds')}</legend>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px">${Object.entries(secs).map(([k, l]) =>
+      <div class="repsecs" style="--rows:${Math.ceil(Object.keys(secs).length / 3)}">${Object.entries(secs).map(([k, l]) =>
         `<label class="chk"><input type="checkbox" data-sec="${k}" checked>${l}</label>`).join('')}</div></fieldset>
     ${isAdmin() ? `<label>${T('Send by e-mail to (optional)')}<textarea id="opTo2" rows="2" ${mailReady(mail) ? '' : 'disabled'} placeholder="${mailReady(mail) ? 'noc@example.com, boss@example.com' : esc(T('The mail server is not set up: nothing is sent by e-mail.'))}"></textarea></label>` : ''}
     <p class="err" id="opErr" hidden></p><p class="note" id="opOk" hidden></p>
@@ -3434,15 +3431,14 @@ function vReports(){
         <label id="rpMdayL">${T('Day of the month')}<select id="rpMday">${[...Array(28)].map((_, i) => `<option value="${i + 1}" ${+x.mday === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>
         <label>${T('At')}<input id="rpAt" type="time" value="${esc(x.at)}"></label>
         <label>${T('Language')}<select id="rpLang">${langs().map(([k, l]) => `<option value="${k}" ${x.lang === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label></div>
-      <p class="note" id="rpWhen" style="margin:0"></p>
+      <div style="display:flex;gap:6px 16px;align-items:center;flex-wrap:wrap"><label class="chk"><input type="checkbox" id="rpOn" ${x.on ? 'checked' : ''}>${T('Send on schedule')}</label><p class="note" id="rpWhen" style="margin:0"></p></div>
       <label>${T('Time zone')}<select id="rpTz">${d.timezones.map(z => `<option ${z === tz ? 'selected' : ''}>${esc(z)}</option>`).join('')}</select></label>
       <label>${T('Recipients')}<textarea id="rpTo" rows="2" placeholder="${esc(d.mail_to.length ? T('empty: those of the notifications ({to})', {to:d.mail_to.join(', ')}) : 'noc@example.com, boss@example.com')}">${esc(x.to.join(', '))}</textarea></label>
       <label>${T('Traffic')}<select id="rpT">${REP_TRAFFIC().map(([k, l]) => `<option value="${k}" ${x.t === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <div><label for="rpF">${T('Filters')} <span class="nat">${T('— as in the search box; empty: all traffic')}</span></label><input id="rpF" class="mono" value="${esc(repFilters(x.f))}" placeholder="net:Office device:fw-main -service:Telegram"></div>
       <fieldset style="border:0;padding:0;margin:0"><legend class="nat" style="margin-bottom:6px">${T('What the report holds')}</legend>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px 12px">${Object.entries(secs).map(([k, l]) =>
+        <div class="repsecs" style="--rows:${Math.ceil(Object.keys(secs).length / 3)}">${Object.entries(secs).map(([k, l]) =>
           `<label class="chk"><input type="checkbox" data-sec="${k}" ${x.sections.includes(k) ? 'checked' : ''}>${l}</label>`).join('')}</div></fieldset>
-      <label class="chk"><input type="checkbox" id="rpOn" ${x.on ? 'checked' : ''}>${T('Send on schedule')}</label>
       <p class="err" id="rpErr" hidden></p>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" type="submit">${T('Save')}</button><button class="btn" type="button" id="rpPdf">${T('Download PDF')}</button><button class="btn" type="button" id="rpNo">${T('Cancel')}</button></div></form>`, true);
     const sched = () => ({every:$('rpEvery').value, wday:Number($('rpWday').value), mday:Number($('rpMday').value), at:$('rpAt').value || '07:00'});
@@ -4406,7 +4402,6 @@ function vConversations(){
   const right = internal ? 'addr' : (state.convRight || 'owner'), only = state.convOnly || 'all';
   const defView = () => ((ME && ME.prefs) || {}).conv_view || 'flow', curView = () => state.convView || defView();
   v.innerHTML = `<div class="grid">
-    <section class="glass panel s12 caphead">${ph('conv', T('Conversations'), T('who talks to whom · the filters and the traffic selector at the top apply'), '', true)}</section>
     <div id="cvKpi" style="display:contents"></div>
     <section class="glass panel s12" id="cvSec">${ph('conv', T('Who talks to whom'), `<span id="cvSub"></span>`, `<span class="cvtools"><span id="cvViews" class="netviews"></span>${internal ? '' : seg('cvRight', CONV_RIGHT(), right)}</span>`, false, maxBtn())}
       <div id="cvGraph" class="chart cvgraph loading" data-wait="${{flow:'flow', chord:'chord', matrix:'heat'}[curView()] || 'flow'}"></div><div class="legend" id="cvLeg"></div></section>
@@ -4568,7 +4563,7 @@ function vConversations(){
     document.getElementById('cvCsv').onclick = e => { e.preventDefault(); const q = s => `"${String(s ?? '').replace(/"/g, '""')}"`;
       const lines = [['inside', 'inside_name', 'outside', 'owner', 'asn', 'service', 'country', 'received_bytes', 'sent_bytes', 'flows', 'first', 'last', 'bytes_period_before', 'new'].join(',')]
         .concat(rowsNow().map(r => [r.int_ip, r.name, r.ext_ip, r.owner, r.asn || '', r.service, r.country, r.dn, r.up, r.fl, new Date(r.first * 1000).toISOString(), new Date(r.last * 1000).toISOString(), r.prev ?? '', r.new ? 1 : 0].map(q).join(',')));
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], {type:'text/csv'})); a.download = `flowtrack-conversations-${new Date(d.to * 1000).toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n') + '\n'], {type:'text/csv'})); a.download = `flowsphera-conversations-${new Date(d.to * 1000).toISOString().slice(0, 10)}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
     table();
   })();
 }
@@ -4580,7 +4575,7 @@ function renderShell(){
   // on narrow screens the menu is a scrolling row: keep the current page in sight
   const cur = document.querySelector('#nav [aria-current="page"]'), navEl = document.getElementById('nav');
   if (cur && navEl.scrollWidth > navEl.clientWidth) navEl.scrollLeft += cur.getBoundingClientRect().left - navEl.getBoundingClientRect().left - (navEl.clientWidth - cur.offsetWidth) / 2;
-  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}"><span class="k">${chipKey(f)}${f.neg ? ' ≠' : ':'}</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') && /^\d+$/.test(f.v) ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter')}" data-i="${i}">×</button></span>`).join('')
+  document.getElementById('chips').innerHTML = (isCustom() ? `<span class="fchip period"><span class="k">${T('period')}:</span><button class="lnk" id="periodEdit" title="${T('Change the period')}">${esc(rangeLabel())}</button><button aria-label="${T('Back to')} ${esc(presetLabel(state.prevRange))}" title="${T('Back to')}: ${esc(presetLabel(state.prevRange))}" id="periodX">×</button></span>` : '') + state.filters.map((f, i) => `<span class="fchip ${f.neg ? 'neg' : ''}" title="${esc(chipKey(f) + (f.neg ? ' ≠ ' : ': ') + f.v)}"><span class="k">${f.neg ? '-' : ''}${f.k}:</span>${esc(f.k === 'device' ? devName(f.v) : (f.k === 'in_if' || f.k === 'out_if' || f.k === 'iface') && /^\d+$/.test(f.v) ? (ifLabel(pathDevice(), +f.v) === String(f.v) ? 'if ' + f.v : ifLabel(pathDevice(), +f.v)) : f.v)}<button aria-label="${T('Remove filter')}" data-i="${i}">×</button></span>`).join('')
     + (state.filters.length ? `<button class="lnk" id="clearF">${T('Clear all')}</button>` : '');
   document.querySelectorAll('#chips button[data-i]').forEach(b => b.onclick = () => { state.filters.splice(+b.dataset.i, 1); render(); });
   const cf = document.getElementById('clearF'); if (cf) cf.onclick = () => { state.filters = []; render(); };
@@ -4696,6 +4691,7 @@ function addrCheck(v){
   return {ok:false, msg:T('Not an address or network: {v}', {v})};
 }
 const netOf = ip => { const c = addrCheck(ip + (ip.includes(':') ? '/64' : '/24')); return c.ok ? c.v : ''; };
+// (1.18.0) a chip shows its filter as it is typed in the search (l7:STUN, -ip:10.0.0.5); this human name is its tooltip
 const chipKey = f => (f.k === 'ip' || f.k === 'dst') && String(f.v).includes('/') ? (f.k === 'ip' ? T('network') : T('ext. network')) : FILTER_LABEL[f.k] || f.k;
 // one typed word -> a filter, or an error to show
 function qParse(t){
@@ -4713,6 +4709,9 @@ function qParse(t){
     return {f:{k:isPrivate(c.v) ? 'ip' : 'dst', v:c.v, neg}}; }
   if (/^AS\d+$/i.test(t)) return {f:{k:'asn', v:t, neg}};
   if (!key && netFind(t)) return {f:{k:'net', v:netFind(t).name, neg}};
+  // (1.18.0) a protocol's name (STUN, quic) is a protocol, not a service: «STUN» as a service matched nothing
+  const l7 = !key && (META.l7 || []).find(x => x.toLowerCase() === t.toLowerCase());
+  if (l7) return {f:{k:'l7', v:l7, neg}};
   if (/^[A-Za-z]{2}$/.test(t)) return {f:{k:'country', v:t.toUpperCase(), neg}};
   return t ? {f:{k:'service', v:t, neg}} : {};
 }
@@ -4762,6 +4761,7 @@ function qSuggest(word){
     if (r.f.k === 'service') { netNames().filter(n => n.toLowerCase().includes(w.replace(/_/g, ' ').toLowerCase())).slice(0, 3).forEach(n => out.push({text:`${pre}net:${netTyped(n)}`, label:`${pre}net:${netTyped(n)}`, note:T('named network'), apply:true}));
       (META.devices || []).filter(d => (d.name || '').toLowerCase().includes(w.toLowerCase())).slice(0, 3).forEach(d => out.push({text:`${pre}device:${d.name}`, label:`${pre}device:${d.name}`, note:T('device'), apply:true}));
       ['l7', 'city', 'asn'].forEach(k => out.push({text:`${pre}${k}:${w}`, label:`${pre}${k}:${w}`, note:info[k][1], apply:true})); }
+    if (r.f.k === 'l7') out.push({text:`${pre}service:${w}`, label:`${pre}service:${w}`, note:info.service[1], apply:true});
   }
   return out;
 }

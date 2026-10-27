@@ -863,7 +863,9 @@ class Receiver:
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:
-            log(f'cannot listen on FT_BIND={BIND!r} port {PORT}: {ex}')
+            low = ' — a port below 1024 needs CAP_NET_BIND_SERVICE in flowtrack-collector.service (sudo flowtrack upgrade puts it there) or a port from 1024' \
+                if getattr(ex, 'errno', None) == 13 and int(PORT) < 1024 else ''     # (1.18.0)
+            log(f'cannot listen on FT_BIND={BIND!r} port {PORT}: {ex}{low}')
             sys.exit(1)
         self.sflow_port = 0
         if SFLOW_PORT and SFLOW_PORT != PORT:      # sFlow's own port; a busy one only costs that port (sFlow on PORT still works)

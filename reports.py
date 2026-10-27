@@ -29,11 +29,12 @@ STATE = os.path.join(STATE_DIR, 'reports_state.json')
 HERE = os.path.dirname(os.path.abspath(__file__))
 FONTS = os.path.join(HERE, 'report', 'fonts')
 EVERY = ('day', 'week', 'month')
-SECTIONS = ('summary', 'chart', 'hosts', 'outside', 'services', 'countries', 'networks', 'capacity', 'events', 'devices')
-NEW_SECTIONS = {'capacity': '1.13.0'}      # added to the reports made before, once (`seen` remembers what a report was offered)
+SECTIONS = ('summary', 'chart', 'hosts', 'outside', 'conversations', 'services', 'countries', 'networks', 'capacity', 'events', 'devices')
+NEW_SECTIONS = {'capacity': '1.13.0', 'conversations': '1.18.0'}      # added to the reports made before, once (`seen` remembers what a report was offered)
 TRAFFIC = ('internet', 'internal', 'all')
 FILTER_KEYS = ('ip', 'dst', 'net', 'service', 'l7', 'country', 'city', 'port', 'device', 'asn', 'dir', 'proto', 'in_if', 'out_if', 'iface')
 MAX_REPORTS = 20
+CONV_ROWS = 12               # (1.18.0) pairs in the Conversations part (and as many new ones at most)
 RETRY, TRIES = 900, 8
 TIME_RE = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
 _lock = threading.Lock()
@@ -273,6 +274,8 @@ def collect(r, t0, t1, call):
                          ('countries', 'country', 10), ('networks', 'net', 15)):
         if name in sec:
             d[name] = call('/api/top', q(dim=dim, limit=n))
+    if 'conversations' in sec:     # (1.18.0) the biggest pairs and the new ones
+        d['conversations'] = call('/api/conversations', q(limit=CONV_ROWS))
     if 'events' in sec:
         d['events'] = call('/api/alerts', q(tz=r['tz']))['alerts']
     if 'devices' in sec:
@@ -623,6 +626,35 @@ def render(r, data, t0, t1, version='', now=None):
                 table(['#', tr('Network'), tr('Country'), tr('Downloaded'), tr('Uploaded'), tr('Share')], body,
                       [8 * mm, W - 8 * mm - 32 * mm - 2 * 22 * mm - 28 * mm, 32 * mm, 22 * mm, 22 * mm, 28 * mm], right=(3, 4)))
 
+    # ---- (1.18.0) conversations: who talked to whom the most, then the new ones (an inside host and an owner it had
+    # not talked to in the days before — the page's rule)
+    cv = data.get('conversations') or {}
+    if 'conversations' in sec and cv.get('pairs'):
+        ct = cv['total']
+
+        def peer(x):
+            who = x.get('owner') or x.get('ext_name') or x['ext_ip']
+            return two_lines(who, x['ext_ip'] if who != x['ext_ip'] else '')
+
+        def host(x):
+            return two_lines(x.get('name') or x['int_ip'], x['int_ip'] if x.get('name') else '')
+        note = trn(ct['pairs'], '{n} pair talked in this period', '{n} pairs talked in this period', n=fmt_n(ct['pairs']))
+        if ct.get('new_pairs') and cv.get('new_from') is not None:
+            note += ' · ' + trn(ct['new_pairs'], '{n} of them new ({bytes})', '{n} of them new ({bytes})', n=fmt_n(ct['new_pairs']), bytes=fmt_b(ct.get('new_bytes', 0)))
+        body = [[str(i), host(x), peer(x), Paragraph(esc(country(x.get('country', ''), lang) if x.get('country') else '—'), P),
+                 fmt_b(x['dn']), fmt_b(x['up']), bar((x['up'] + x['dn']) / tot, BLUE, w=20 * mm)] for i, x in enumerate(cv['pairs'], 1)]
+        section(tr('Conversations'),
+                table(['#', tr('Inside host'), tr('Talks to'), tr('Country'), tr('Downloaded'), tr('Uploaded'), tr('Share')], body,
+                      [8 * mm, (W - 8 * mm - 26 * mm - 2 * 20 * mm - 24 * mm) / 2, (W - 8 * mm - 26 * mm - 2 * 20 * mm - 24 * mm) / 2,
+                       26 * mm, 20 * mm, 20 * mm, 24 * mm], right=(4, 5)), note=note)
+        if cv.get('new'):
+            body = [[host(x), peer(x), Paragraph(esc(country(x.get('country', ''), lang) if x.get('country') else '—'), P),
+                     fmt_b(x['up'] + x['dn'])] for x in cv['new']]
+            story.append(Spacer(0, 3 * mm))
+            story.append(Paragraph(esc(tr('New conversations')), st('h3', fontName='FT-Bold', fontSize=9.5, leading=13, spaceAfter=1.5 * mm, keepWithNext=1)))
+            story.append(table([tr('Inside host'), tr('Talks to'), tr('Country'), tr('Total')], body,
+                               [(W - 26 * mm - 22 * mm) / 2, (W - 26 * mm - 22 * mm) / 2, 26 * mm, 22 * mm], right=(3,)))
+
     # ---- services and countries side by side
     halves = []
     hw = (W - 6 * mm) / 2
@@ -777,7 +809,7 @@ def render(r, data, t0, t1, version='', now=None):
         c.rect(0, A4[1] - 34 * mm, A4[0], 1.2 * mm, stroke=0, fill=1)
         c.setFillColor(colors.white)
         c.setFont('FT-Black', 9)
-        c.drawString(16 * mm, A4[1] - 11 * mm, 'FLOWTRACK')
+        c.drawString(16 * mm, A4[1] - 11 * mm, 'FLOWSPHERA')
         c.setFont('FT-Black', 18)
         c.drawString(16 * mm, A4[1] - 20.5 * mm, title[:60])
         c.setFont('FT', 9)
@@ -879,7 +911,7 @@ def make(r, t0, t1, call, version=''):
 def file_name(r, t0):
     slug = re.sub(r'[^A-Za-z0-9]+', '-', r['name']).strip('-').lower()[:40] or 'report'
     when = datetime.datetime.fromtimestamp(t0, ZoneInfo(r['tz'])).strftime('%Y-%m-%d_%H%M' if r['every'] == 'custom' else '%Y-%m-%d')
-    return f"flowtrack-{slug}-{when}.pdf"
+    return f"flowsphera-{slug}-{when}.pdf"
 
 
 def mail_problem(r, cfg=None):

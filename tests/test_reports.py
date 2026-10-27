@@ -42,6 +42,13 @@ def fake_call(log=None):
         if path == '/api/alerts':
             return {'alerts': [{'sev': 'warn', 'kind': 'port_scan', 'title': 'Port scan', 'text': '203.0.113.5 tried 9 ports of ours.',
                                 'when': '2026-10-12 10:00:00', 'last': '2026-10-12 10:00:00', 'stored': True}] * 20}
+        if path == '/api/conversations':     # (1.18.0) the biggest pairs and the new ones
+            pair = {'int_ip': '192.0.2.10', 'ext_ip': '198.51.100.7', 'name': 'printer', 'ext_name': '', 'service': 'Example',
+                    'country': 'UA', 'asn': 64500, 'owner': 'Example Net', 'up': 100_000_000, 'dn': 900_000_000, 'fl': 10,
+                    'first': t0, 'last': t1, 'prev': 0, 'new': True}
+            return {'total': {'pairs': 1234, 'bytes': 9_000_000_000, 'prev_pairs': 1100, 'new_owners': 5, 'new_pairs': 17,
+                              'new_bytes': 300_000_000, 'countries': 12, 'top_countries': ['UA']}, 'new_from': t0 - 7 * 86400,
+                    'pairs': [pair] * int(q.get('limit', ['12'])[0]), 'new': [pair] * 3}
         if path == '/api/devices':
             return {'devices': [{'ip': '192.0.2.1', 'name': 'fw', 'proto': 'IPFIX', 'rps': 12.5, 'loss_pct': 0, 'last': t1}]}
         if path == '/api/capacity':          # (1.13.0) a WAN that fills in 40 days, a quiet LAN port, one without a capacity
@@ -161,7 +168,7 @@ class Once(unittest.TestCase):
         common.set_lang('en')
         self.assertEqual(r['name'], 'Report for a period')
         self.assertEqual(reports.period_label(r, ts(2026, 10, 17, 2, 10), ts(2026, 10, 17, 3, 40)), '2026-10-17 02:10 — 2026-10-17 03:40')
-        self.assertEqual(reports.file_name(r, ts(2026, 10, 17, 2, 10)), 'flowtrack-report-for-a-period-2026-10-17_0210.pdf')
+        self.assertEqual(reports.file_name(r, ts(2026, 10, 17, 2, 10)), 'flowsphera-report-for-a-period-2026-10-17_0210.pdf')
         for t0, t1 in ((now - 100, now), (now + 10, now + 900), (ts(2026, 10, 17), ts(2026, 10, 17, 0, 4))):
             with self.subTest((t0, t1)), self.assertRaises(ValueError):
                 reports.once({'sections': ['summary']}, t0, t1, now)
@@ -326,6 +333,7 @@ class Pdf(unittest.TestCase):
             self.assertTrue(pdf.startswith(b'%PDF') and len(pdf) > 10000, lang)
             self.assertEqual(len(data['events']), 20)
             self.assertEqual(data['capacity']['days'], 30)           # a week's report: the trend over 30 days
+            self.assertEqual(len(data['conversations']['pairs']), reports.CONV_ROWS)
             self.assertIn(b'Manrope-ExtraBold', pdf)
 
     def test_an_empty_period(self):
@@ -374,7 +382,8 @@ class NewSections(unittest.TestCase):
             with open(reports.CONFIG, 'w') as f:
                 js.dump({'reports': [{'id': 'a1', 'name': 'Old', 'sections': old}]}, f)
             r = reports.load()[0]
-            self.assertEqual(r['sections'], ['summary', 'hosts', 'capacity', 'events', 'devices'])
+            # (1.18.0) Conversations came later still: an old report gets both, once
+            self.assertEqual(r['sections'], ['summary', 'hosts', 'conversations', 'capacity', 'events', 'devices'])
             r['sections'] = old                                  # the user switches it off again and saves
             with open(reports.CONFIG, 'w') as f:
                 js.dump({'reports': [reports.validate(r)]}, f)

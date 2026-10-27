@@ -18,6 +18,9 @@ TimeoutStopSec=90
 User=flowtrack
 Group=flowtrack
 NoNewPrivileges=yes
+# (1.18.0) a port below 1024 (the web on 443, NetFlow / sFlow on a low port) needs this one capability: without it
+# the service, which runs as flowtrack, failed with «Permission denied» and was restarted every 3 s for good
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

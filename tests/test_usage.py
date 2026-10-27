@@ -56,6 +56,17 @@ class Periods(unittest.TestCase):
         with self.assertRaises(api.BadRequest):
             period('42')
 
+    def test_the_shared_period(self):
+        """(1.18.0) without `period` the page's shared period: a preset that ends now, or chosen dates"""
+        now = int(NOW.timestamp())
+        with mock.patch.object(api, 'view_days', lambda: 30), mock.patch('time.time', lambda: NOW.timestamp()):
+            t0, t1, per, _ = api._usage_period({'range': ['6h']}, 'Europe/Kyiv')
+            self.assertEqual((t1 - t0, t1, per), (6 * 3600, now, 'range'))
+            t0, t1, _, _ = api._usage_period({'range': ['7d']}, 'Europe/Kyiv')      # a day or more: on a whole hour
+            self.assertEqual((t0 % 3600, t1), (0, now))
+            a, b = now - 3 * 86400, now - 86400
+            self.assertEqual(api._usage_period({'from': [str(a)], 'to': [str(b)]}, 'Europe/Kyiv')[:2], (a // 3600 * 3600, b))
+
 
 class Compare(unittest.TestCase):
     """api_usage with the database faked: the totals of the period before are asked for only when the data reach back."""
