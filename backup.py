@@ -510,7 +510,10 @@ class FTP(Dest):
         return str(e) or e.__class__.__name__
 
     def _mkdirs(self):
-        cur = '/' if self.dir.startswith('/') else ''
+        # a relative folder is under the login folder: made absolute first, because each cwd below moves the base
+        if not self.dir.startswith('/'):
+            self.dir = self.f.pwd().rstrip('/') + '/' + self.dir
+        cur = '/'
         for part in self.dir.strip('/').split('/'):
             cur = f'{cur}{part}/'
             try:
@@ -520,7 +523,7 @@ class FTP(Dest):
                     self.f.mkd(cur)
                 except self.ftplib.Error as e:
                     raise BackupError(tr('FTP: cannot create the folder {path}: {err}', path=cur, err=e)) from None
-        self.f.cwd(self.dir or '/')
+        self.f.cwd(self.dir)
 
     def close(self):
         with contextlib.suppress(Exception):

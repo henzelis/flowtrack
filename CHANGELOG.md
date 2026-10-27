@@ -33,6 +33,11 @@ FlowSphera (core 1.7.0 accepts both); the codes stay `FTL-…` / `FTK-…`, the 
   instead of the rows of a table to come, which only tables show now (Conversations, Usage, Capacity, QoS, Events,
   Top hosts, Through device).
 
+### Fixed
+- **Backups to FTP with a folder given without a leading `/`** (e.g. `backups/flowsphera`) failed from the second
+  copy on with «cannot create the folder … 550»: the folder already existed, and each step into it moved the place the
+  next one was looked for. Such a folder is now always taken from the FTP user's own folder.
+
 ## 1.17.2 — 2026-10-26
 
 ### Fixed
