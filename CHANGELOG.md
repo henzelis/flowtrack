@@ -3,7 +3,7 @@
 FlowSphera follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
-## Unreleased
+## 2.0.0 — 2026-10-28
 
 **FlowSphera 2.0 — every name on the server is FlowSphera.** Up to 1.18 only the product's face had the new name;
 now the command, the services, the folders, the database and what other systems receive have it too. An installation
