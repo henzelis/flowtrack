@@ -7,4 +7,6 @@ RandomizedDelaySec=3h
 Persistent=true
 
 [Install]
+# (2.0) the name before 2.0 answers too (systemctl status flowtrack-geoip …) until 3.0
+Alias=flowtrack-geoip.timer
 WantedBy=timers.target

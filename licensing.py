@@ -20,7 +20,7 @@ vendor) need no network.
 The work is done by the compiled FlowSphera core (`ftcore`), which also holds the vendor's public key and the
 Community limits; this module is its Python face.
 
-Command line (installed as `flowtrack-license`): licensing.py status | request | activate FILE|CODE|KEY|- | checkin | renew | deactivate
+Command line (installed as `flowsphera-license`): licensing.py status | request | activate FILE|CODE|KEY|- | checkin | renew | deactivate
 (renew: ask the license server now whether the vendor renewed the installed license — offline ones too)
 """
 import hashlib
@@ -34,7 +34,7 @@ import urllib.parse
 
 import ftcore
 
-STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
+STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowsphera')
 # The license server and the SHA-256 of its TLS certificate (pinned: the server uses its own certificate, so no
 # public CA is involved and nobody in between can read a license key). Responses are signed by the server's key,
 # which the compiled core checks.

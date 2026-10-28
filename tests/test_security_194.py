@@ -1,4 +1,4 @@
-"""1.9.4 security review: root's backup service never follows a link the flowtrack user left in its folder; a restore
+"""1.9.4 security review: root's backup service never follows a link the flowsphera user left in its folder; a restore
 of the settings neither writes through links nor sets setuid bits; a copy's manifest cannot name a folder elsewhere;
 wrong current passwords count as failed logins; bad filter values are a 400, not a database error.
 Run: python -m unittest discover -s tests"""

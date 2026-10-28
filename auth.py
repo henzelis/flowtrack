@@ -4,7 +4,7 @@
 - Sessions: random 256-bit tokens; only their SHA-256 is stored on disk, so a leaked
   sessions file cannot be replayed. Sliding expiry of 7 days.
 - Roles: 'admin' (everything, incl. users and devices) and 'viewer' (read-only).
-- On first start, when no users exist, creates admin / flowtrack and flags the password as default.
+- On first start, when no users exist, creates admin / flowsphera and flags the password as default.
 - API tokens (1.11.0): for scripts and monitoring, sent as `Authorization: Bearer ftapi_…`. They belong to the
   installation (not to a user), carry a scope — 'read' (what a viewer sees) or 'write' (also the administrator's
   changes, without users, tokens, the license and deleting backups) — and an optional end date. Only their SHA-256 is
@@ -28,7 +28,7 @@ from collections import defaultdict, deque
 import directory
 from common import tr
 
-STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
+STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowsphera')
 USERS_FILE = os.path.join(STATE_DIR, 'users.json')
 SESSIONS_FILE = os.path.join(STATE_DIR, 'sessions.json')
 SESSION_TTL = 7 * 86400
@@ -42,7 +42,7 @@ TOKEN_PREFIX = 'ftapi_'
 SCOPES = ('read', 'write')
 TOKEN_DAYS = (0, 30, 90, 365)            # 0 = no end date
 MAX_TOKENS = 50
-DEFAULT_USER, DEFAULT_PASSWORD = 'admin', 'flowtrack'
+DEFAULT_USER, DEFAULT_PASSWORD = 'admin', 'flowsphera'
 
 
 class AuthError(Exception):
@@ -86,7 +86,7 @@ class Auth:
         self.fails = defaultdict(deque)          # ip -> timestamps of failed logins
         if not self.users:
             self._set_password(DEFAULT_USER, DEFAULT_PASSWORD, role='admin', default=True)
-            print(f'[flowtrack-api] created default user {DEFAULT_USER!r} — change its password', flush=True)
+            print(f'[flowsphera-api] created default user {DEFAULT_USER!r} — change its password', flush=True)
         now = time.time()
         self.sessions = {k: v for k, v in self.sessions.items() if v.get('exp', 0) > now and v.get('user') in self.users}
 
@@ -191,7 +191,7 @@ class Auth:
         try:
             r = directory.authenticate(cfg, name, password)
         except directory.DirectoryError as e:
-            print(f'[flowtrack-api] directory sign-in of {str(name)[:64]!r}: {e}', flush=True)
+            print(f'[flowsphera-api] directory sign-in of {str(name)[:64]!r}: {e}', flush=True)
             raise AuthError(tr('The directory cannot be reached now (local users can still sign in). Ask an administrator.'), 503) from None
         with self.lock:
             if r is None:

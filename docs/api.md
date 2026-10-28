@@ -37,8 +37,8 @@ For scripts, monitoring (Zabbix, Grafana, your own) and integrations: *Settings 
 once — FlowSphera keeps only its SHA-256 — and is sent in a header:
 
 ```bash
-curl -k -H "Authorization: Bearer ftapi_…" "https://flowtrack.example.com:3030/api/summary?range=24h&f=[]"
-curl -k -H "Authorization: Bearer ftapi_…" "https://flowtrack.example.com:3030/api/top?dim=int_ip&limit=10&range=1h&f=%5B%7B%22k%22%3A%22net%22%2C%22v%22%3A%22Office%22%7D%5D"
+curl -k -H "Authorization: Bearer ftapi_…" "https://flowsphera.example.com:3030/api/summary?range=24h&f=[]"
+curl -k -H "Authorization: Bearer ftapi_…" "https://flowsphera.example.com:3030/api/top?dim=int_ip&limit=10&range=1h&f=%5B%7B%22k%22%3A%22net%22%2C%22v%22%3A%22Office%22%7D%5D"
 ```
 
 | Access | What the token can do |
@@ -58,7 +58,7 @@ Upload and download of each host of a network over any period — for billing, r
 
 ```bash
 TOKEN=ftapi_…            # Settings → API → New token, read only is enough
-curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Bearer $TOKEN" \
+curl -k -G "https://flowsphera.example.com:3030/api/top" -H "Authorization: Bearer $TOKEN" \
   --data-urlencode 'dim=int_ip' --data-urlencode 'limit=all' \
   --data-urlencode 'from=1792368000' --data-urlencode 'to=1792454400' \
   --data-urlencode 'f=[{"k":"ip","v":"10.0.1.0/24"}]'
@@ -80,10 +80,10 @@ curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Beare
 - **`limit=all`** returns every host, up to 100,000; `"truncated": true` means there were more — narrow the filters (a
   smaller network, a shorter period). A number keeps to 1–500 (`0` or `-1` mean 1). Names come from what FlowSphera
   knows already: an export never starts reverse DNS lookups.
-- **CSV**: add `format=csv` — a file `flowtrack-int_ip.csv` (UTF-8 with a BOM, opens in Excel as is):
+- **CSV**: add `format=csv` — a file `flowsphera-int_ip.csv` (UTF-8 with a BOM, opens in Excel as is):
 
 ```bash
-curl -k -G "https://flowtrack.example.com:3030/api/top" -H "Authorization: Bearer $TOKEN" \
+curl -k -G "https://flowsphera.example.com:3030/api/top" -H "Authorization: Bearer $TOKEN" \
   --data-urlencode 'dim=int_ip' --data-urlencode 'limit=all' --data-urlencode 'format=csv' \
   --data-urlencode 'range=30d' --data-urlencode 'f=[{"k":"net","v":"Office"}]' -o office-hosts.csv
 ```
@@ -104,29 +104,30 @@ priority threshold, kinds and hourly limit as Telegram and e-mail (the SIEM chan
 Mattermost / Rocket.Chat** (`{"text": …}`) and **Discord** (`{"content": …}`) — for those, paste their incoming
 webhook address. An optional extra header (`Authorization: Bearer …`, `X-Api-Key: …`) is sent with each request.
 
-> **Identifiers keep the former name.** FlowSphera was called FlowTrack until 1.17; what other systems match on stays
-> exactly as it was, so existing rules and scripts keep working: the webhook JSON `"source": "FlowTrack"`, the headers
-> `X-FlowTrack-Timestamp` / `X-FlowTrack-Signature`, the SIEM line `CEF:0|FlowTrack|FlowTrack|…` and the syslog app name
-> `FlowTrack`, the `User-Agent: FlowTrack/<version>`. The API itself (paths, fields, tokens `ftapi_…`) and the database
-> (`flowtrack`, its tables and columns) did not change either.
+> **Identifiers (2.0).** FlowSphera was called FlowTrack until 1.17, and up to 1.18 what other systems match on kept
+> that name. **Since 2.0 it is FlowSphera:** the webhook JSON `"source": "FlowSphera"`, the headers
+> `X-FlowSphera-Timestamp` / `X-FlowSphera-Signature`, the SIEM line `CEF:0|FlowSphera|FlowSphera|…` and the syslog app
+> name `FlowSphera`, the `User-Agent: FlowSphera/<version>`. Update SIEM rules and webhook signature checks that
+> look for `FlowTrack` when upgrading to 2.0. The API itself (paths, fields, tokens `ftapi_…`) did not change; the
+> database is now named `flowsphera`.
 
 ```json
-{"source": "FlowSphera", "version": "1.11.0", "link": "https://flowtrack.example.com:3030", "more": 0,
+{"source": "FlowSphera", "version": "1.11.0", "link": "https://flowsphera.example.com:3030", "more": 0,
  "events": [{"kind": "port_scan", "severity": "warn", "title": "Port scan",
              "text": "203.0.113.5 (NL, Example) tried 9 ports of ours: 22, 80, 443, …",
              "details": {"src": "203.0.113.5", "hits": 3, "first_seen": "2026-10-18 10:00:00", "…": "…"}}]}
 ```
 
-`more` counts events held back by the hourly limit. With a **secret**, every request carries `X-FlowTrack-Timestamp`
-(unix seconds) and `X-FlowTrack-Signature: sha256=<hex>` = HMAC-SHA256(secret, `<timestamp>.<raw body>`). Check it
+`more` counts events held back by the hourly limit. With a **secret**, every request carries `X-FlowSphera-Timestamp`
+(unix seconds) and `X-FlowSphera-Signature: sha256=<hex>` = HMAC-SHA256(secret, `<timestamp>.<raw body>`). Check it
 over the raw body and refuse old timestamps:
 
 ```python
 import hashlib, hmac, time
 def valid(secret, headers, body):
-    ts = headers['X-FlowTrack-Timestamp']
+    ts = headers['X-FlowSphera-Timestamp']
     want = hmac.new(secret.encode(), ts.encode() + b'.' + body, hashlib.sha256).hexdigest()
-    return abs(time.time() - int(ts)) < 300 and hmac.compare_digest(headers['X-FlowTrack-Signature'], 'sha256=' + want)
+    return abs(time.time() - int(ts)) < 300 and hmac.compare_digest(headers['X-FlowSphera-Signature'], 'sha256=' + want)
 ```
 
 A failed delivery (no answer, not 2xx) is tried again for up to an hour; *Send a test* shows the receiver's answer.
@@ -141,7 +142,7 @@ warn 4, crit 2). Two bodies:
 **CEF** (ArcSight, QRadar, Splunk, Microsoft Sentinel):
 
 ```
-<132>1 2026-10-18T15:43:03.85Z flowtrack-host FlowTrack - port_scan - CEF:0|FlowTrack|FlowTrack|1.11.0|port_scan|Port scan|6|rt=1792338183853 msg=203.0.113.5 (NL, Example) tried 9 ports of ours… src=203.0.113.5 dst=198.51.100.1 dpt=22 proto=TCP dvc=192.0.2.1 cnt=2 cs1Label=country cs1=NL cs2Label=org cs2=Example cn1Label=asn cn1=64500 cs3Label=key cs3=203.0.113.5 start=1792335600000 end=1792336200000
+<132>1 2026-10-18T15:43:03.85Z flowsphera-host FlowSphera - port_scan - CEF:0|FlowSphera|FlowSphera|1.11.0|port_scan|Port scan|6|rt=1792338183853 msg=203.0.113.5 (NL, Example) tried 9 ports of ours… src=203.0.113.5 dst=198.51.100.1 dpt=22 proto=TCP dvc=192.0.2.1 cnt=2 cs1Label=country cs1=NL cs2Label=org cs2=Example cn1Label=asn cn1=64500 cs3Label=key cs3=203.0.113.5 start=1792335600000 end=1792336200000
 ```
 
 **JSON** (Elastic, Graylog, Splunk, Wazuh) — the same header, then one JSON object: `@timestamp`, `source`,

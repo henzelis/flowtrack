@@ -1,0 +1,11 @@
+[Unit]
+Description=FlowSphera backup asked for by the web interface
+
+[Path]
+PathExists=/var/lib/flowsphera/backup.request
+Unit=flowsphera-backup.service
+
+[Install]
+# (2.0) the name before 2.0 answers too (systemctl status flowtrack-backup …) until 3.0
+Alias=flowtrack-backup.path
+WantedBy=paths.target

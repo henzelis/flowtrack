@@ -1009,7 +1009,7 @@ def _topo_build_bg(cfg):
         try:
             _topo_build(cfg)
         except (CHError, OSError) as e:
-            print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
+            print(f'[flowsphera-api] path analysis structure: {e}', flush=True)
         finally:
             _topo_bg.clear()
     threading.Thread(target=run, daemon=True).start()
@@ -1036,7 +1036,7 @@ def topo_refresher(stop):
         try:
             topo_structure(exporters_cfg(), wait=False)
         except (CHError, OSError) as e:
-            print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
+            print(f'[flowsphera-api] path analysis structure: {e}', flush=True)
 
 
 def network_topology(q):
@@ -1332,7 +1332,7 @@ def snmp_error_text(code, e, ip):
         'priv': tr('Wrong privacy (encryption) password or protocol.'),
         'level': tr('The device does not allow this security level for the user.'),
         'host': tr('Unknown host {host}.', host=e.get('host')),
-        'tool': tr('The net-snmp tools are not installed on the server (package snmp): run sudo flowtrack upgrade.'),
+        'tool': tr('The net-snmp tools are not installed on the server (package snmp): run sudo flowsphera upgrade.'),
     }.get(code, tr('The device answered with an error.'))
 
 
@@ -2044,7 +2044,7 @@ def _alerts_now(kinds):
         pct = 100 * lost / max(1, col['packets'] + lost)
         out.append({'sev': 'warn' if pct < 1 else 'crit', 'kind': 'collector_drops', 'title': tr('Collector falling behind'),
                     'text': tr('{lost} packets ({pct}%) dropped in the last hour: socket buffer {sock}, worker queues {queue}. '
-                               'Raise FT_WORKERS in /etc/flowtrack/env (now {workers}) or net.core.rmem_max.', lost=lost, pct=f'{pct:.2f}',
+                               'Raise FT_WORKERS in /etc/flowsphera/env (now {workers}) or net.core.rmem_max.', lost=lost, pct=f'{pct:.2f}',
                                sock=col['socket_drops'], queue=col['queue_drops'], workers=col['workers']), 'when': tr('last hour')})
     ed = edition()
     lic = ed['license'] or {}
@@ -2743,7 +2743,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'u
 
 class H(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
-    server_version, sys_version = 'FlowTrack', ''      # no Python version in the Server header
+    server_version, sys_version = 'FlowSphera', ''      # no Python version in the Server header
     timeout = 60          # idle keep-alive connections do not hold a thread forever
 
     def log_message(self, *a):
@@ -2889,10 +2889,10 @@ class H(BaseHTTPRequestHandler):
             except CHError as e:
                 code, msg = ch_error_answer(e)
                 if code == 502:
-                    print(f'[flowtrack-api] {u.path}: {e}', flush=True)
+                    print(f'[flowsphera-api] {u.path}: {e}', flush=True)
                 return self.send(code, json.dumps({'error': msg}).encode(), 'application/json')
             except OSError as e:
-                print(f'[flowtrack-api] {u.path}: {e}', flush=True)
+                print(f'[flowsphera-api] {u.path}: {e}', flush=True)
                 return self.send(502, json.dumps({'error': 'database error'}).encode(), 'application/json')
         path = 'index.html' if u.path in ('/', '') else u.path.lstrip('/')
         root = WEB_DIR
@@ -3001,7 +3001,7 @@ class H(BaseHTTPRequestHandler):
         except BadRequest as e:
             return self.json(400, {'error': str(e)})
         except OSError as e:
-            print(f'[flowtrack-api] POST {u.path}: {e}', flush=True)
+            print(f'[flowsphera-api] POST {u.path}: {e}', flush=True)
             return self.json(500, {'error': tr('could not save')})
 
 
@@ -3302,7 +3302,7 @@ def post_backups_config(body):
 
 
 def _backup_request(req):
-    """Ask root's flowtrack-backup.service (started by its .path unit when the file appears) to do something."""
+    """Ask root's flowsphera-backup.service (started by its .path unit when the file appears) to do something."""
     import backup
     if os.path.exists(backup.REQUEST):
         raise BadRequest(tr('A backup task is already waiting to start.'))
@@ -3454,23 +3454,23 @@ if __name__ == '__main__':
     AUTH = Auth()
     ctx = tls_context()
     try:
-        LISTENERS = open_listeners(BIND, PORT, socket.SOCK_STREAM, log=lambda m: print(f'[flowtrack-api] {m}', flush=True))
+        LISTENERS = open_listeners(BIND, PORT, socket.SOCK_STREAM, log=lambda m: print(f'[flowsphera-api] {m}', flush=True))
     except (OSError, ValueError) as e:
-        low = ' — a port below 1024 needs CAP_NET_BIND_SERVICE in flowtrack-web.service (sudo flowtrack upgrade puts it there) or a port from 1024' \
+        low = ' — a port below 1024 needs CAP_NET_BIND_SERVICE in flowsphera-web.service (sudo flowsphera upgrade puts it there) or a port from 1024' \
             if getattr(e, 'errno', None) == 13 and int(PORT) < 1024 else ''     # (1.18.0)
-        print(f'[flowtrack-api] cannot listen on FT_WEB_BIND={BIND!r} port {PORT}: {e}{low}', flush=True)
+        print(f'[flowsphera-api] cannot listen on FT_WEB_BIND={BIND!r} port {PORT}: {e}{low}', flush=True)
         sys.exit(1)
     WEB_LISTEN = describe_listeners(LISTENERS)
     servers = [Server(sock, H, ctx) for sock, _ in LISTENERS]
     where = '; '.join(listen_label(x) for x in WEB_LISTEN)
-    print(f'[flowtrack-api] serving {"https" if ctx else "http"} on TCP {PORT}: {where}'
+    print(f'[flowsphera-api] serving {"https" if ctx else "http"} on TCP {PORT}: {where}'
           f'{" (plain HTTP redirects to HTTPS)" if ctx else ""}', flush=True)
     def watch_addresses(start=listen_signature(BIND)):
         while True:                      # an interface got another address (DHCP): exit, systemd restarts us
             time.sleep(30)
             sig = listen_signature(BIND)
             if sig != start:
-                print(f'[flowtrack-api] listening addresses changed ({", ".join(start)} -> {", ".join(sig or ["none"])}); restarting', flush=True)
+                print(f'[flowsphera-api] listening addresses changed ({", ".join(start)} -> {", ".join(sig or ["none"])}); restarting', flush=True)
                 os._exit(3)
     if any(dev for _, dev in LISTENERS):
         threading.Thread(target=watch_addresses, daemon=True).start()
@@ -3480,7 +3480,7 @@ if __name__ == '__main__':
         try:
             topo_structure(exporters_cfg(), wait=False)
         except (CHError, OSError) as e:
-            print(f'[flowtrack-api] path analysis structure: {e}', flush=True)
+            print(f'[flowsphera-api] path analysis structure: {e}', flush=True)
         topo_refresher(threading.Event())
     threading.Thread(target=_topo_warm, daemon=True).start()
     threading.Thread(target=reports.scheduler, args=(report_call, VERSION), daemon=True).start()      # (1.10.0)

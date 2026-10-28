@@ -299,6 +299,26 @@ class RestoreSettings(unittest.TestCase):
             self.assertEqual(have, {f'{cfgd}/exporters.json', f'{cfgd}/tls/cert.pem', f'{state}/users.json', f'{state}/backup.json'}
                              | ({f'{state}/license.key'} if lic else set()))
 
+    def test_backup_from_before_20(self):
+        """(2.0) A backup made by 1.x holds etc/flowtrack and var/lib/flowtrack: restored into today's folders."""
+        cfgd, state = backup.CONFIG_DIR.lstrip('/'), backup.STATE_DIR.lstrip('/')
+        files = {'etc/flowtrack/exporters.json': '{}', 'etc/flowtrack/env': 'FT_CH_PASSWORD=old', 'var/lib/flowtrack/users.json': 'U',
+                 'var/lib/flowtrack/license.key': 'L', 'var/lib/flowtrack/hw.board': 'H', 'var/lib/flowtrackX/users.json': 'no'}
+        tp = os.path.join(tempfile.mkdtemp(), 's.tar.gz')
+        with tarfile.open(tp, 'w:gz') as t:
+            for n, v in files.items():
+                ti = tarfile.TarInfo(n)
+                ti.size = len(v)
+                t.addfile(ti, io.BytesIO(v.encode()))
+        root = tempfile.mkdtemp()
+        backup._restore_settings(tp, True, root=root)
+        have = {os.path.relpath(os.path.join(r, n), root) for r, _, fs in os.walk(root) for n in fs}
+        self.assertEqual(have, {f'{cfgd}/exporters.json', f'{state}/users.json', f'{state}/license.key'})
+
+    def test_database_of_a_backup(self):
+        self.assertEqual(backup.backup_db({'version': '1.18.0'}), 'flowtrack')       # 1.x named no database: it was flowtrack
+        self.assertEqual(backup.backup_db({'version': '2.0.0', 'db': 'flowsphera'}), 'flowsphera')
+
 
 if __name__ == '__main__':
     unittest.main()

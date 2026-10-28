@@ -1,5 +1,5 @@
 """Detections (1.6): settings checks, the ignore list, event merging and texts — no database needed (the rules
-themselves run against ClickHouse: flowtrack-verify detect_check.py). Run: python -m unittest discover -s tests"""
+themselves run against ClickHouse: flowsphera-verify detect_check.py). Run: python -m unittest discover -s tests"""
 import os
 import sys
 import tempfile

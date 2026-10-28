@@ -159,7 +159,7 @@ def save_keys(changes):
 
 
 def _get(url, key=None, body=None):
-    headers = {'User-Agent': f'FlowTrack/{VERSION} (+https://github.com/telesphera/flowsphera)'}
+    headers = {'User-Agent': f'FlowSphera/{VERSION} (+https://github.com/telesphera/flowsphera)'}
     if key:
         headers['Auth-Key'] = key
     data = None

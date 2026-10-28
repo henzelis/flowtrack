@@ -58,12 +58,12 @@ flow record FT-REC
  collect counter packets long
  collect timestamp sys-uptime first
  collect timestamp sys-uptime last
-flow exporter FLOWTRACK
+flow exporter FLOWSPHERA
  destination <COLLECTOR_IP>
  transport udp 2055
  template data timeout 60
 flow monitor FT-MON
- exporter FLOWTRACK
+ exporter FLOWSPHERA
  record FT-REC
  cache timeout active 60
 interface GigabitEthernet0/0/0
@@ -89,5 +89,5 @@ snippets.
 the matching SNMP configuration to the device snippet, and *Test SNMP* checks it before saving. The device must let
 the FlowSphera server poll it (UDP 161; FortiGate: `allowaccess snmp` on the interface, the community's host list).
 FlowSphera polls read-only with the net-snmp tools (package `snmp`, installed by the installer); the community and
-v3 passwords are kept in `/var/lib/flowtrack/snmp.json` (readable by the service only) and are never sent back to
+v3 passwords are kept in `/var/lib/flowsphera/snmp.json` (readable by the service only) and are never sent back to
 the browser. Use the same `ifIndex` for SNMP and NetFlow — on Cisco IOS keep `snmp-server ifindex persist`.

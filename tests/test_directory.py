@@ -1,6 +1,6 @@
 """1.12.0: sign-in through Active Directory / LDAP — the settings checks, group matching and roles, and the sign-in flow
 of auth.py with the directory answered by a stand-in (the real servers — Samba AD with nested groups, OpenLDAP with
-LDAPS / STARTTLS and its own CA — are checked on stage, see flowtrack-verify). Run: python -m unittest discover -s tests"""
+LDAPS / STARTTLS and its own CA — are checked on stage, see flowsphera-verify). Run: python -m unittest discover -s tests"""
 import os
 import sys
 import tempfile
@@ -63,7 +63,7 @@ class SignIn(unittest.TestCase):
                   mock.patch.object(directory, 'load', lambda: directory.validate(dict(ON, label='CORP'), directory.defaults()))]
         for p in self.p:
             p.start()
-        self.a = Auth()                                 # admin / flowtrack, local
+        self.a = Auth()                                 # admin / flowsphera, local
         self.answers = {('anna', 'pw'): {'name': 'anna', 'role': 'admin', 'dn': 'CN=anna,DC=x', 'groups': []},
                         ('admin', 'pw'): {'name': 'admin', 'role': 'viewer', 'dn': 'CN=admin,DC=x', 'groups': []},
                         ('carl', 'pw'): {'name': 'carl', 'role': None, 'dn': 'CN=carl,DC=x', 'groups': []}}
@@ -89,7 +89,7 @@ class SignIn(unittest.TestCase):
 
     def test_same_name_two_accounts(self):
         self.assertEqual(self.a.session_user(self.a.login('admin', 'pw', '10.0.0.2', 'ldap')), 'ldap:admin')
-        self.assertEqual(self.a.session_user(self.a.login('admin', 'flowtrack', '10.0.0.2', 'local')), 'admin')
+        self.assertEqual(self.a.session_user(self.a.login('admin', 'flowsphera', '10.0.0.2', 'local')), 'admin')
         self.assertEqual((self.a.users['admin']['role'], self.a.users['ldap:admin']['role']), ('admin', 'viewer'))
         with self.assertRaises(AuthError):              # the directory password does not open the local account
             self.a.login('admin', 'pw', '10.0.0.2', 'local')
@@ -135,7 +135,7 @@ class SignIn(unittest.TestCase):
             self.a.delete_user('second', 'admin')
 
     def test_local_sign_in_unchanged(self):
-        self.assertEqual(self.a.session_user(self.a.login('admin', 'flowtrack', '10.0.0.9')), 'admin')     # no method = local
+        self.assertEqual(self.a.session_user(self.a.login('admin', 'flowsphera', '10.0.0.9')), 'admin')     # no method = local
         with self.assertRaises(AuthError):
             self.a.login('anna', 'pw', '10.0.0.9')                             # a directory user does not sign in locally
 

@@ -89,7 +89,7 @@ def workers_setting(v=None):
 
 
 def log(msg):
-    print(f'[flowtrack] {msg}', flush=True)
+    print(f'[flowsphera] {msg}', flush=True)
 
 
 def norm_addr(ip):
@@ -625,7 +625,7 @@ class Receiver:
         return {'packets': 0, 'socket_drops': 0, 'queue_drops': 0, 'dropped_rows': 0, 'license_drops': 0, 'rx_queue_peak': 0}
 
     def start_worker(self, i):
-        p = self.ctx.Process(target=worker_main, args=(i, self.queues[i], self.results, os.getpid(), self.n), name=f'flowtrack-worker-{i}', daemon=True)
+        p = self.ctx.Process(target=worker_main, args=(i, self.queues[i], self.results, os.getpid(), self.n), name=f'flowsphera-worker-{i}', daemon=True)
         p.start()
         self.procs[i] = p
 
@@ -863,7 +863,7 @@ class Receiver:
         try:
             self.listeners = open_listeners(BIND, PORT, socket.SOCK_DGRAM, set_rcvbuf, log)
         except (OSError, ValueError) as ex:
-            low = ' — a port below 1024 needs CAP_NET_BIND_SERVICE in flowtrack-collector.service (sudo flowtrack upgrade puts it there) or a port from 1024' \
+            low = ' — a port below 1024 needs CAP_NET_BIND_SERVICE in flowsphera-collector.service (sudo flowsphera upgrade puts it there) or a port from 1024' \
                 if getattr(ex, 'errno', None) == 13 and int(PORT) < 1024 else ''     # (1.18.0)
             log(f'cannot listen on FT_BIND={BIND!r} port {PORT}: {ex}{low}')
             sys.exit(1)

@@ -169,7 +169,7 @@ def _validate_email(src, old):
     m['password'] = (pw or old['password']) if user else ''      # an empty field keeps the saved password
     sender = str(src.get('sender') or '').strip()
     if sender and not MAIL_RE.match(sender):
-        raise ValueError(tr('The sender is one e-mail address, e.g. flowtrack@example.com.'))
+        raise ValueError(tr('The sender is one e-mail address, e.g. flowsphera@example.com.'))
     m['sender'] = sender
     to = src.get('to') or []
     to = [str(x).strip() for x in (to if isinstance(to, list) else re.split(r'[\s,;]+', str(to))) if str(x).strip()]
@@ -353,7 +353,7 @@ def siem_lines(m, events, now=None):
         sys_sev, cef_sev = SIEM_SEV.get(rec['severity'], (6, 3))
         msgid = re.sub(r'[^!-~]', '', rec['kind'])[:32] or '-'
         if m['format'] == 'json':
-            body = json.dumps(dict({'@timestamp': ts, 'source': 'FlowTrack', 'version': VERSION, 'host': host}, **rec), ensure_ascii=False)
+            body = json.dumps(dict({'@timestamp': ts, 'source': 'FlowSphera', 'version': VERSION, 'host': host}, **rec), ensure_ascii=False)
         else:
             ext = {'rt': int(now * 1000), 'msg': rec['text'], 'src': rec['src'], 'dst': rec['dst'], 'dpt': rec['port'] or '', 'proto': rec['proto'],
                    'dvc': rec['device'], 'cnt': rec['hits'] or '', 'cs1Label': 'country', 'cs1': rec['country'], 'cs2Label': 'org', 'cs2': rec['org'],
@@ -365,9 +365,9 @@ def siem_lines(m, events, now=None):
                 if ext.get(lab) in ('', None, 0):
                     ext.pop(lab, None)
                     ext.pop(lab + 'Label', None)
-            body = (f"CEF:0|FlowTrack|FlowTrack|{_cef_h(VERSION)}|{_cef_h(rec['kind'])}|{_cef_h(rec['title'])}|{cef_sev}|"
+            body = (f"CEF:0|FlowSphera|FlowSphera|{_cef_h(VERSION)}|{_cef_h(rec['kind'])}|{_cef_h(rec['title'])}|{cef_sev}|"
                     + ' '.join(f'{k}={_cef_v(v)}' for k, v in ext.items() if v not in ('', None)))
-        line = f"<{m['facility'] * 8 + sys_sev}>1 {ts} {host} FlowTrack - {msgid} - ".encode() + body.encode()
+        line = f"<{m['facility'] * 8 + sys_sev}>1 {ts} {host} FlowSphera - {msgid} - ".encode() + body.encode()
         out.append(line[:8000] if m['transport'] == 'udp' else line)      # a UDP datagram stays within what receivers take
     return out
 
@@ -424,7 +424,7 @@ def webhook_body(w, events, more, link):
     """The JSON a webhook gets: FlowSphera's own (`json`) or a message for Slack / Mattermost / Rocket.Chat or Discord."""
     if w['format'] == 'json':
         keep = lambda r: {k: v for k, v in (r or {}).items() if isinstance(v, (str, int, float, bool)) and k not in ('addrs', 'ports')}   # noqa: E731
-        return {'source': 'FlowTrack', 'version': VERSION, 'link': link or '', 'more': more,
+        return {'source': 'FlowSphera', 'version': VERSION, 'link': link or '', 'more': more,
                 'events': [{'kind': e.get('kind', ''), 'severity': e.get('sev', 'info'), 'title': e.get('title', ''), 'text': e.get('text', ''),
                             'details': dict(keep(e.get('row')) or keep({k: e[k] for k in ('src', 'dst', 'port', 'ip', 'device', 'when') if k in e}),
                                             **{k: v for k, v in siem_record(e).items() if k in ('country', 'org', 'asn', 'details') and v})}
@@ -440,15 +440,15 @@ def webhook_body(w, events, more, link):
 
 
 def webhook_send(w, body, timeout=15):
-    """POSTs the JSON; with a secret the request carries X-FlowTrack-Timestamp and X-FlowTrack-Signature =
+    """POSTs the JSON; with a secret the request carries X-FlowSphera-Timestamp and X-FlowSphera-Signature =
     sha256=HMAC-SHA256(secret, "<timestamp>.<body>"). WebhookError for people (never with the secret)."""
     data = json.dumps(body, ensure_ascii=False).encode()
     req = urllib.request.Request(w['url'], data=data, method='POST', headers={'Content-Type': 'application/json; charset=utf-8',
-                                                                              'User-Agent': f'FlowTrack/{VERSION}'})
+                                                                              'User-Agent': f'FlowSphera/{VERSION}'})
     if w['secret']:
         ts = str(int(time.time()))
-        req.add_header('X-FlowTrack-Timestamp', ts)
-        req.add_header('X-FlowTrack-Signature', 'sha256=' + hmac.new(w['secret'].encode(), ts.encode() + b'.' + data, hashlib.sha256).hexdigest())
+        req.add_header('X-FlowSphera-Timestamp', ts)
+        req.add_header('X-FlowSphera-Signature', 'sha256=' + hmac.new(w['secret'].encode(), ts.encode() + b'.' + data, hashlib.sha256).hexdigest())
     if w['header']:
         k, v = HEADER_RE.match(w['header']).groups()
         req.add_header(k, v)

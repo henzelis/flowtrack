@@ -1034,19 +1034,19 @@ def tick(call, version='', now=None, log=lambda m: print(m, flush=True)):
                     st = load_state()
                     st[r['id']] = dict(st.get(r['id'], {}), blocked=why)
                     _write(STATE, st)
-                log(f"[flowtrack-api] report {r['name']!r} not sent: {why}")
+                log(f"[flowsphera-api] report {r['name']!r} not sent: {why}")
             continue
         try:
             n, label = send(r, t0, t1, call, version)
             s = {'done': t1, 'sent': int(now), 'sent_period': label, 'to': n}      # (blocked and errors cleared)
             sent.append(r['id'])
-            log(f"[flowtrack-api] report {r['name']!r} ({label}) sent to {n} recipient(s)")
+            log(f"[flowsphera-api] report {r['name']!r} ({label}) sent to {n} recipient(s)")
         except Exception as e:          # noqa: BLE001 — a report must never stop the schedule of the others
             tries = s.get('tries', 0) + 1 if s.get('try_period') == t1 else 1
             s = dict(s, error=str(e)[:300], error_at=int(now), tries=tries, try_period=t1)
             if tries >= TRIES:
                 s['done'] = t1          # given up for this period; the error stays shown
-            log(f"[flowtrack-api] report {r['name']!r}: {e}")
+            log(f"[flowsphera-api] report {r['name']!r}: {e}")
         with _lock:
             st = load_state()
             if any(x['id'] == r['id'] for x in load()):
@@ -1062,4 +1062,4 @@ def scheduler(call, version='', stop=None):
         try:
             tick(call, version)
         except Exception as e:          # noqa: BLE001
-            print(f'[flowtrack-api] reports: {e}', flush=True)
+            print(f'[flowsphera-api] reports: {e}', flush=True)

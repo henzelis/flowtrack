@@ -51,7 +51,7 @@ class Parse(unittest.TestCase):
 
 
 class Settings(unittest.TestCase):
-    V3 = {'enabled': True, 'version': '3', 'user': 'flowtrack', 'level': 'authPriv', 'auth_proto': 'SHA-256', 'auth_pass': 'pa ss#w"rd1',
+    V3 = {'enabled': True, 'version': '3', 'user': 'flowsphera', 'level': 'authPriv', 'auth_proto': 'SHA-256', 'auth_pass': 'pa ss#w"rd1',
           'priv_proto': 'AES', 'priv_pass': 'privpass123'}
 
     def test_v3_and_conf(self):

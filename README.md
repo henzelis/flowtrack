@@ -24,8 +24,9 @@
 picture of your network: who talks to whom, how much, over which service, from where and along which path. It runs on
 your own server, installs with one command and is ready in minutes.
 
-> FlowSphera was called **FlowTrack** until version 1.17. Same product, same repository, same `flowtrack` command:
-> an existing installation upgrades as before with `sudo flowtrack upgrade`.
+> FlowSphera was called **FlowTrack** until version 1.17. Since 2.0 every name on the server is FlowSphera too: the
+> `flowsphera` command, the services, the folders. An existing installation upgrades as before — `sudo flowtrack
+> upgrade` moves it to the new names by itself and keeps the old command as a synonym until 3.0.
 
 <p align="center">
   <img src="docs/media/en/live-map.webp" alt="Live connection map: new connections arrive as arcs" width="100%">
@@ -262,7 +263,7 @@ curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.
 ```
 
 The installer (English or Ukrainian) sets up everything, asks a few questions with sensible defaults and finishes with
-the address of your FlowSphera and the configuration for your exporter. Later: `sudo flowtrack upgrade` — settings,
+the address of your FlowSphera and the configuration for your exporter. Later: `sudo flowsphera upgrade` — settings,
 users and data stay.
 
 - **Runs on** Debian / Ubuntu and Fedora / RHEL / Rocky / Alma, x86_64 or arm64.
@@ -293,7 +294,7 @@ Details: [docs/editions.md](docs/editions.md).
 | [Exporter configuration](docs/exporters.md) | FortiGate, Cisco, MikroTik, Juniper, Linux and more |
 | [Features in detail](docs/features.md) | everything FlowSphera collects, computes and shows |
 | [Backups and restore](docs/backups.md) | schedule, S3 / SFTP / FTP copies, encryption, restore on a new server |
-| [Configuration](docs/configuration.md) | `/etc/flowtrack/env` |
+| [Configuration](docs/configuration.md) | `/etc/flowsphera/env` |
 | [Security](docs/security.md) | passwords, sessions, HTTPS, what runs where |
 | [API](docs/api.md) | JSON endpoints, filters, API tokens, webhooks, SIEM / syslog |
 | [Performance](docs/performance.md) | measured receiving and page speeds |

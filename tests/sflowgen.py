@@ -1,5 +1,5 @@
 """sFlow v5 datagrams for tests (sflow.org/sflow_version_5.txt): flow samples with a raw Ethernet / IPv4 / IPv6 header,
-and generic interface counters. Also used by flowtrack-verify to send sFlow to a collector."""
+and generic interface counters. Also used by flowsphera-verify to send sFlow to a collector."""
 import socket
 import struct
 

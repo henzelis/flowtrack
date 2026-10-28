@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | sudo bash
 #
 # Installs FlowSphera (collector + ClickHouse + web UI) with its dependencies, asking a few
-# questions on the way. Afterwards: sudo flowtrack upgrade | reconfigure | uninstall (or re-run this command).
+# questions on the way. Afterwards: sudo flowsphera upgrade | reconfigure | uninstall (or re-run this command).
 #
 # Options:  --yes          no questions: defaults, or values from FT_* variables below
 #           --upgrade      update code of an existing install, keep settings
@@ -12,17 +12,17 @@
 #           --lang en|uk   installer language
 #           --core FILE          the compiled FlowSphera core (ftcore-<version>-linux-<arch>.so from the GitHub release)
 #                                for servers without access to github.com; it must match ftcore.lock
-#           --backup-dir DIR     where backups are kept on this server (default /var/backups/flowtrack); a disk
+#           --backup-dir DIR     where backups are kept on this server (default /var/backups/flowsphera); a disk
 #                                mounted from a NAS works too. Copies to S3 / SFTP / FTP: Settings → Backups
 #           --license KEY|CODE|FILE  activate a license key (FTK-…, online) or a license (FTL-…) issued for this
-#                                server's activation request: sudo flowtrack-license request (also in Settings → License)
-#                          e.g. … | sudo bash -s -- --upgrade --license ./flowtrack.lic
+#                                server's activation request: sudo flowsphera-license request (also in Settings → License)
+#                          e.g. … | sudo bash -s -- --upgrade --license ./flowsphera.lic
 # Variables for --yes:  FT_NETFLOW_PORT FT_WEB_PORT FT_NETFLOW_IFACE FT_WEB_IFACE (interface name, IP or
 #                       'all'; default: the interface of the default route) FT_EXPORTER_IP FT_VENDOR FT_DEVICE_NAME
 #                       FT_WAN_IFS FT_CITY FT_COUNTRY FT_ADMIN_PASSWORD FT_OPEN_FIREWALL=yes|no
 #                       FT_INSTALL_DOCKER=yes|no
 # HTTPS is on by default with a self-signed certificate; FT_TLS=no keeps plain HTTP.
-# Own certificate: put it in /etc/flowtrack/tls/{cert,key}.pem — the installer keeps it.
+# Own certificate: put it in /etc/flowsphera/tls/{cert,key}.pem — the installer keeps it.
 # Source override (testing): FT_SOURCE=<tar.gz URL>  FT_REF=<branch or tag>  FT_CORE_URL=<dir with ftcore-*.so>
 #
 # Everything is wrapped in main() so a partially downloaded script never runs.
@@ -34,14 +34,14 @@ FT_REPO=${FT_REPO:-telesphera/flowsphera}
 FT_REF=${FT_REF:-main}
 FT_SOURCE=${FT_SOURCE:-https://codeload.github.com/$FT_REPO/tar.gz/refs/heads/$FT_REF}
 FT_CORE_URL=${FT_CORE_URL:-}        # default: the GitHub release named in ftcore.lock
-PREFIX=/opt/flowtrack
-ETC=/etc/flowtrack
-STATE=/var/lib/flowtrack
+PREFIX=/opt/flowsphera
+ETC=/etc/flowsphera
+STATE=/var/lib/flowsphera
 BACKUP_DIR_OPT=""
-LOG=/var/log/flowtrack-install.log
+LOG=/var/log/flowsphera-install.log
 CH_IMAGE=clickhouse/clickhouse-server:24.8
-CH_NAME=flowtrack-ch
-UNITS="flowtrack-collector flowtrack-web"
+CH_NAME=flowsphera-ch
+UNITS="flowsphera-collector flowsphera-web"
 TLS_DIR=$ETC/tls
 USE_TLS=yes; case "${FT_TLS:-yes}" in no|NO|0|false|off) USE_TLS=no ;; esac
 PROTO=https; [ "$USE_TLS" = yes ] || PROTO=http
@@ -142,7 +142,7 @@ ask_secret() {   # ask_secret VAR "question" [env var]  — empty answer keeps t
   local __var=$1 q=$2 envv=${3:-} a b
   if [ "$YES" = 1 ]; then a=${!envv:-}; [ -z "$a" ] || [ ${#a} -ge 8 ] || die "FT_ADMIN_PASSWORD: $(t 'at least 8 characters' 'щонайменше 8 символів')"; printf -v "$__var" '%s' "$a"; return; fi
   while :; do
-    printf '%s' "  ${B}$q${N} ${D}[$(t 'Enter = keep "flowtrack"' 'Enter — залишити «flowtrack»')]${N}: "
+    printf '%s' "  ${B}$q${N} ${D}[$(t 'Enter = keep "flowsphera"' 'Enter — залишити «flowsphera»')]${N}: "
     IFS= read -rs a < "$TTY" || a=""; printf '\n'
     [ -z "$a" ] && { printf -v "$__var" ''; return; }
     if [ ${#a} -lt 8 ]; then printf '%s\n' "    ${Y}$(t 'At least 8 characters, please.' 'Щонайменше 8 символів.')${N}"; continue; fi
@@ -173,7 +173,7 @@ ok_tcp() { is_port "$1" && { [ "$1" = "$WEB_OWN" ] || ! tcp_busy "$1"; }; }
 
 # ------------------------------------------------------------------ preflight
 [ "$(id -u)" = 0 ] || die "$(t 'Run as root:' 'Запустіть від root:') curl -fsSL https://raw.githubusercontent.com/$FT_REPO/main/install.sh | sudo bash"
-: > "$LOG" 2>/dev/null || LOG=/tmp/flowtrack-install.log
+: > "$LOG" 2>/dev/null || LOG=/tmp/flowsphera-install.log
 echo "=== FlowSphera installer $(date -Is) mode=${MODE:-auto} ===" >> "$LOG"
 
 if [ "$YES" = 0 ] && [ -z "$LANG_SEL" ]; then
@@ -220,7 +220,8 @@ if [ "$MODE" != uninstall ] && { [ -f /etc/flowtrack.env ] || { [ -f /opt/flowtr
   step "$(t 'Moving the older version aside' 'Перенесення старої версії')" retire_legacy
 fi
 OLD_PREFIX=/opt/flowtrack-v2; OLD_ETC=/etc/flowtrack-v2; OLD_STATE=/var/lib/flowtrack-v2
-if [ -f "$OLD_ETC/env" ] && [ ! -f "$ETC/env" ]; then
+V1_PREFIX=/opt/flowtrack; V1_ETC=/etc/flowtrack; V1_STATE=/var/lib/flowtrack; V1_CH=flowtrack-ch
+if [ -f "$OLD_ETC/env" ] && [ ! -f "$V1_ETC/env" ] && [ ! -f "$ETC/env" ]; then
   info "$(t 'Moving the existing installation to the current paths (data and settings are kept)' 'Перенесення наявного встановлення на нові шляхи (дані й налаштування зберігаються)')"
   command -v docker >/dev/null 2>&1 || die "$(t 'Docker is missing, but the existing installation needs it.' 'Docker відсутній, а наявне встановлення його потребує.')"
   migrate_layout() {
@@ -229,22 +230,81 @@ if [ -f "$OLD_ETC/env" ] && [ ! -f "$ETC/env" ]; then
           /etc/systemd/system/flowtrack2-geoip.service /etc/systemd/system/flowtrack2-geoip.timer
     systemctl daemon-reload
     # keep the ClickHouse version that created the data; recreate the container with the new data path
-    if docker inspect "$CH_NAME" >/dev/null 2>&1; then
-      CH_PREV=$(docker inspect -f '{{.Config.Image}}' "$CH_NAME")
-      docker stop "$CH_NAME" && docker rm "$CH_NAME"
+    if docker inspect "$V1_CH" >/dev/null 2>&1; then
+      CH_PREV=$(docker inspect -f '{{.Config.Image}}' "$V1_CH")
+      docker stop "$V1_CH" && docker rm "$V1_CH"
     fi
-    [ -e "$PREFIX" ] && { echo "$PREFIX already exists"; return 1; }
-    mv "$OLD_PREFIX" "$PREFIX"
-    rm -rf "$PREFIX/venv"          # a venv hard-codes its own path; make_venv rebuilds it
-    [ -e "$ETC" ] && { echo "$ETC already exists"; return 1; }
-    mv "$OLD_ETC" "$ETC"
-    sed -i -e "s|$OLD_ETC|$ETC|g" -e "s|$OLD_PREFIX|$PREFIX|g" "$ETC/env"
-    if [ -n "${CH_PREV:-}" ] && ! grep -q '^FT_CH_IMAGE=' "$ETC/env"; then echo "FT_CH_IMAGE=$CH_PREV" >> "$ETC/env"; fi
-    if [ -d "$OLD_STATE" ]; then [ -e "$STATE" ] && rm -rf "$STATE.empty" && mv "$STATE" "$STATE.empty"; mv "$OLD_STATE" "$STATE"; fi
-    rm -rf "$STATE.empty"
+    [ -e "$V1_PREFIX" ] && { echo "$V1_PREFIX already exists"; return 1; }
+    mv "$OLD_PREFIX" "$V1_PREFIX"
+    rm -rf "$V1_PREFIX/venv"          # a venv hard-codes its own path; make_venv rebuilds it
+    [ -e "$V1_ETC" ] && { echo "$V1_ETC already exists"; return 1; }
+    mv "$OLD_ETC" "$V1_ETC"
+    sed -i -e "s|$OLD_ETC|$V1_ETC|g" -e "s|$OLD_PREFIX|$V1_PREFIX|g" "$V1_ETC/env"
+    if [ -n "${CH_PREV:-}" ] && ! grep -q '^FT_CH_IMAGE=' "$V1_ETC/env"; then echo "FT_CH_IMAGE=$CH_PREV" >> "$V1_ETC/env"; fi
+    if [ -d "$OLD_STATE" ]; then [ -e "$V1_STATE" ] && rm -rf "$V1_STATE.empty" && mv "$V1_STATE" "$V1_STATE.empty"; mv "$OLD_STATE" "$V1_STATE"; fi
+    rm -rf "$V1_STATE.empty"
     return 0
   }
   step "$(t 'Migrating to the current paths' 'Міграція на нові шляхи')" migrate_layout
+  [ -z "$MODE" ] && MODE=upgrade
+fi
+# (c) (2.0) FlowSphera 1.x (and FlowTrack before it) used the names flowtrack: /opt/flowtrack, /etc/flowtrack,
+#     /var/lib/flowtrack, the user, units flowtrack-*, the container flowtrack-ch and the database flowtrack. They
+#     move to flowsphera here (same disk: renames, no copies); the database is renamed once ClickHouse runs again
+#     (clickhouse_up). The old names stay as synonyms until 3.0: links to the folders, the flowtrack command,
+#     systemd aliases. The Instance ID comes from /etc/machine-id, so the license stays valid — checked after start.
+MIGRATED_V1=0; ID_BEFORE=""
+if [ -f "$V1_ETC/env" ] && [ ! -L "$V1_ETC" ] && [ ! -f "$ETC/env" ]; then
+  info "$(t 'FlowSphera 2.0 renames the installation from flowtrack to flowsphera (data, settings and the license are kept)' 'FlowSphera 2.0 перейменовує встановлення з flowtrack на flowsphera (дані, налаштування й ліцензія зберігаються)')"
+  command -v docker >/dev/null 2>&1 || die "$(t 'Docker is missing, but the existing installation needs it.' 'Docker відсутній, а наявне встановлення його потребує.')"
+  if systemctl is-active -q flowtrack-backup.service 2>/dev/null; then
+    die "$(t 'A backup is running right now; run the upgrade again when it has finished.' 'Саме зараз іде бекап; запустіть оновлення ще раз, коли він закінчиться.')"
+  fi
+  ID_BEFORE=$(runuser -u flowtrack -- env FT_STATE_DIR="$V1_STATE" "$V1_PREFIX/venv/bin/python" -c "import sys; sys.path.insert(0, '$V1_PREFIX/app'); import licensing; print(licensing.instance_id())" 2>/dev/null || true)
+  migrate_v1() {
+    local u bdir
+    systemctl disable --now flowtrack-collector flowtrack-web flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path 2>/dev/null || true
+    systemctl stop flowtrack-backup.service flowtrack-geoip.service 2>/dev/null || true
+    for u in flowtrack-collector.service flowtrack-web.service flowtrack-geoip.service flowtrack-geoip.timer \
+             flowtrack-backup.service flowtrack-backup.timer flowtrack-backup.path; do rm -f "/etc/systemd/system/$u"; done
+    for u in collector web; do
+      # drop-ins (test switches, own limits) follow their unit
+      [ -d "/etc/systemd/system/flowtrack-$u.service.d" ] && [ ! -e "/etc/systemd/system/flowsphera-$u.service.d" ] && mv "/etc/systemd/system/flowtrack-$u.service.d" "/etc/systemd/system/flowsphera-$u.service.d"
+    done
+    systemctl daemon-reload
+    # the ClickHouse version that created the data stays; the container is made again as $CH_NAME
+    if docker inspect "$V1_CH" >/dev/null 2>&1; then
+      CH_PREV=$(docker inspect -f '{{.Config.Image}}' "$V1_CH")
+      docker stop -t 30 "$V1_CH" >/dev/null && docker rm "$V1_CH" >/dev/null
+    fi
+    for u in "$PREFIX" "$ETC" "$STATE"; do [ -e "$u" ] && { echo "$u already exists"; return 1; }; done
+    mv "$V1_PREFIX" "$PREFIX"; rm -rf "$PREFIX/venv"          # a venv hard-codes its own path; make_venv rebuilds it
+    mv "$V1_ETC" "$ETC"; [ -d "$V1_STATE" ] && mv "$V1_STATE" "$STATE"
+    rm -f "$ETC/clickhouse/flowtrack.xml"                     # clickhouse_up puts flowsphera.xml there
+    sed -i -e "s|$V1_ETC|$ETC|g" -e "s|$V1_PREFIX|$PREFIX|g" -e "s|$V1_STATE|$STATE|g" \
+           -e 's|^FT_CH_USER=flowtrack$|FT_CH_USER=flowsphera|' -e 's|^FT_CH_DB=flowtrack$|FT_CH_DB=flowsphera|' "$ETC/env"
+    if [ -n "${CH_PREV:-}" ] && ! grep -q '^FT_CH_IMAGE=' "$ETC/env"; then echo "FT_CH_IMAGE=$CH_PREV" >> "$ETC/env"; fi
+    # backups: the default folder moves with the rest; a folder chosen by hand (a NAS) stays where it is
+    bdir=$(sed -n 's/^FT_BACKUP_DIR=//p' "$ETC/env" | tail -1)
+    if [ -z "$bdir" ] || [ "$bdir" = /var/backups/flowtrack ]; then
+      if [ -d /var/backups/flowtrack ] && [ ! -L /var/backups/flowtrack ] && [ ! -e /var/backups/flowsphera ]; then
+        mv /var/backups/flowtrack /var/backups/flowsphera; ln -s /var/backups/flowsphera /var/backups/flowtrack
+      fi
+      sed -i '/^FT_BACKUP_DIR=/d' "$ETC/env"; echo "FT_BACKUP_DIR=/var/backups/flowsphera" >> "$ETC/env"
+    fi
+    [ -f /etc/sysctl.d/60-flowtrack.conf ] && mv /etc/sysctl.d/60-flowtrack.conf /etc/sysctl.d/60-flowsphera.conf
+    # the service user: same UID and GID, so every file keeps its owner
+    if id flowtrack >/dev/null 2>&1 && ! id flowsphera >/dev/null 2>&1; then
+      usermod -l flowsphera flowtrack
+      getent group flowtrack >/dev/null && groupmod -n flowsphera flowtrack
+    fi
+    # the old names as links until 3.0 (scripts, habits, notes that say /etc/flowtrack)
+    ln -sfn "$PREFIX" "$V1_PREFIX"; ln -sfn "$ETC" "$V1_ETC"; ln -sfn "$STATE" "$V1_STATE"
+    echo 2.0 > "$ETC/migrated-from-flowtrack"
+    return 0
+  }
+  step "$(t 'Renaming flowtrack to flowsphera' 'Перейменування flowtrack на flowsphera')" migrate_v1
+  MIGRATED_V1=1
   [ -z "$MODE" ] && MODE=upgrade
 fi
 
@@ -455,7 +515,7 @@ else
   [ "$SF_PORT" != 0 ] && say "  sFlow           UDP ${B}$SF_PORT${N} $(t 'on' 'на') $(bind_label "$NF_BIND")"
   say "  $(t 'Web interface' 'Вебінтерфейс')    $PROTO://${WEB_IP:-${LAN_IP:-<server>}}:${B}$WEB_PORT${N} ($(bind_label "$WEB_BIND"))$([ "$USE_TLS" = yes ] && t ' (self-signed certificate)' ' (самопідписаний сертифікат)')"
   [ "$WRITE_DEVICE" = y ] && say "  $(t 'Device' 'Пристрій')         $DEV_NAME ($VENDOR, $EXP_IP${WAN_IFS:+, WAN $WAN_IFS}${CITY:+, $CITY}${COUNTRY:+ $COUNTRY})"
-  say "  $(t 'Admin password' 'Пароль admin')    $([ -n "$ADMIN_PW" ] && t 'set now' 'задано зараз' || t 'flowtrack (change it after login)' 'flowtrack (змініть після входу)')"
+  say "  $(t 'Admin password' 'Пароль admin')    $([ -n "$ADMIN_PW" ] && t 'set now' 'задано зараз' || t 'flowsphera (change it after login)' 'flowsphera (змініть після входу)')"
   say "  $(t 'Data' 'Дані')             $PREFIX, ClickHouse 127.0.0.1:$CH_PORT"
   if [ "$YES" = 0 ]; then ask_yn go "$(t 'Install now?' 'Встановлювати?')" y; [ "$go" = y ] || { say "$(t 'Cancelled.' 'Скасовано.')"; exit 0; }; fi
 fi
@@ -463,9 +523,9 @@ say ""
 
 # ------------------------------------------------------------------ install
 step "$(t 'Creating service user and directories' 'Створення користувача й тек')" bash -c "
-  id flowtrack >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin flowtrack
+  id flowsphera >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin flowsphera
   mkdir -p '$PREFIX/clickhouse' '$PREFIX/geoip' '$ETC' '$STATE'
-  chown flowtrack:flowtrack '$STATE'; chmod 750 '$STATE'"
+  chown flowsphera:flowsphera '$STATE'; chmod 750 '$STATE'"
 
 # The compiled core (license checks, limits, NetFlow/IPFIX decoding) is not in the source tree: ftcore.lock names
 # its version and the SHA-256 of each build; the file comes from --core, from the installed app when it is the same
@@ -543,9 +603,9 @@ if [ "$MODE" != upgrade ]; then
     local keep; keep=$(grep -E '^FT_LICENSE_SERVER' "$ETC/env" 2>/dev/null || true)   # a license server set by hand stays
     cat > "$ETC/env" <<ENV
 FT_CH_URL=http://127.0.0.1:$CH_PORT
-FT_CH_USER=flowtrack
+FT_CH_USER=flowsphera
 FT_CH_PASSWORD=$CH_PASSWORD
-FT_CH_DB=flowtrack
+FT_CH_DB=flowsphera
 FT_BIND=$NF_BIND
 FT_PORT=$NF_PORT
 FT_SFLOW_PORT=$SF_PORT
@@ -556,7 +616,7 @@ FT_WEB_BIND=$WEB_BIND
 FT_WEB_PORT=$WEB_PORT
 ENV
     [ -z "$keep" ] || printf '%s\n' "$keep" >> "$ETC/env"
-    chown root:flowtrack "$ETC/env"; chmod 640 "$ETC/env"
+    chown root:flowsphera "$ETC/env"; chmod 640 "$ETC/env"
     [ -f "$ETC/hosts.json" ] || echo '{}' > "$ETC/hosts.json"
     if [ "$WRITE_DEVICE" = y ]; then
       "$PREFIX/venv/bin/python" - "$ETC/exporters.json" "$EXP_IP" "$DEV_NAME" "$VENDOR" "$WAN_IFS" "$CITY" "$COUNTRY" <<'PY'
@@ -577,7 +637,7 @@ PY
     else
       [ -f "$ETC/exporters.json" ] || echo '{}' > "$ETC/exporters.json"
     fi
-    chown root:flowtrack "$ETC"/*.json; chmod 644 "$ETC"/*.json
+    chown root:flowsphera "$ETC"/*.json; chmod 644 "$ETC"/*.json
   }
   step "$(t 'Writing configuration' 'Запис конфігурації')" write_config
 fi
@@ -585,7 +645,7 @@ fi
 ensure_tls() {
   set_env() { if grep -q "^$1=" "$ETC/env"; then sed -i "s|^$1=.*|$1=$2|" "$ETC/env"; else echo "$1=$2" >> "$ETC/env"; fi; }
   if [ "$USE_TLS" != yes ]; then set_env FT_TLS_CERT ""; set_env FT_TLS_KEY ""; return 0; fi
-  mkdir -p "$TLS_DIR"; chown root:flowtrack "$TLS_DIR"; chmod 750 "$TLS_DIR"
+  mkdir -p "$TLS_DIR"; chown root:flowsphera "$TLS_DIR"; chmod 750 "$TLS_DIR"
   local cert="$TLS_DIR/cert.pem" key="$TLS_DIR/key.pem" san ip
   # keep an existing certificate (also a user-supplied one) unless it expires within 30 days
   if [ -s "$cert" ] && [ -s "$key" ] && openssl x509 -checkend 2592000 -noout -in "$cert" >/dev/null 2>&1; then :
@@ -594,11 +654,11 @@ ensure_tls() {
     for h in "$(hostname 2>/dev/null)" "$(hostname -f 2>/dev/null)"; do [ -n "$h" ] && case ",$san," in *",DNS:$h,"*) ;; *) san="$san,DNS:$h" ;; esac; done
     for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^(docker|br-|virbr|veth|cni|flannel)/ {split($4, a, "/"); print a[1]}'); do san="$san,IP:$ip"; done
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 825 -sha256 \
-      -subj "/CN=$(hostname 2>/dev/null || echo flowtrack)/O=FlowSphera" -addext "subjectAltName=$san" \
+      -subj "/CN=$(hostname 2>/dev/null || echo flowsphera)/O=FlowSphera" -addext "subjectAltName=$san" \
       -addext "keyUsage=digitalSignature" -addext "extendedKeyUsage=serverAuth" -keyout "$key.tmp" -out "$cert.tmp"
     mv "$key.tmp" "$key"; mv "$cert.tmp" "$cert"
   fi
-  chown root:flowtrack "$cert" "$key"; chmod 644 "$cert"; chmod 640 "$key"
+  chown root:flowsphera "$cert" "$key"; chmod 644 "$cert"; chmod 640 "$key"
   set_env FT_TLS_CERT "$cert"; set_env FT_TLS_KEY "$key"
 }
 step "$(t 'HTTPS certificate' 'Сертифікат HTTPS')" ensure_tls
@@ -615,23 +675,23 @@ clickhouse_up() {
   mem=$(awk '/MemTotal/ {m=int($2/1024/2); if (m<1024) m=1024; if (m>8192) m=8192; print m}' /proc/meminfo)
   sed -i '/^FT_CH_MEMORY_MB=/d' "$ETC/env"; echo "FT_CH_MEMORY_MB=$mem" >> "$ETC/env"   # the web API sizes its queries by it
   # backups: a folder of the host that ClickHouse sees as /backups (BACKUP … TO File(…)); only root and ClickHouse read it
-  BACKUP_DIR=${BACKUP_DIR_OPT:-$(envget FT_BACKUP_DIR)}; BACKUP_DIR=${BACKUP_DIR:-/var/backups/flowtrack}
+  BACKUP_DIR=${BACKUP_DIR_OPT:-$(envget FT_BACKUP_DIR)}; BACKUP_DIR=${BACKUP_DIR:-/var/backups/flowsphera}
   case "$BACKUP_DIR" in /*) ;; *) echo "--backup-dir: an absolute path is expected: $BACKUP_DIR"; return 1 ;; esac
   mkdir -p "$BACKUP_DIR"; chown 101:101 "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
   set_env FT_BACKUP_DIR "$BACKUP_DIR"
   # FlowSphera's ClickHouse settings (quiet diagnostic logs, small caches, the backups folder), mounted into config.d
   mkdir -p "$ETC/clickhouse"
-  if ! cmp -s "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; then
-    cp "$PREFIX/app/deploy/clickhouse-flowtrack.xml" "$ETC/clickhouse/flowtrack.xml"; chmod 644 "$ETC/clickhouse/flowtrack.xml"; conf_changed=1
+  if ! cmp -s "$PREFIX/app/deploy/clickhouse-flowsphera.xml" "$ETC/clickhouse/flowsphera.xml"; then
+    cp "$PREFIX/app/deploy/clickhouse-flowsphera.xml" "$ETC/clickhouse/flowsphera.xml"; chmod 644 "$ETC/clickhouse/flowsphera.xml"; conf_changed=1
   fi
   ch_run() {
     docker run -d --name "$CH_NAME" --restart unless-stopped -p "127.0.0.1:$CH_PORT:8123" --memory "${mem}m" --memory-swap "$((mem * 2))m" \
       --ulimit nofile=262144:262144 -v "$PREFIX/clickhouse:/var/lib/clickhouse" \
-      -v "$ETC/clickhouse/flowtrack.xml:/etc/clickhouse-server/config.d/flowtrack.xml:ro" -v "$BACKUP_DIR:/backups" \
-      -e CLICKHOUSE_DB=flowtrack -e CLICKHOUSE_USER=flowtrack -e CLICKHOUSE_PASSWORD="$CH_PASSWORD" "$CH_IMAGE"
+      -v "$ETC/clickhouse/flowsphera.xml:/etc/clickhouse-server/config.d/flowsphera.xml:ro" -v "$BACKUP_DIR:/backups" \
+      -e CLICKHOUSE_DB=flowsphera -e CLICKHOUSE_USER=flowsphera -e CLICKHOUSE_PASSWORD="$CH_PASSWORD" "$CH_IMAGE"
   }
   if docker inspect "$CH_NAME" >/dev/null 2>&1; then
-    if ! docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$CH_NAME" | grep -q 'config.d/flowtrack.xml' \
+    if ! docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$CH_NAME" | grep -q 'config.d/flowsphera.xml' \
        || [ "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/backups"}}{{.Source}}{{end}}{{end}}' "$CH_NAME")" != "$BACKUP_DIR" ]; then
       # an older install (or another backups folder): recreate the container with the settings and the backups folder
       # mounted (the data stays in $PREFIX/clickhouse)
@@ -649,42 +709,67 @@ clickhouse_up() {
     ch_run
   fi
   for _ in $(seq 1 60); do
-    curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 && break
+    curl -fsS -u "flowsphera:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 && break
     sleep 2
   done
-  curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 || { echo "ClickHouse did not answer within 120 s"; docker logs --tail 30 "$CH_NAME"; return 1; }
+  curl -fsS -u "flowsphera:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/?query=SELECT%201" >/dev/null 2>&1 || { echo "ClickHouse did not answer within 120 s"; docker logs --tail 30 "$CH_NAME"; return 1; }
   # diagnostic log tables left by older versions are no longer written: drop them (FlowSphera data is untouched)
   for t in trace_log text_log metric_log asynchronous_metric_log processors_profile_log query_thread_log query_views_log part_log session_log error_log; do
-    curl -fsS -u "flowtrack:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/" --data-binary "DROP TABLE IF EXISTS system.$t" >/dev/null 2>&1 || true
+    curl -fsS -u "flowsphera:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/" --data-binary "DROP TABLE IF EXISTS system.$t" >/dev/null 2>&1 || true
   done
+  # (2.0) the flow database of 1.x was named flowtrack: rename it (an Atomic database: instant, the data stays put).
+  # The container made an empty flowsphera database at its start (CLICKHOUSE_DB); that one goes first.
+  chq() { curl -fsS -u "flowsphera:$CH_PASSWORD" "http://127.0.0.1:$CH_PORT/" --data-binary "$1"; }
+  if [ "$(chq "SELECT count() FROM system.databases WHERE name = 'flowtrack'")" = 1 ]; then
+    if [ "$(chq "SELECT count() FROM system.tables WHERE database = 'flowsphera'")" != 0 ]; then
+      echo "both databases flowtrack and flowsphera hold tables — left as they are"; return 1
+    fi
+    chq "DROP DATABASE IF EXISTS flowsphera SYNC" && chq "RENAME DATABASE flowtrack TO flowsphera" || return 1
+    echo "database flowtrack renamed to flowsphera"
+  fi
   return 0
 }
 step "$(t 'Database (ClickHouse in Docker)' 'База даних (ClickHouse у Docker)')" clickhouse_up
 
 install_units() {
-  cp "$PREFIX/app/deploy/flowtrack-collector.service" "$PREFIX/app/deploy/flowtrack-web.service" \
-     "$PREFIX/app/deploy/flowtrack-geoip.service" "$PREFIX/app/deploy/flowtrack-geoip.timer" \
-     "$PREFIX/app/deploy/flowtrack-backup.service" "$PREFIX/app/deploy/flowtrack-backup.timer" "$PREFIX/app/deploy/flowtrack-backup.path" /etc/systemd/system/
+  cp "$PREFIX/app/deploy/flowsphera-collector.service" "$PREFIX/app/deploy/flowsphera-web.service" \
+     "$PREFIX/app/deploy/flowsphera-geoip.service" "$PREFIX/app/deploy/flowsphera-geoip.timer" \
+     "$PREFIX/app/deploy/flowsphera-backup.service" "$PREFIX/app/deploy/flowsphera-backup.timer" "$PREFIX/app/deploy/flowsphera-backup.path" /etc/systemd/system/
   systemctl daemon-reload
-  systemctl enable -q flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path $UNITS
-  # `flowtrack-license status|request|activate FILE|deactivate` for servers without a browser at hand
-  cat > /usr/local/bin/flowtrack-license <<WRAP
+  systemctl enable -q flowsphera-geoip.timer flowsphera-backup.timer flowsphera-backup.path $UNITS
+  # `flowsphera-license status|request|activate FILE|deactivate` for servers without a browser at hand
+  cat > /usr/local/bin/flowsphera-license <<WRAP
 #!/bin/sh
 # FlowSphera license on this server: status | request | activate FILE|CODE | deactivate
 [ "\$(id -u)" = 0 ] || exec sudo "\$0" "\$@"
 # the license server setting the services read from $ETC/env (only that, not the database password)
-run() { runuser -u flowtrack -- env FT_STATE_DIR="$STATE" \$(grep -sE '^FT_LICENSE_SERVER(_PIN)?=[^ ]*\$' "$ETC/env") "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
+run() { runuser -u flowsphera -- env FT_STATE_DIR="$STATE" \$(grep -sE '^FT_LICENSE_SERVER(_PIN)?=[^ ]*\$' "$ETC/env") "$PREFIX/venv/bin/python" "$PREFIX/app/licensing.py" "\$@"; }
 if [ "\$1" = activate ] && [ -f "\$2" ]; then run activate - < "\$2"; else run "\$@"; fi
 WRAP
-  chmod 755 /usr/local/bin/flowtrack-license
-  # `flowtrack upgrade | status | license … | reconfigure | uninstall`; replaced by a rename, because
-  # `flowtrack upgrade` is the running script while this installer is here
-  sed "s|^REPO=.*|REPO=$FT_REPO|" "$PREFIX/app/deploy/flowtrack" > /usr/local/bin/flowtrack.new
-  chmod 755 /usr/local/bin/flowtrack.new && mv -f /usr/local/bin/flowtrack.new /usr/local/bin/flowtrack
+  chmod 755 /usr/local/bin/flowsphera-license
+  # `flowsphera upgrade | status | license … | reconfigure | uninstall`; replaced by a rename, because
+  # `flowsphera upgrade` is the running script while this installer is here
+  sed "s|^REPO=.*|REPO=$FT_REPO|" "$PREFIX/app/deploy/flowsphera" > /usr/local/bin/flowsphera.new
+  chmod 755 /usr/local/bin/flowsphera.new && mv -f /usr/local/bin/flowsphera.new /usr/local/bin/flowsphera
+  # (2.0) an installation from before 2.0: `flowtrack …` and `flowtrack-license …` keep working until 3.0 and say
+  # the new name (replaced by a rename too: `flowtrack upgrade` may be the script running this installer)
+  if [ -f "$ETC/migrated-from-flowtrack" ]; then
+    for c in flowtrack flowtrack-license; do
+      cat > "/usr/local/bin/$c.new" <<WRAP
+#!/bin/sh
+# FlowSphera 2.0: the command before 2.0, a synonym of ${c/flowtrack/flowsphera} until 3.0
+L=\$(cat $ETC/install-lang 2>/dev/null)
+if [ "\$L" = uk ]; then echo "$c тепер називається ${c/flowtrack/flowsphera} (стара назва працює до версії 3.0)" >&2
+else echo "$c is now ${c/flowtrack/flowsphera} (the old name works until version 3.0)" >&2; fi
+exec /usr/local/bin/${c/flowtrack/flowsphera} "\$@"
+WRAP
+      chmod 755 "/usr/local/bin/$c.new" && mv -f "/usr/local/bin/$c.new" "/usr/local/bin/$c"
+    done
+  fi
   echo "$L" > "$ETC/install-lang"
   # a larger UDP receive buffer absorbs export bursts (the collector asks for 32 MB; the kernel default cap is ~200 KB)
   if [ "$(sysctl -n net.core.rmem_max 2>/dev/null || echo 0)" -lt 33554432 ]; then
-    printf '%s\n' '# FlowSphera collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowtrack.conf
+    printf '%s\n' '# FlowSphera collector: room for NetFlow bursts' 'net.core.rmem_max = 33554432' > /etc/sysctl.d/60-flowsphera.conf
     sysctl -q -w net.core.rmem_max=33554432 || true
   fi
 }
@@ -692,7 +777,7 @@ step "$(t 'System services' 'Системні сервіси')" install_units
 
 if [ -n "${ADMIN_PW:-}" ]; then
   set_admin() {
-    printf '%s' "$ADMIN_PW" | runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
+    printf '%s' "$ADMIN_PW" | runuser -u flowsphera -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys; sys.path.insert(0, "'"$PREFIX"'/app")
 from auth import Auth
 a = Auth(); a.update_user("admin", "admin", password=sys.stdin.read())'
@@ -719,19 +804,26 @@ fi
 
 start_all() {
   systemctl restart $UNITS
-  systemctl start flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path
+  systemctl start flowsphera-geoip.timer flowsphera-backup.timer flowsphera-backup.path
   for _ in $(seq 1 30); do
     # (1.17.2) «running» = the collector holds its UDP port (before that the kernel drops what devices send)
-    if systemctl is-active -q flowtrack-collector && udp_busy "$NF_PORT" && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi   # localhost is always served
+    if systemctl is-active -q flowsphera-collector && udp_busy "$NF_PORT" && curl -fsSk -o /dev/null "$PROTO://127.0.0.1:$WEB_PORT/"; then return 0; fi   # localhost is always served
     sleep 1
   done
-  systemctl status --no-pager $UNITS; journalctl -u flowtrack-collector -u flowtrack-web -n 30 --no-pager; return 1
+  systemctl status --no-pager $UNITS; journalctl -u flowsphera-collector -u flowsphera-web -n 30 --no-pager; return 1
 }
 step "$(t 'Starting FlowSphera' 'Запуск FlowSphera')" start_all
 
+# (2.0) the rename must not touch the license: the Instance ID after it is the one before
+if [ "$MIGRATED_V1" = 1 ] && [ -n "$ID_BEFORE" ]; then
+  ID_AFTER=$(runuser -u flowsphera -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c "import sys; sys.path.insert(0, '$PREFIX/app'); import licensing; print(licensing.instance_id())" 2>/dev/null || true)
+  if [ "$ID_AFTER" = "$ID_BEFORE" ]; then ok "$(t 'Instance ID unchanged' 'Instance ID не змінився'): $ID_AFTER"
+  else warn "$(t "Instance ID changed ($ID_BEFORE → ${ID_AFTER:-?}): the license may need to be activated again — write to flowsphera@telesphera.net" "Instance ID змінився ($ID_BEFORE → ${ID_AFTER:-?}): ліцензію, можливо, треба активувати знову — напишіть на flowsphera@telesphera.net")"; fi
+fi
+
 # the license last: the install or upgrade above is complete either way; a refused key leaves the previous edition
 install_license() {
-  printf '%s' "$LIC_KEY" | runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
+  printf '%s' "$LIC_KEY" | runuser -u flowsphera -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys; sys.path.insert(0, "'"$PREFIX"'/app")
 import common
 try:
@@ -764,8 +856,8 @@ if [ "$MODE" = upgrade ]; then say "  $(t 'Login: your existing users and passwo
     say "  ${D}$(t "sFlow arrives on UDP $SF_PORT: if your devices will send sFlow, open it in the firewall (ufw allow $SF_PORT/udp, or firewall-cmd --permanent --add-port=$SF_PORT/udp)." "sFlow приходить на UDP $SF_PORT: якщо ваші пристрої надсилатимуть sFlow, відкрийте його у фаєрволі (ufw allow $SF_PORT/udp або firewall-cmd --permanent --add-port=$SF_PORT/udp).")${N}"
   fi
 elif [ -n "${ADMIN_PW_MADE:-}" ]; then say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$ADMIN_PW${N}  ${D}$(t '(generated: write it down, or change it in the web interface)' '(згенеровано: запишіть або змініть у вебінтерфейсі)')${N}"
-else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowtrack)${N}"; fi
-EDITION=$(runuser -u flowtrack -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
+else say "  $(t 'Login' 'Вхід'): ${B}admin${N} / ${B}$([ -n "${ADMIN_PW:-}" ] && t '(the password you set)' '(ваш пароль)' || echo flowsphera)${N}"; fi
+EDITION=$(runuser -u flowsphera -- env FT_STATE_DIR="$STATE" "$PREFIX/venv/bin/python" -c '
 import sys, time; sys.path.insert(0, "'"$PREFIX"'/app")
 import common, licensing
 e = common.edition(); lic = e["license"] or {}
@@ -778,7 +870,7 @@ if [ -n "$EDITION" ]; then
   say "  $(t 'Edition' 'Редакція'): ${B}$(printf '%s\n' "$EDITION" | sed -n 1p)${N}"
   say "  $(t 'Instance ID' 'ID інсталяції'): $(printf '%s\n' "$EDITION" | sed -n 2p)"
   case "$EDITION" in "FlowSphera Pro"*) ;; *)
-    say "  ${D}$(t 'FlowSphera Pro: send this activation request to your vendor, then run  sudo flowtrack license activate FILE  (or use Settings → License):' 'FlowSphera Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowtrack license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
+    say "  ${D}$(t 'FlowSphera Pro: send this activation request to your vendor, then run  sudo flowsphera license activate FILE  (or use Settings → License):' 'FlowSphera Pro: надішліть цей запит на активацію постачальнику, потім виконайте  sudo flowsphera license activate ФАЙЛ  (або «Налаштування → Ліцензія»):')${N}"
     say "  $(printf '%s\n' "$EDITION" | sed -n 3p)" ;;
   esac
 fi
@@ -842,9 +934,9 @@ CFG
   [ "$SF_PORT" != 0 ] && say "  ${D}sFlow: $CIP UDP $SF_PORT${N}"
   say ""
 fi
-say "${D}$(t 'Status:' 'Стан:') flowtrack status"
-say "$(t 'Logs:' 'Логи:')  journalctl -u flowtrack-collector -f"
-say "$(t 'Upgrade:' 'Оновлення:')  sudo flowtrack upgrade      $(t 'Reconfigure or remove:' 'Переналаштувати чи видалити:') sudo flowtrack reconfigure | uninstall${N}"
+say "${D}$(t 'Status:' 'Стан:') flowsphera status"
+say "$(t 'Logs:' 'Логи:')  journalctl -u flowsphera-collector -f"
+say "$(t 'Upgrade:' 'Оновлення:')  sudo flowsphera upgrade      $(t 'Reconfigure or remove:' 'Переналаштувати чи видалити:') sudo flowsphera reconfigure | uninstall${N}"
 }
 
 uninstall() {
@@ -857,17 +949,20 @@ uninstall() {
     ask_yn keep "$(t "Keep collected data and settings ($PREFIX, $ETC, $STATE) for a later reinstall?" "Зберегти зібрані дані й налаштування ($PREFIX, $ETC, $STATE) для повторного встановлення?")" y
   fi
   remove_all() {
-    systemctl disable --now flowtrack-geoip.timer flowtrack-backup.timer flowtrack-backup.path $UNITS 2>/dev/null || true
-    rm -f /etc/systemd/system/flowtrack-collector.service /etc/systemd/system/flowtrack-web.service \
-          /etc/systemd/system/flowtrack-geoip.service /etc/systemd/system/flowtrack-geoip.timer \
-          /etc/systemd/system/flowtrack-backup.service /etc/systemd/system/flowtrack-backup.timer /etc/systemd/system/flowtrack-backup.path /etc/sysctl.d/60-flowtrack.conf \
-          /usr/local/bin/flowtrack-license /usr/local/bin/flowtrack "$ETC/install-lang"
+    systemctl disable --now flowsphera-geoip.timer flowsphera-backup.timer flowsphera-backup.path $UNITS 2>/dev/null || true
+    rm -f /etc/systemd/system/flowsphera-collector.service /etc/systemd/system/flowsphera-web.service \
+          /etc/systemd/system/flowsphera-geoip.service /etc/systemd/system/flowsphera-geoip.timer \
+          /etc/systemd/system/flowsphera-backup.service /etc/systemd/system/flowsphera-backup.timer /etc/systemd/system/flowsphera-backup.path /etc/sysctl.d/60-flowsphera.conf \
+          /usr/local/bin/flowsphera-license /usr/local/bin/flowsphera "$ETC/install-lang"
+    # (2.0) the names from before 2.0: the commands and the links to the folders (only links: never a real folder)
+    rm -f /usr/local/bin/flowtrack /usr/local/bin/flowtrack-license
+    for l in "$V1_PREFIX" "$V1_ETC" "$V1_STATE"; do [ -L "$l" ] && rm -f "$l"; done
     systemctl daemon-reload
     docker rm -f "$CH_NAME" 2>/dev/null || true
-    if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowtrack 2>/dev/null || true
+    if [ "$keep" != y ]; then rm -rf "$PREFIX" "$ETC" "$STATE"; userdel flowsphera 2>/dev/null || true
     else rm -rf "$PREFIX/app" "$PREFIX/venv"; fi
   }
-  local bk; bk=$(envget FT_BACKUP_DIR 2>/dev/null || true); bk=${bk:-/var/backups/flowtrack}
+  local bk; bk=$(envget FT_BACKUP_DIR 2>/dev/null || true); bk=${bk:-/var/backups/flowsphera}
   step "$(t 'Removing FlowSphera' 'Видалення FlowSphera')" remove_all
   ok "$(t 'FlowSphera removed.' 'FlowSphera видалено.')$([ "$keep" = y ] && t " Data kept in $PREFIX/clickhouse and $ETC." " Дані збережено в $PREFIX/clickhouse та $ETC.")"
   if [ -d "$bk" ]; then say "  $(t "Backups are kept in $bk (delete the folder yourself when they are not needed)." "Бекапи лишаються в $bk (видаліть теку самі, коли вони не потрібні).")"; fi

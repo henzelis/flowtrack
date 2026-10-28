@@ -95,7 +95,7 @@ ROLLUPS = {
 CUT = max(r['bucket'] for r in ROLLUPS.values())    # the longest bucket (a day is a multiple of every bucket)
 FILL_WORKERS = min(3, max(1, (os.cpu_count() or 1) // 3))     # (1.17.0) tables filled at a time (see _fill)
 LATE = 2 * 3600     # records may reach the collector this late (a multiple of every bucket): see _late()
-# (1.17.0) test VMs only (a systemd drop-in, the installer rewrites /etc/flowtrack/env): the history is filled at
+# (1.17.0) test VMs only (a systemd drop-in, the installer rewrites /etc/flowsphera/env): the history is filled at
 # once instead of after each cutover + settle — right only where no records arrive meanwhile (a load VM with
 # generated history); default off
 NOWAIT = os.environ.get('FT_ROLLUP_NOWAIT') == '1'

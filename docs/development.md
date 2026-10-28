@@ -9,7 +9,7 @@
 | `common.py`, `schema.sql` | ClickHouse client, GeoIP/ASN/service enrichment; database schema |
 | `topology.py` | Path analysis: layer-3 neighbours of the devices, link states, the hops of a path |
 | `rollups.py` | 5-minute and hourly totals for long periods: tables, filling the history, which one a query reads |
-| `backup.py` | backups and restore: ClickHouse BACKUP + settings, copies to S3 / SFTP / FTP, encryption, `flowtrack backup` / `restore` |
+| `backup.py` | backups and restore: ClickHouse BACKUP + settings, copies to S3 / SFTP / FTP, encryption, `flowsphera backup` / `restore` |
 | `web/` | the web UI (plain HTML/CSS/JS, ECharts vendored — no build step) |
 | `web/i18n/` | language dictionaries for the UI and the server's texts (see [Translations](translations.md)) |
 | `deploy/` | systemd units, GeoIP refresh, configuration examples |

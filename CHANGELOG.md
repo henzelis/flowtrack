@@ -1,11 +1,33 @@
 # Changelog
 
-FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
+FlowSphera follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
 ## Unreleased
 
+**FlowSphera 2.0 — every name on the server is FlowSphera.** Up to 1.18 only the product's face had the new name;
+now the command, the services, the folders, the database and what other systems receive have it too. An installation
+upgrades as always (`sudo flowtrack upgrade`, or `sudo flowsphera upgrade` from now on) and moves to the new names by
+itself — data, settings, backups and the license are kept.
+
 ### Changed
+- **Names on the server** — the command `flowsphera` (`flowsphera upgrade | status | license | backup | restore …`) and
+  `flowsphera-license`; services `flowsphera-collector`, `flowsphera-web` (+ `-geoip`, `-backup` timers); folders
+  `/opt/flowsphera`, `/etc/flowsphera`, `/var/lib/flowsphera`, `/var/backups/flowsphera` (a backups folder chosen by
+  hand stays where it is); the service user `flowsphera` (same UID: files keep their owner); the ClickHouse container
+  `flowsphera-ch`, its user and database `flowsphera` (renamed in place — nothing is copied).
+- **The old names work until 3.0**: `flowtrack …` and `flowtrack-license …` run the new commands and say so;
+  `systemctl … flowtrack-web` (and the other units) still answer; `/opt/flowtrack`, `/etc/flowtrack` and
+  `/var/lib/flowtrack` are links to the new folders.
+- **Integrations say FlowSphera** — **update SIEM rules and webhook checks that look for FlowTrack**: syslog / SIEM
+  lines `CEF:0|FlowSphera|FlowSphera|…` with the app name `FlowSphera`; the webhook JSON `"source": "FlowSphera"`
+  and the headers `X-FlowSphera-Timestamp` / `X-FlowSphera-Signature`; `User-Agent: FlowSphera/<version>`.
+- **Backups made before 2.0 restore as before** (their database `flowtrack` comes back as `flowsphera`, their settings
+  into the new folders); the first backup after the upgrade is a full one.
+- **The license stays valid**: the Instance ID does not depend on the names; the upgrade compares it before and after
+  and says so.
+- Device snippets in *Connect a device* name the exporter / SNMP group `FLOWSPHERA` (devices set up earlier keep
+  working).
 - **The repository moved to [telesphera/flowsphera](https://github.com/telesphera/flowsphera)**, with its whole
   history and releases. The installer, `sudo flowtrack upgrade` and the *Source code* link use the new address; the
   old one (`henzelis/flowtrack`) keeps redirecting, so installations of earlier versions upgrade as before.

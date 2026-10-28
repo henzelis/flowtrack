@@ -10,19 +10,19 @@
   `https://`, and the session cookie is marked `Secure`. The installer creates a self-signed certificate
   (ECDSA P-256, valid 825 days, all host addresses in SAN) and renews it on upgrade when it expires
   within 30 days. Browsers warn about self-signed certificates once — compare the SHA-256 fingerprint
-  the installer prints. To use your own certificate, place it at `/etc/flowtrack/tls/cert.pem` and
-  `key.pem` (readable by group `flowtrack`) and restart `flowtrack-web`; the installer keeps it.
+  the installer prints. To use your own certificate, place it at `/etc/flowsphera/tls/cert.pem` and
+  `key.pem` (readable by group `flowsphera`) and restart `flowsphera-web`; the installer keeps it.
   `FT_TLS=no` at install time keeps plain HTTP (e.g. behind a TLS reverse proxy — then set
   `X-Forwarded-Proto: https` there).
-- The Telegram bot token and the SMTP password are kept in `/var/lib/flowtrack/notify.json` (readable by the service
+- The Telegram bot token and the SMTP password are kept in `/var/lib/flowsphera/notify.json` (readable by the service
   only), never sent to the browser and never written to the log.
 - ClickHouse listens on `127.0.0.1` only; user filters reach it as bound query parameters.
-- Services run as the unprivileged `flowtrack` user with a read-only system (`ProtectSystem=strict`);
-  users, sessions and devices added from the UI are stored in `/var/lib/flowtrack`.
+- Services run as the unprivileged `flowsphera` user with a read-only system (`ProtectSystem=strict`);
+  users, sessions and devices added from the UI are stored in `/var/lib/flowsphera`.
 
 ## API tokens and webhooks (1.11.0)
 
-- API tokens (`ftapi_…`, 256 random bits) are stored only as SHA-256 in `/var/lib/flowtrack/api_tokens.json` (0600)
+- API tokens (`ftapi_…`, 256 random bits) are stored only as SHA-256 in `/var/lib/flowsphera/api_tokens.json` (0600)
   and shown once. They never manage users, tokens or the license, nor delete backups; a *Read only* token changes
   nothing. Wrong tokens share the failed-login limit of the address (5 in 5 minutes). Revoke a leaked one in
   *Settings → API*: it stops working at once.
@@ -37,7 +37,7 @@
 - FlowSphera binds with a service account to find the user (the typed name is escaped and restricted to letters,
   digits and `. _ @ -`, so it cannot change the LDAP filter), then binds as the user to check the password.
   Use LDAPS or STARTTLS with "Verify the certificate" (paste the directory's CA if it is not a public one); the
-  service account only needs read access. Its password is stored in `/var/lib/flowtrack/ldap.json` (0600) and never
+  service account only needs read access. Its password is stored in `/var/lib/flowsphera/ldap.json` (0600) and never
   sent to the browser.
 - Wrong directory passwords count with the failed logins of the address. At least one local administrator always
   remains, so a broken or unreachable directory never locks you out. API tokens cannot change these settings.

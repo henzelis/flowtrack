@@ -31,30 +31,30 @@ curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.
 Without `FT_ADMIN_PASSWORD` the installer makes a random password for `admin` and shows it at the end.
 
 Supported: Debian/Ubuntu (apt) and Fedora/RHEL/Rocky/Alma (dnf) with systemd, x86_64 or arm64. Details
-are logged to `/var/log/flowtrack-install.log`.
+are logged to `/var/log/flowsphera-install.log`.
 
 ## Upgrade
 
 Which version you run is shown at the bottom of every page (newer versions also in Settings → General; or
-`cat /opt/flowtrack/app/VERSION` on the server).
+`cat /opt/flowsphera/app/VERSION` on the server).
 
 | Your version | How to upgrade |
 |---|---|
-| **1.3.4 or newer** | `sudo flowtrack upgrade` |
-| **1.3.3 or older** (any, from 1.0.0 on) | once: `curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`<br>(no `curl`: `wget -qO- https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`)<br>from then on: `sudo flowtrack upgrade` |
+| **1.3.4 or newer** | `sudo flowsphera upgrade` |
+| **1.3.3 or older** (any, from 1.0.0 on) | once: `curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`<br>(no `curl`: `wget -qO- https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`)<br>from then on: `sudo flowsphera upgrade` |
 
 The upgrade asks no questions: it installs the newest version, keeps settings, users, devices, the license and all
 collected data, and restarts the services (the collector pauses for a few seconds; exporters' templates are kept).
-If the newest version is already installed, `flowtrack upgrade` says so and changes nothing.
+If the newest version is already installed, `flowsphera upgrade` says so and changes nothing.
 
 Other commands on the server:
 
 | Command | What it does |
 |---|---|
-| `flowtrack status` | version, services, edition |
-| `sudo flowtrack license status` / `activate KEY` / `renew` / `deactivate` | license of this server (`renew`: ask the license server for a renewal now; see [Editions](editions.md)) |
-| `sudo flowtrack reconfigure` | the installer's questions again: ports, device, admin password, firewall |
-| `sudo flowtrack uninstall` | remove FlowSphera; asks whether to keep the data |
+| `flowsphera status` | version, services, edition |
+| `sudo flowsphera license status` / `activate KEY` / `renew` / `deactivate` | license of this server (`renew`: ask the license server for a renewal now; see [Editions](editions.md)) |
+| `sudo flowsphera reconfigure` | the installer's questions again: ports, device, admin password, firewall |
+| `sudo flowsphera uninstall` | remove FlowSphera; asks whether to keep the data |
 
 ## Requirements
 

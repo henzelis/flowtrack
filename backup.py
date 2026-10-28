@@ -4,7 +4,7 @@ SFTP or FTP; restore from any of them.
 
 A backup is a folder <DIR>/<id>/ (id = UTC time, YYYYMMDD-HHMMSS):
   data/             ClickHouse BACKUP DATABASE of the flow data (the container sees DIR as /backups)
-  settings.tar.gz   /etc/flowtrack and /var/lib/flowtrack
+  settings.tar.gz   /etc/flowsphera and /var/lib/flowsphera
   manifest.json     what it is: kind, base, version, tables, sizes, where the copies went
 A full backup stands alone; a differential one (kind 'diff') holds what changed since the full backup it names in
 `base` (ClickHouse base_backup) — a restore needs that full one too, nothing else. A full backup with its
@@ -14,9 +14,9 @@ A copy off the server is two files: <id>.json (the manifest, no secrets) and <id
 encrypted with the passphrase when it is set — AES-256-GCM in 1 MiB chunks, key from scrypt). The folder here is not
 encrypted: only root (and ClickHouse) can read it, and ClickHouse needs it as it is for the next differential backup.
 
-Runs as root: flowtrack-backup.service (started every 5 minutes by its timer — the schedule itself is in the
+Runs as root: flowsphera-backup.service (started every 5 minutes by its timer — the schedule itself is in the
 settings — and at once when the web interface asks for a backup through STATE_DIR/backup.request), and
-`sudo flowtrack backup …` / `sudo flowtrack restore …`. The web interface reads STATE_DIR/backup_index.json and
+`sudo flowsphera backup …` / `sudo flowsphera restore …`. The web interface reads STATE_DIR/backup_index.json and
 backup_status.json and writes the settings (STATE_DIR/backup.json, 0600: S3 / SFTP / FTP secrets, the passphrase)."""
 import argparse
 import contextlib
@@ -37,7 +37,7 @@ import tempfile
 import time
 
 
-def _load_env(path='/etc/flowtrack/env'):
+def _load_env(path='/etc/flowsphera/env'):
     """The CLI runs outside the services: take the database address and password from the install's env file."""
     try:
         with open(path) as f:
@@ -50,12 +50,12 @@ def _load_env(path='/etc/flowtrack/env'):
         pass
 
 
-_load_env(os.path.join(os.environ.get('FT_CONFIG_DIR', '/etc/flowtrack'), 'env'))
+_load_env(os.path.join(os.environ.get('FT_CONFIG_DIR', '/etc/flowsphera'), 'env'))
 
 import common  # noqa: E402
 from common import CONFIG_DIR, STATE_DIR, VERSION, CHError, ch, set_lang, tr  # noqa: E402
 
-DIR = os.environ.get('FT_BACKUP_DIR', '/var/backups/flowtrack')       # on the host
+DIR = os.environ.get('FT_BACKUP_DIR', '/var/backups/flowsphera')       # on the host
 CH_DIR = os.environ.get('FT_BACKUP_CH_DIR', '/backups')              # the same folder inside the ClickHouse container
 CH_UID = int(os.environ.get('FT_BACKUP_CH_UID', '101'))              # the clickhouse user of the official image
 DB = common.CH_DB
@@ -63,17 +63,18 @@ CONFIG = os.path.join(STATE_DIR, 'backup.json')
 STATUS = os.path.join(STATE_DIR, 'backup_status.json')
 INDEX = os.path.join(STATE_DIR, 'backup_index.json')
 REQUEST = os.path.join(STATE_DIR, 'backup.request')
-SERVICES = ('flowtrack-collector', 'flowtrack-web')
+SERVICES = ('flowsphera-collector', 'flowsphera-web')
 ID_RE = re.compile(r'^\d{8}-\d{6}$')
 DESTS = ('s3', 'sftp', 'ftp')
 # never restored: what the installer made for this server, the license bound to it, the state of backups themselves
 _C, _S = CONFIG_DIR.strip('/'), STATE_DIR.strip('/')
+OLD_DIRS = (('etc/flowtrack', _C), ('var/lib/flowtrack', _S))      # (2.0) the folders' names before 2.0
 SKIP_RESTORE = (f'{_C}/env', f'{_C}/clickhouse', f'{_C}/install-lang', f'{_S}/hw.board', f'{_S}/sessions.json',
                 f'{_S}/backup_status.json', f'{_S}/backup_index.json', f'{_S}/backup.request', f'{_S}/backup.lock', f'{_S}/reputation')
 LICENSE_FILES = (f'{_S}/license.',)
 
 
-# the members are checked here (paths, kinds, modes, links on the way); owners stay as stored (the flowtrack user's
+# the members are checked here (paths, kinds, modes, links on the way); owners stay as stored (the flowsphera user's
 # files stay its own) — Python 3.14's default filter would make them root's
 TAR_AS_CHECKED = {'filter': 'fully_trusted'} if hasattr(tarfile, 'fully_trusted_filter') else {}
 
@@ -122,7 +123,7 @@ def save(cfg):
 
 
 def _write_json(path, obj, mode=0o644):
-    # the service runs as root and writes into STATE_DIR, which the flowtrack user owns: a link left there in place of
+    # the service runs as root and writes into STATE_DIR, which the flowsphera user owns: a link left there in place of
     # the temporary file must never be followed (it would overwrite and chmod any file of the system)
     tmp = path + '.tmp'
     with contextlib.suppress(FileNotFoundError):
@@ -303,8 +304,8 @@ class Dest:
 
     def test(self):
         """Write, read back and delete a small file. -> a message for people (raises BackupError)."""
-        data = b'FlowTrack backup test ' + str(time.time()).encode()
-        nm = f'.flowtrack-test-{os.getpid()}'
+        data = b'FlowSphera backup test ' + str(time.time()).encode()
+        nm = f'.flowsphera-test-{os.getpid()}'
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, 't')
             with open(p, 'wb') as f:
@@ -648,7 +649,7 @@ def _tables():
 
 
 def _settings_tar(path):
-    """/etc/flowtrack and /var/lib/flowtrack as they are now (the backups' own state left out)."""
+    """/etc/flowsphera and /var/lib/flowsphera as they are now (the backups' own state left out)."""
     skip = {STATUS, INDEX, REQUEST, CONFIG + '.tmp', STATUS + '.tmp', INDEX + '.tmp'}
     with tarfile.open(path, 'w:gz') as t:
         for root in (CONFIG_DIR, STATE_DIR):
@@ -693,6 +694,8 @@ def make(full=False, log=print):
     base = next((m for m in ms if m['kind'] == 'full'), None)
     if base and not os.path.isfile(os.path.join(DIR, base['id'], 'data', '.backup')):
         base = None
+    if base and backup_db(base) != DB:
+        base = None                       # (2.0) a full backup of the database under its 1.x name is no base for it
     kind = 'full' if full or not base else 'diff'
     size = _db_size()
     need = size if kind == 'full' else size // 4
@@ -720,7 +723,7 @@ def make(full=False, log=print):
         st = os.path.join(folder, 'settings.tar.gz')
         _settings_tar(st)
         os.chmod(st, 0o600)
-        m = {'format': 1, 'id': bid, 't': int(t0), 'kind': kind, 'base': base['id'] if kind == 'diff' else None, 'version': VERSION,
+        m = {'format': 1, 'id': bid, 't': int(t0), 'kind': kind, 'base': base['id'] if kind == 'diff' else None, 'version': VERSION, 'db': DB,
              'edition': _edition(), 'host': socket.gethostname(), 'took': round(time.time() - t0, 1),
              'tables': {k: [rows_before.get(k, 0), rows_after.get(k, 0)] for k in rows_after},
              'data_size': _du(os.path.join(folder, 'data')), 'settings_sha256': _sha256(st), 'settings_size': os.path.getsize(st),
@@ -858,7 +861,7 @@ def _remove(bid):
 
 
 def delete(ids, copies=False, log=print, errors=None):
-    """(1.8.8) Backups deleted by hand (Settings → Backups, `flowtrack backup delete`): a full one takes its changes
+    """(1.8.8) Backups deleted by hand (Settings → Backups, `flowsphera backup delete`): a full one takes its changes
     with it — they cannot be restored without it. copies: also on every place that is on. -> the ids deleted here."""
     errors = [] if errors is None else errors
     ms = manifests()
@@ -1016,7 +1019,7 @@ def verify(bid, deep=False, log=print, settings=True):
         log(tr('Restoring {id} into a scratch database to count the rows…', id=bid))
         _sys(f'DROP DATABASE IF EXISTS {scratch} SYNC')
         try:
-            _sys(f"RESTORE DATABASE {DB} AS {scratch} FROM File('{bid}/data')", timeout=24 * 3600)
+            _sys(f"RESTORE DATABASE {backup_db(m)} AS {scratch} FROM File('{bid}/data')", timeout=24 * 3600)
             rows = {r['name']: int(r['rows']) for r in ch("SELECT name, toUInt64(ifNull(total_rows, 0)) AS rows FROM system.tables WHERE database = {db:String} AND engine LIKE '%MergeTree'",
                                                       {'db': scratch}, fmt='JSON')}
             for t, (lo, hi) in m['tables'].items():
@@ -1057,6 +1060,11 @@ def _check_files(bid, meta):
         if len(problems) >= 5:
             break
     return problems
+
+
+def backup_db(m):
+    """(2.0) The database a backup holds: named in its manifest since 2.0; before, the flow database was flowtrack."""
+    return m.get('db') or 'flowtrack'
 
 
 def _manifest(bid):
@@ -1176,9 +1184,9 @@ def restore(bid, data=True, settings=True, with_license=False, force=False, log=
     name until the backup is in place, and comes back if the restore fails."""
     m = _manifest(bid)
     if _ver(m['version']) > _ver(VERSION) and not force:
-        raise BackupError(tr('The backup is from FlowSphera {v}, newer than this {cur}: upgrade first (sudo flowtrack upgrade).', v=m['version'], cur=VERSION))
+        raise BackupError(tr('The backup is from FlowSphera {v}, newer than this {cur}: upgrade first (sudo flowsphera upgrade).', v=m['version'], cur=VERSION))
     if data and _db_exists(ASIDE):
-        raise BackupError(tr('An earlier restore did not finish: the flow data from before it is kept as {aside}. Run sudo flowtrack restore --undo to put it back, then try again.', aside=ASIDE))
+        raise BackupError(tr('An earlier restore did not finish: the flow data from before it is kept as {aside}. Run sudo flowsphera restore --undo to put it back, then try again.', aside=ASIDE))
     problems = verify(bid, log=log, settings=settings)
     if problems:
         raise BackupError(tr('The backup is not intact:') + '\n  ' + '\n  '.join(problems))
@@ -1191,7 +1199,8 @@ def restore(bid, data=True, settings=True, with_license=False, force=False, log=
             if have:
                 _sys(f'RENAME DATABASE {DB} TO {ASIDE}')
             try:
-                _sys(f"RESTORE DATABASE {DB} FROM File('{bid}/data')", timeout=24 * 3600)
+                src = backup_db(m)
+                _sys(f"RESTORE DATABASE {src}{f' AS {DB}' if src != DB else ''} FROM File('{bid}/data')", timeout=24 * 3600)
             except BaseException as e:
                 log(tr('The restore failed ({err}): putting the flow data back as it was.', err=str(e)[:300]))
                 if have:
@@ -1215,7 +1224,7 @@ def _put_back(log=print):
         _sys(f'RENAME DATABASE {ASIDE} TO {DB}')
         log(tr('The flow data is as it was before the restore.'))
     except CHError as e:
-        log(tr('Could not put the flow data back ({err}); it is kept as {aside}: run sudo flowtrack restore --undo.', err=str(e)[:300], aside=ASIDE))
+        log(tr('Could not put the flow data back ({err}); it is kept as {aside}: run sudo flowsphera restore --undo.', err=str(e)[:300], aside=ASIDE))
         raise
 
 
@@ -1246,11 +1255,15 @@ def _restore_settings(path, with_license, root='/'):
         for ti in t.getmembers():
             if ti.name.startswith('/') or '..' in ti.name.split('/') or not (ti.isfile() or ti.isdir()):
                 continue
+            for old, new in OLD_DIRS:             # (2.0) a backup made before 2.0 holds etc/flowtrack, var/lib/flowtrack
+                if old != new and (ti.name == old or ti.name.startswith(old + '/')):
+                    ti.name = new + ti.name[len(old):]
+                    break
             if not (inside(ti.name, CONFIG_DIR) or inside(ti.name, STATE_DIR)) or skip(ti.name):
                 continue
             ti.mode &= 0o777                      # never setuid / setgid / sticky
             members.append(ti)
-        # STATE_DIR belongs to the flowtrack user: a link it left in place of a file or folder would make this (root)
+        # STATE_DIR belongs to the flowsphera user: a link it left in place of a file or folder would make this (root)
         # write elsewhere. Links are removed before; a folder on the way that is a link stops the restore.
         for ti in members:
             parts, cur = ti.name.split('/'), root
@@ -1312,7 +1325,7 @@ def run(full=False, slot=None, log=print):
 
 
 def service():
-    """flowtrack-backup.service: what the web interface asked for, else the scheduled backup when it is due."""
+    """flowsphera-backup.service: what the web interface asked for, else the scheduled backup when it is due."""
     with contextlib.suppress(OSError):
         with open(os.path.join(CONFIG_DIR, 'install-lang')) as f:
             set_lang(f.read().strip())
@@ -1382,7 +1395,7 @@ def main(argv=None):
     with contextlib.suppress(OSError):
         with open(os.path.join(CONFIG_DIR, 'install-lang')) as f:
             set_lang(f.read().strip())
-    ap = argparse.ArgumentParser(prog='flowtrack', description=tr('FlowSphera backups'))
+    ap = argparse.ArgumentParser(prog='flowsphera', description=tr('FlowSphera backups'))
     sub = ap.add_subparsers(dest='cmd')
     b = sub.add_parser('backup')
     b.add_argument('what', nargs='?', default='now', choices=('now', 'list', 'verify', 'prune', 'copy', 'delete', 'service'))
@@ -1405,7 +1418,7 @@ def main(argv=None):
     r.add_argument('--undo', action='store_true')
     a = ap.parse_args(argv)
     if os.geteuid() != 0:
-        print(tr('Run it as root: sudo flowtrack {cmd} …', cmd=a.cmd or 'backup'), file=sys.stderr)
+        print(tr('Run it as root: sudo flowsphera {cmd} …', cmd=a.cmd or 'backup'), file=sys.stderr)
         return 1
     try:
         if a.cmd == 'backup':
@@ -1422,7 +1435,7 @@ def main(argv=None):
                 return 1 if problems else 0
             elif a.what == 'delete':
                 if not a.id or not ID_RE.match(a.id):
-                    print(tr('Which backup? flowtrack backup delete ID [--copies]'), file=sys.stderr)
+                    print(tr('Which backup? flowsphera backup delete ID [--copies]'), file=sys.stderr)
                     return 1
                 if not a.yes:
                     ans = input(tr('Delete {id} (a full backup also takes its changes){c}? Type yes: ', id=a.id,

@@ -1,9 +1,9 @@
 #!/bin/sh
-# Refresh the DB-IP Lite databases (free, CC BY 4.0). flowtrack-geoip.timer runs this daily; it downloads only
+# Refresh the DB-IP Lite databases (free, CC BY 4.0). flowsphera-geoip.timer runs this daily; it downloads only
 # when a newer monthly edition than the installed one is published, so a failed or early attempt is simply
 # retried the next day. FT_GEOIP_FORCE=1 downloads regardless.
 set -eu
-DIR=${FT_GEOIP_DIR:-/opt/flowtrack/geoip}
+DIR=${FT_GEOIP_DIR:-/opt/flowsphera/geoip}
 STAMP="$DIR/edition"                     # YYYY-MM of the installed databases
 mkdir -p "$DIR"
 cur=$(date +%Y-%m)
@@ -43,4 +43,4 @@ chmod 644 "$DIR"/dbip-*.mmdb
 echo "$got" > "$STAMP"
 echo "geoip: installed DB-IP Lite $got (was: ${have:-none})"
 # the collector caches lookups; restart it so new data is used
-systemctl try-restart flowtrack-collector.service 2>/dev/null || true
+systemctl try-restart flowsphera-collector.service 2>/dev/null || true

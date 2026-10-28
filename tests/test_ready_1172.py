@@ -49,13 +49,13 @@ class Units(unittest.TestCase):
         return open(os.path.join(ROOT, 'deploy', name)).read()
 
     def test_collector_is_notify(self):
-        u = self.unit('flowtrack-collector.service')
+        u = self.unit('flowsphera-collector.service')
         self.assertIn('\nType=notify\n', u)
         self.assertIn('\nTimeoutStartSec=', u)
 
     def test_web_after_collector(self):
-        after = [ln for ln in self.unit('flowtrack-web.service').splitlines() if ln.startswith('After=')]
-        self.assertIn('flowtrack-collector.service', after[0])
+        after = [ln for ln in self.unit('flowsphera-web.service').splitlines() if ln.startswith('After=')]
+        self.assertIn('flowsphera-collector.service', after[0])
 
     def test_agg_state_in_the_schema(self):
         # applied before the collector's threads start: the rates thread read it before the rollups thread made it

@@ -17,15 +17,15 @@ from functools import lru_cache
 
 import ftcore
 
-CONFIG_DIR = os.environ.get('FT_CONFIG_DIR', '/etc/flowtrack')
-GEOIP_DIR = os.environ.get('FT_GEOIP_DIR', '/opt/flowtrack/geoip')
+CONFIG_DIR = os.environ.get('FT_CONFIG_DIR', '/etc/flowsphera')
+GEOIP_DIR = os.environ.get('FT_GEOIP_DIR', '/opt/flowsphera/geoip')
 CH_URL = os.environ.get('FT_CH_URL', 'http://127.0.0.1:8123')
 CH_USER = os.environ.get('FT_CH_USER', 'default')
 CH_PASSWORD = os.environ.get('FT_CH_PASSWORD', '')
-CH_DB = os.environ.get('FT_CH_DB', 'flowtrack')
+CH_DB = os.environ.get('FT_CH_DB', 'flowsphera')
 
 
-STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowtrack')
+STATE_DIR = os.environ.get('FT_STATE_DIR', '/var/lib/flowsphera')
 try:                                  # the release number, one file at the top of the repository
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'VERSION')) as _f:
         VERSION = _f.read().strip()
@@ -564,7 +564,7 @@ def license_checkin():
             os.remove(LICENSE_FILE)
             _edition['value'] = None
             log_line = f'license dropped: {ex}'
-            print(f'[flowtrack] {log_line}', flush=True)
+            print(f'[flowsphera] {log_line}', flush=True)
         else:
             raise
     _edition['value'] = None
@@ -703,7 +703,7 @@ class Geo:
             self.city = maxminddb.open_database(os.path.join(GEOIP_DIR, 'dbip-city.mmdb'))
             self.asn = maxminddb.open_database(os.path.join(GEOIP_DIR, 'dbip-asn.mmdb'))
         except Exception as e:      # collector still works without enrichment
-            print(f'[flowtrack] WARN GeoIP unavailable: {e}', flush=True)
+            print(f'[flowsphera] WARN GeoIP unavailable: {e}', flush=True)
         self.lookup = lru_cache(maxsize=200000)(self._lookup)
 
     def _lookup(self, ip):

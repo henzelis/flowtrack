@@ -1,5 +1,5 @@
 """Notifications: Telegram (1.6.2) — settings checks, the message (the sending runs against a stand-in Bot API in
-flowtrack-verify detect_check.py); e-mail (1.6.4) — settings, the letter, and sending to a small SMTP server on
+flowsphera-verify detect_check.py); e-mail (1.6.4) — settings, the letter, and sending to a small SMTP server on
 localhost started here. Run: python -m unittest discover -s tests"""
 import email
 import email.policy

@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-EnvironmentFile=/etc/flowtrack/env
+EnvironmentFile=/etc/flowsphera/env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/flowtrack/venv/bin/python /opt/flowtrack/app/backup.py backup service
+ExecStart=/opt/flowsphera/venv/bin/python /opt/flowsphera/app/backup.py backup service
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

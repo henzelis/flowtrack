@@ -150,11 +150,11 @@ class Webhooks(unittest.TestCase):
         notify.webhook_send(c['webhook'], notify.webhook_body(c['webhook'], ev, 2, c['link']))
         h, body = Receiver.got[0]
         d = json.loads(body)
-        self.assertEqual((d['source'], d['more'], d['link']), ('FlowTrack', 2, 'https://ft.example.com'))      # a field machines read: the former name stays
+        self.assertEqual((d['source'], d['more'], d['link']), ('FlowSphera', 2, 'https://ft.example.com'))      # a field machines read: the former name stays
         self.assertEqual(d['events'][0]['details'], {'src': '203.0.113.5', 'hits': 3})
         self.assertEqual(d['events'][0]['severity'], 'warn')
-        want = hmac.new(b's3cret', h['X-FlowTrack-Timestamp'].encode() + b'.' + body, hashlib.sha256).hexdigest()
-        self.assertEqual(h['X-FlowTrack-Signature'], 'sha256=' + want)
+        want = hmac.new(b's3cret', h['X-FlowSphera-Timestamp'].encode() + b'.' + body, hashlib.sha256).hexdigest()
+        self.assertEqual(h['X-FlowSphera-Signature'], 'sha256=' + want)
         self.assertEqual(h['X-Api-Key'], 'abc123')
 
     def test_chat_formats(self):
@@ -165,7 +165,7 @@ class Webhooks(unittest.TestCase):
             self.assertEqual(list(body), [key])
             self.assertIn(mark, body[key])
             self.assertIn('https://ft.example.com/#v=threats', body[key])
-        self.assertNotIn('X-FlowTrack-Signature', notify.webhook_body(self.cfg()['webhook'], ev, 0, ''))
+        self.assertNotIn('X-FlowSphera-Signature', notify.webhook_body(self.cfg()['webhook'], ev, 0, ''))
 
     def test_errors_for_people(self):
         Receiver.status = 500
@@ -293,7 +293,7 @@ class Siem(unittest.TestCase):
         self.wait()
         line = Siem.got[0][1].decode()
         self.assertTrue(line.startswith('<140>1 '), line)                 # local1 (17) * 8 + warning (4)
-        self.assertIn(' FlowTrack - port_scan - CEF:0|FlowTrack|FlowTrack|', line)
+        self.assertIn(' FlowSphera - port_scan - CEF:0|FlowSphera|FlowSphera|', line)
         self.assertIn('|port_scan|Port scan|6|', line)
         for part in ('src=203.0.113.5', 'dst=198.51.100.1', 'dpt=22', 'proto=TCP', 'dvc=192.0.2.1', 'cnt=2', 'cs1=NL',
                      'cs2=Ex|ample\\=1', 'cn1=64500', 'msg=tried a\\=b\\nports', 'start=1792335600000', 'end=1792336200000'):

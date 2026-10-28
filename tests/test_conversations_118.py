@@ -1,7 +1,7 @@
 """(1.18.0) Conversations: «new» looks back only as far as the data reach (a fresh installation has nothing new to
 show), a pair is new by its inside host x owner, the period before is compared only when the data cover it, inside
 traffic is shown by address, the rest of each column of the graph is '__other'. The SQL itself is checked against
-the records on stage (flowtrack-verify conv_exact.py)."""
+the records on stage (flowsphera-verify conv_exact.py)."""
 import json
 import os
 import sys
