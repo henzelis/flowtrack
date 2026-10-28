@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/henzelis/flowtrack/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/henzelis/flowtrack?filter=v*&sort=semver&style=flat-square&color=2F7BFF&label=version"></a>
+  <a href="https://github.com/telesphera/flowsphera/tags"><img alt="Version" src="https://img.shields.io/github/v/tag/telesphera/flowsphera?filter=v*&sort=semver&style=flat-square&color=2F7BFF&label=version"></a>
   <img alt="NetFlow v5/v9 · IPFIX · sFlow v5" src="https://img.shields.io/badge/NetFlow%20v5%2Fv9%20%C2%B7%20IPFIX%20%C2%B7%20sFlow%20v5-27D3F5?style=flat-square">
   <img alt="Linux x86_64 · arm64" src="https://img.shields.io/badge/Linux-x86__64%20%C2%B7%20arm64-0B1736?style=flat-square">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Elastic%202.0-8B5CFF?style=flat-square"></a>
@@ -17,7 +17,7 @@
   <a href="#works-with-your-equipment">Supported devices</a> ·
   <a href="#editions">Editions</a> ·
   <a href="#documentation">Docs</a> ·
-  <a href="mailto:henzelis@gmail.com?subject=FlowSphera">Contact</a>
+  <a href="mailto:flowsphera@telesphera.net?subject=FlowSphera">Contact</a>
 </p>
 
 **FlowSphera** turns the NetFlow, IPFIX and sFlow your firewalls, routers and switches already send into a clear, live
@@ -258,7 +258,7 @@ any other NetFlow v5 / v9, IPFIX or sFlow v5 exporter, over IPv4 or IPv6. Option
 ## Install in one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | sudo bash
 ```
 
 The installer (English or Ukrainian) sets up everything, asks a few questions with sensible defaults and finishes with
@@ -282,7 +282,7 @@ Unattended install, upgrades, all server commands: [docs/install.md](docs/instal
 | Activation | — | a license key, activated in a minute in Settings → License |
 
 5,000 records/s covers homes, small and medium offices; a busy 1 Gbit/s internet edge typically exports a few thousand.
-**For a Pro license, a demo or help with deployment: [henzelis@gmail.com](mailto:henzelis@gmail.com?subject=FlowSphera%20Pro).**
+**For a Pro license, a demo or help with deployment: [flowsphera@telesphera.net](mailto:flowsphera@telesphera.net?subject=FlowSphera%20Pro).**
 Details: [docs/editions.md](docs/editions.md).
 
 ## Documentation

@@ -3,14 +3,14 @@
 [← FlowSphera](../README.md) · [Install](install.md) · [Exporters](exporters.md) · [Features](features.md) · [Editions](editions.md) · [Backups](backups.md) · [Configuration](configuration.md) · [API](api.md) · [Security](security.md) · [Performance](performance.md)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | sudo bash
 ```
 
 No `curl` on the host (e.g. a fresh Ubuntu Desktop)? Use `wget` — the installer then installs `curl`
 itself:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | sudo bash
 ```
 
 The installer (English or Ukrainian) installs the dependencies — Python, Docker if missing (asks
@@ -24,7 +24,7 @@ configuration for your vendor.
 Unattended install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | \
   sudo FT_ADMIN_PASSWORD='change-me-now' FT_VENDOR=Fortinet FT_EXPORTER_IP=192.0.2.1 bash -s -- --yes
 ```
 
@@ -41,7 +41,7 @@ Which version you run is shown at the bottom of every page (newer versions also 
 | Your version | How to upgrade |
 |---|---|
 | **1.3.4 or newer** | `sudo flowtrack upgrade` |
-| **1.3.3 or older** (any, from 1.0.0 on) | once: `curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh \| sudo bash -s -- --upgrade --yes`<br>(no `curl`: `wget -qO- https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh \| sudo bash -s -- --upgrade --yes`)<br>from then on: `sudo flowtrack upgrade` |
+| **1.3.3 or older** (any, from 1.0.0 on) | once: `curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`<br>(no `curl`: `wget -qO- https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`)<br>from then on: `sudo flowtrack upgrade` |
 
 The upgrade asks no questions: it installs the newest version, keeps settings, users, devices, the license and all
 collected data, and restarts the services (the collector pauses for a few seconds; exporters' templates are kept).

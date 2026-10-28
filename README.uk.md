@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/henzelis/flowtrack/tags"><img alt="Версія" src="https://img.shields.io/github/v/tag/henzelis/flowtrack?filter=v*&sort=semver&style=flat-square&color=2F7BFF&label=version"></a>
+  <a href="https://github.com/telesphera/flowsphera/tags"><img alt="Версія" src="https://img.shields.io/github/v/tag/telesphera/flowsphera?filter=v*&sort=semver&style=flat-square&color=2F7BFF&label=version"></a>
   <img alt="NetFlow v5/v9 · IPFIX · sFlow v5" src="https://img.shields.io/badge/NetFlow%20v5%2Fv9%20%C2%B7%20IPFIX%20%C2%B7%20sFlow%20v5-27D3F5?style=flat-square">
   <img alt="Linux x86_64 · arm64" src="https://img.shields.io/badge/Linux-x86__64%20%C2%B7%20arm64-0B1736?style=flat-square">
   <a href="LICENSE"><img alt="Ліцензія" src="https://img.shields.io/badge/license-Elastic%202.0-8B5CFF?style=flat-square"></a>
@@ -17,7 +17,7 @@
   <a href="#працює-з-вашим-обладнанням">Обладнання</a> ·
   <a href="#редакції">Редакції</a> ·
   <a href="#документація">Документація</a> ·
-  <a href="mailto:henzelis@gmail.com?subject=FlowSphera">Контакт</a>
+  <a href="mailto:flowsphera@telesphera.net?subject=FlowSphera">Контакт</a>
 </p>
 
 **FlowSphera** перетворює NetFlow, IPFIX і sFlow, які вже надсилають ваші міжмережеві екрани, маршрутизатори й
@@ -260,7 +260,7 @@ Community) 12 годин — 216 мільйонів записів — на 6 в
 ## Встановлення однією командою
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | sudo bash
 ```
 
 Інсталятор (англійською або українською) налаштовує все, ставить кілька запитань із розумними відповідями за
@@ -285,7 +285,7 @@ curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh 
 | Активація | — | ліцензійний ключ, активація за хвилину в Налаштування → Ліцензія |
 
 5 000 записів/с вистачає для дому, малого й середнього офісу; навантажений інтернет-канал 1 Гбіт/с зазвичай дає кілька
-тисяч. **Ліцензія Pro, демонстрація чи допомога з впровадженням: [henzelis@gmail.com](mailto:henzelis@gmail.com?subject=FlowSphera%20Pro).**
+тисяч. **Ліцензія Pro, демонстрація чи допомога з впровадженням: [flowsphera@telesphera.net](mailto:flowsphera@telesphera.net?subject=FlowSphera%20Pro).**
 Докладно: [docs/editions.md](docs/editions.md) (англійською).
 
 ## Документація

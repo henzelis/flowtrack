@@ -3338,7 +3338,7 @@ function vApi(){
       <div class="tw" style="margin-top:12px"><table class="compact"><tbody>${[['/api/summary?range=24h&f=[]', T('totals, against the period before')], ['/api/top?dim=int_ip&limit=10&range=24h&f=[]', T('busiest inside hosts (dim: ext_ip, service, country, asn, net…)')],
         ['/api/series?range=24h&f=[]', T('traffic over time')], ['/api/alerts?range=24h&f=[]', T('security events')], ['/api/devices', T('devices and their export health')]].map(([u, d]) =>
         `<tr><td class="mono" style="white-space:nowrap;font-size:12.5px">GET ${esc(u)}</td><td class="nat">${esc(d)}</td></tr>`).join('')}</tbody></table></div>
-      <p class="note" style="margin:10px 0 0">${T('Periods: range=1h|6h|24h|7d|30d, or from/to in unix seconds; filters: f=[{"k":"net","v":"Office"}].')} <a href="https://github.com/henzelis/flowtrack/blob/main/docs/api.md" target="_blank" rel="noopener">${T('All endpoints')} ↗</a></p></section></div>`;
+      <p class="note" style="margin:10px 0 0">${T('Periods: range=1h|6h|24h|7d|30d, or from/to in unix seconds; filters: f=[{"k":"net","v":"Office"}].')} <a href="https://github.com/telesphera/flowsphera/blob/main/docs/api.md" target="_blank" rel="noopener">${T('All endpoints')} ↗</a></p></section></div>`;
   let d = null;
   const $ = id => document.getElementById(id);
   const when = t => new Date(t * 1000).toLocaleString(LOC, {day:'numeric', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'});
@@ -3467,7 +3467,7 @@ function vGeneral(){
   // (1.10.0) one even row of four cards (as on Backups), the mail server under it: no panel shorter than its neighbour
   const card = (ic, k, v, sub) => `<section class="glass panel kcard gcard s3"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v">${v}</span><span class="nat">${sub}</span></section>`;
   document.getElementById('setBody').innerHTML = `<div class="grid">
-    ${card('list', T('Version'), `FlowSphera ${esc(META.version || '—')}`, `<a href="https://github.com/henzelis/flowtrack" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
+    ${card('list', T('Version'), `FlowSphera ${esc(META.version || '—')}`, `<a href="https://github.com/telesphera/flowsphera" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
     ${card('shield', T('Edition'), ed.status === 'active' ? 'Pro' : 'Community', `<button class="lnk" id="toLic">${T('License')} →</button>`)}
     ${card('globe', T('Language'), `<select id="langSel" aria-label="${T('Language')}">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${LANG === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
       T('only in this browser'))}

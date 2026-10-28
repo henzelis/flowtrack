@@ -7,7 +7,7 @@
 #   flowtrack uninstall                                 remove FlowSphera (asks whether to keep the data)
 #   flowtrack backup [now|list|verify|prune|copy] …     backups (backup.py); flowtrack restore [ID] [--from …] …
 # FT_INSTALL_URL overrides where the installer comes from (testing).
-REPO=henzelis/flowtrack
+REPO=telesphera/flowsphera
 PREFIX=/opt/flowtrack
 ETC=/etc/flowtrack
 URL=${FT_INSTALL_URL:-https://raw.githubusercontent.com/$REPO/main/install.sh}

@@ -3,6 +3,15 @@
 FlowTrack follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+### Changed
+- **The repository moved to [telesphera/flowsphera](https://github.com/telesphera/flowsphera)**, with its whole
+  history and releases. The installer, `sudo flowtrack upgrade` and the *Source code* link use the new address; the
+  old one (`henzelis/flowtrack`) keeps redirecting, so installations of earlier versions upgrade as before.
+- **Contact: [flowsphera@telesphera.net](mailto:flowsphera@telesphera.net)**; the copyright holder and licensor in
+  `LICENSE` is Yehor Boyko.
+
 ## 1.18.0 — 2026-10-27
 
 **FlowTrack is now FlowSphera** (FlowSphera by TELESPHERA): a name of its own — «FlowTrack» is also the name of

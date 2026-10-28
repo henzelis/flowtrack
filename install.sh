@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# FlowSphera installer — https://github.com/henzelis/flowtrack
+# FlowSphera installer — https://github.com/telesphera/flowsphera
 #
-#   curl -fsSL https://raw.githubusercontent.com/henzelis/flowtrack/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh | sudo bash
 #
 # Installs FlowSphera (collector + ClickHouse + web UI) with its dependencies, asking a few
 # questions on the way. Afterwards: sudo flowtrack upgrade | reconfigure | uninstall (or re-run this command).
@@ -30,7 +30,7 @@
 main() {
 set -Eeuo pipefail
 
-FT_REPO=${FT_REPO:-henzelis/flowtrack}
+FT_REPO=${FT_REPO:-telesphera/flowsphera}
 FT_REF=${FT_REF:-main}
 FT_SOURCE=${FT_SOURCE:-https://codeload.github.com/$FT_REPO/tar.gz/refs/heads/$FT_REF}
 FT_CORE_URL=${FT_CORE_URL:-}        # default: the GitHub release named in ftcore.lock
