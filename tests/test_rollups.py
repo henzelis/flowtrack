@@ -299,11 +299,12 @@ class Relink(unittest.TestCase):
         for name, r in rollups.ROLLUPS.items():
             cut = (NOW // r['bucket'] + 1) * r['bucket']
             self.assertIn(f'DROP VIEW IF EXISTS {name}_mv', calls)
-            self.assertIn(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({NOW - 7 * 3600})', calls)
+            since = (NOW - 7 * 3600) // r['bucket'] * r['bucket'] - rollups.LATE      # records late after the view stopped
+            self.assertIn(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({since})', calls)
             mv = next(q for q in calls if q.startswith(f'CREATE MATERIALIZED VIEW {name}_mv TO {name} AS'))
             self.assertIn(f'FROM flows WHERE ts >= toDateTime({cut})', mv)
             self.assertEqual((st[f'cutover:{name}'], st[f'ready_from:{name}'], st[f'since:{name}'], st[f'late:{name}']),
-                             (cut, cut, NOW - 7 * 3600, 0))
+                             (cut, cut, since, 0))
 
     def test_working_views_left_alone(self):
         calls, st = self.run_relink('flowsphera', [f'{n}_mv' for n in rollups.ROLLUPS])

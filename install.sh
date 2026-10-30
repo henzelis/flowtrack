@@ -287,8 +287,17 @@ if [ -f "$V1_ETC/env" ] && [ ! -L "$V1_ETC" ] && [ ! -f "$ETC/env" ]; then
     # backups: the default folder moves with the rest; a folder chosen by hand (a NAS) stays where it is
     bdir=$(sed -n 's/^FT_BACKUP_DIR=//p' "$ETC/env" | tail -1)
     if [ -z "$bdir" ] || [ "$bdir" = /var/backups/flowtrack ]; then
-      if [ -d /var/backups/flowtrack ] && [ ! -L /var/backups/flowtrack ] && [ ! -e /var/backups/flowsphera ]; then
-        mv /var/backups/flowtrack /var/backups/flowsphera; ln -s /var/backups/flowsphera /var/backups/flowtrack
+      if [ -d /var/backups/flowtrack ] && [ ! -L /var/backups/flowtrack ]; then
+        if [ ! -e /var/backups/flowsphera ]; then mv /var/backups/flowtrack /var/backups/flowsphera
+        else
+          # a folder left by an earlier 2.0 (its uninstall keeps the backups): the 1.x backups join it, or a 2.0 would
+          # not see them
+          for u in /var/backups/flowtrack/* /var/backups/flowtrack/.[!.]*; do
+            [ -e "$u" ] && [ ! -e "/var/backups/flowsphera/${u##*/}" ] && mv "$u" /var/backups/flowsphera/
+          done
+          rmdir /var/backups/flowtrack 2>/dev/null || echo "/var/backups/flowtrack: some backups have the same names as in /var/backups/flowsphera — left there"
+        fi
+        [ -e /var/backups/flowtrack ] || ln -s /var/backups/flowsphera /var/backups/flowtrack
       fi
       sed -i '/^FT_BACKUP_DIR=/d' "$ETC/env"; echo "FT_BACKUP_DIR=/var/backups/flowsphera" >> "$ETC/env"
     fi

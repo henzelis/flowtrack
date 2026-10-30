@@ -211,8 +211,9 @@ def _relink(st, log):
         r = ROLLUPS[name]
         cut = (now // r['bucket'] + 1) * r['bucket']
         last = ch(f'SELECT toUnixTimestamp(max(ts)) AS t, count() AS n FROM {name}', fmt='JSON')[0]
-        # the newest bucket may hold only part of its records: it is summed again too
-        since = 0 if st.get(f'ready_from:{name}') or not int(last['n']) else int(last['t'])
+        # the newest bucket may hold only part of its records, and records that came late after the view stopped belong
+        # to the buckets before it (seen on the Optiplex: 0.003 % of the hour of the rename): LATE back from it
+        since = 0 if st.get(f'ready_from:{name}') or not int(last['n']) else int(last['t']) // r['bucket'] * r['bucket'] - LATE
         ch(f'DROP VIEW IF EXISTS {name}_mv')
         if since:
             ch(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({since})', timeout=3600, settings={'mutations_sync': 2})

@@ -11,6 +11,8 @@ in Settings → General, at the bottom of every page, in the collector log and b
   reached them (the records themselves were kept). The collector now finds such views at its start (also after a
   backup is restored), makes them again and sums up everything since the upgrade from the records — no data is lost.
   Installations already on 2.0: `sudo flowsphera upgrade --force`.
+- **Backups of 1.x stayed behind** when `/var/backups/flowsphera` was already there (left by an earlier 2.0 that was
+  removed — its uninstall keeps the backups): the upgrade now moves them into it and links the old folder.
 
 ## 2.0.0 — 2026-10-28
 
