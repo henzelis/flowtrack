@@ -163,9 +163,11 @@ def ensure(log=print):
     redo = [name for name, r in ROLLUPS.items() if f'cutover:{name}' in st and st.get(f'def:{name}', 1) != r.get('v', 1)]
     if redo and st.get('version') == VERSION:
         log(f"rollups: {', '.join(redo)}: definition changed, building again")
-        keys = [f'{k}:{name}' for name in redo for k in ('cutover', 'ready_from', 'late', 'def')]
+        keys = [f'{k}:{name}' for name in redo for k in ('cutover', 'ready_from', 'late', 'def', 'since')]
         ch('ALTER TABLE agg_state DELETE WHERE k IN {k:Array(String)}', {'k': keys}, settings={'mutations_sync': 2})
         st = _get_state()
+    if st.get('version') == VERSION:
+        st = _relink(st, log)
     if st.get('version') == VERSION and all(f'cutover:{name}' in st for name in ROLLUPS):
         for name, r in ROLLUPS.items():          # a table lost by hand: recreated (its history is filled again)
             ch(_ddl(name, r))
@@ -188,6 +190,40 @@ def ensure(log=print):
     cut = min(st[f'cutover:{name}'] for name in made)
     log(f"rollups: {', '.join(made)} created, filled from {time.strftime('%Y-%m-%d %H:%M', time.gmtime(cut))} UTC on")
     return st
+
+
+def _relink(st, log):
+    """(2.0.0) A view stores the names of its tables with the database: after the database was renamed (the 2.0
+    upgrade renames flowtrack to flowsphera) or a backup was restored under another name, a view still reads the old
+    flows and writes the old table — new records reach no rollup, the pages show nothing. Such a view (or one lost) is
+    made again from the next bucket on, and the buckets since the table's last one are summed again from the records
+    by backfill() (`since:`); a table whose history was still being filled is filled again whole. -> the state."""
+    db = ch('SELECT currentDatabase() AS d', fmt='JSON')[0]['d']
+    deps = ch("SELECT dependencies_table AS d FROM system.tables WHERE database = currentDatabase() AND name = 'flows'", fmt='JSON')
+    deps = set(deps[0]['d']) if deps else set()
+    to = {r['name']: r['t'] for r in ch(r"SELECT name, extract(create_table_query, '^CREATE MATERIALIZED VIEW \\S+ TO (\\S+)') AS t "
+                                        "FROM system.tables WHERE database = currentDatabase() AND engine = 'MaterializedView'", fmt='JSON')}
+    bad = [name for name in ROLLUPS if f'cutover:{name}' in st and (f'{name}_mv' not in deps or to.get(f'{name}_mv') != f'{db}.{name}')]
+    if not bad:
+        return st
+    now = int(time.time())
+    for name in bad:
+        r = ROLLUPS[name]
+        cut = (now // r['bucket'] + 1) * r['bucket']
+        last = ch(f'SELECT toUnixTimestamp(max(ts)) AS t, count() AS n FROM {name}', fmt='JSON')[0]
+        # the newest bucket may hold only part of its records: it is summed again too
+        since = 0 if st.get(f'ready_from:{name}') or not int(last['n']) else int(last['t'])
+        ch(f'DROP VIEW IF EXISTS {name}_mv')
+        if since:
+            ch(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({since})', timeout=3600, settings={'mutations_sync': 2})
+        else:
+            ch(f'TRUNCATE TABLE {name}')
+        ch(f'CREATE MATERIALIZED VIEW {name}_mv TO {name} AS ' + _select(r, f'ts >= toDateTime({cut})'))
+        for k, v in (('cutover', cut), ('ready_from', cut), ('since', since), ('late', 0)):
+            _set(f'{k}:{name}', v)
+        log(f"rollups: {name}: its view was not filling it ({to.get(f'{name}_mv') or 'missing'}), made again; "
+            + (f"records since {time.strftime('%Y-%m-%d %H:%M', time.gmtime(since))} UTC are summed again" if since else 'its history is filled again'))
+    return _get_state()
 
 
 def _wait(until, stop):
@@ -220,7 +256,8 @@ def backfill(log=print, settle=600, stop=None, late=LATE):
             if not _wait(time.time() + 10, stop):
                 return
         mutations_checked = True
-        if not _fill({name: v for name, v in todo.items() if st[f'cutover:{name}'] == cut}, log, stop):
+        if not _fill({name: v for name, v in todo.items() if st[f'cutover:{name}'] == cut}, log, stop,
+                     {name: st.get(f'since:{name}', 0) for name in todo}):
             return
     if late is not None:
         _late(log, stop, late)
@@ -250,8 +287,10 @@ def _late(log, stop, late):
             _set(f'late:{name}', 1)
 
 
-def _fill(ready, log, stop):
-    """backfill() of the tables in `ready` (name -> complete from); False when stopped"""
+def _fill(ready, log, stop, since=None):
+    """backfill() of the tables in `ready` (name -> complete from) down to the oldest record, or (2.0.0) to `since`
+    (name -> unix time, _relink: the table holds what is before it); False when stopped"""
+    since = {name: t for name, t in (since or {}).items() if name in ready and t}
     oldest = ch("SELECT toUnixTimestamp(min(ts)) AS t, count() AS n FROM flows WHERE ts < toDateTime({c:UInt32})", {'c': max(ready.values())}, fmt='JSON')
     if not oldest or not int(oldest[0]['n']):
         for name in ready:
@@ -262,13 +301,15 @@ def _fill(ready, log, stop):
     for name in ready:
         ch(f"KILL QUERY WHERE current_database = currentDatabase() AND query LIKE 'INSERT INTO {name} SELECT%' SYNC")
     first, t0, n = int(oldest[0]['t']) // 86400 * 86400, time.time(), 0
+    if len(since) == len(ready):
+        first = max(first, min(since.values()) // 86400 * 86400)
     hi, fresh = max(ready.values()), set(ready)
 
     def day(name, lo, hi):
         """one day (lo..hi) of one table; False when stopped"""
         if stop and stop.is_set():       # still waiting for a worker when the collector stopped
             return False
-        at = ready[name]
+        at, lo = ready[name], max(lo, since.get(name, 0))
         if name in fresh:                # the first day of this run: a stop in the middle of it may have left part of it
             fresh.discard(name)
             part = f'ts >= toDateTime({lo}) AND ts < toDateTime({min(hi, at)})'
@@ -297,13 +338,15 @@ def _fill(ready, log, stop):
     with concurrent.futures.ThreadPoolExecutor(FILL_WORKERS) as pool:
         while hi > first:
             lo = max(first, (hi - 1) // 86400 * 86400)      # a day boundary is a boundary of every bucket
-            names = sorted((name for name, at in ready.items() if at > lo), key=lambda name: -ROLLUPS[name]['bucket'])
+            names = sorted((name for name, at in ready.items() if at > lo and since.get(name, 0) < hi), key=lambda name: -ROLLUPS[name]['bucket'])
             done = [f.result() for f in [pool.submit(day, name, lo, hi) for name in names]]
             hi, n = lo, n + 1
             if not all(done) or (stop and stop.is_set()):
                 return False
     for name in ready:
         _set(f'ready_from:{name}', 0)
+        if name in since:
+            _set(f'since:{name}', 0)
     log(f"rollups: {', '.join(ready)}: history filled ({n} days, {time.time() - t0:.0f} s)")
     return True
 

@@ -243,6 +243,77 @@ class Fill(unittest.TestCase):
         self.assertEqual(sorted((n, b) for n, b, e in ins), sorted(prog))
         self.assertNotIn(0, [v for n, v in prog])
 
+    def test_since_fills_only_the_hole_2_0_0(self):
+        end = NOW // 3600 * 3600
+        ready = {n: end for n in rollups.ROLLUPS}
+        since = {n: end - DAY - 2 * 3600 for n in rollups.ROLLUPS}         # the tables hold what is before it
+        old = rollups._fill
+        rollups._fill = lambda r, log, stop, s=None: old(r, log, stop, since)
+        try:
+            res, ins, prog = self.run_fill(ready, end - 20 * DAY)
+        finally:
+            rollups._fill = old
+        self.assertTrue(res)
+        for name in ready:
+            spans = sorted((b, e) for n, b, e in ins if n == name)
+            self.assertEqual((spans[0][0], spans[-1][1]), (since[name], end), name)
+            self.assertTrue(all(a[1] == b[0] for a, b in zip(spans, spans[1:])), name)
+            self.assertEqual([v for n, v in prog if n == name][-1], 0, name)
+
+
+class Relink(unittest.TestCase):
+    """(2.0.0) the upgrade renamed the database flowtrack to flowsphera: the views still read flowtrack.flows and
+    write flowtrack.agg_* — nothing reached the rollups any more. ensure() makes them again and sums the hole."""
+    def run_relink(self, mv_db, deps, ready=0):
+        calls = []
+        st = {'version': rollups.VERSION}
+        for name, r in rollups.ROLLUPS.items():
+            st.update({f'cutover:{name}': 1791000000, f'ready_from:{name}': ready, f'def:{name}': r.get('v', 1)})
+
+        def ch(q, params=None, fmt=None, **kw):
+            calls.append(q)
+            if q.startswith('SELECT currentDatabase()'):
+                return [{'d': 'flowsphera'}]
+            if q.startswith('SELECT dependencies_table'):
+                return [{'d': deps}]
+            if q.startswith('SELECT name, extract('):
+                return [{'name': f'{n}_mv', 't': f'{mv_db}.{n}'} for n in rollups.ROLLUPS]
+            if q.startswith('SELECT toUnixTimestamp(max(ts))'):
+                return [{'t': NOW - 7 * 3600, 'n': 5}]
+            if q.startswith('SELECT k, argMax'):
+                return [{'k': k, 'v': v} for k, v in st.items()]
+            if m := re.match(r"INSERT INTO agg_state \(k, v\) VALUES \('(.+)', (-?\d+)\)", q):
+                st[m[1]] = int(m[2])
+            return []
+        import re
+        old = rollups.ch
+        rollups.ch, rollups.time = ch, type('Clock', (), {'time': staticmethod(lambda: NOW), 'strftime': staticmethod(time.strftime), 'gmtime': staticmethod(time.gmtime)})
+        try:
+            rollups.ensure(lambda *a: None)
+        finally:
+            rollups.ch, rollups.time = old, time
+        return calls, st
+
+    def test_views_of_the_old_database_made_again(self):
+        calls, st = self.run_relink('flowtrack', [])
+        for name, r in rollups.ROLLUPS.items():
+            cut = (NOW // r['bucket'] + 1) * r['bucket']
+            self.assertIn(f'DROP VIEW IF EXISTS {name}_mv', calls)
+            self.assertIn(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({NOW - 7 * 3600})', calls)
+            mv = next(q for q in calls if q.startswith(f'CREATE MATERIALIZED VIEW {name}_mv TO {name} AS'))
+            self.assertIn(f'FROM flows WHERE ts >= toDateTime({cut})', mv)
+            self.assertEqual((st[f'cutover:{name}'], st[f'ready_from:{name}'], st[f'since:{name}'], st[f'late:{name}']),
+                             (cut, cut, NOW - 7 * 3600, 0))
+
+    def test_working_views_left_alone(self):
+        calls, st = self.run_relink('flowsphera', [f'{n}_mv' for n in rollups.ROLLUPS])
+        self.assertFalse([q for q in calls if q.startswith(('DROP', 'CREATE MATERIALIZED', 'ALTER', 'TRUNCATE'))])
+
+    def test_history_still_filling_is_filled_again_whole(self):
+        calls, st = self.run_relink('flowtrack', [], ready=1791003600)
+        self.assertIn('TRUNCATE TABLE agg_traffic', calls)
+        self.assertEqual(st['since:agg_traffic'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()

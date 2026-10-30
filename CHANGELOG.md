@@ -3,6 +3,15 @@
 FlowSphera follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
 in Settings → General, at the bottom of every page, in the collector log and by the installer.
 
+## Unreleased
+
+### Fixed
+- **Pages showed 0 B after the upgrade to 2.0** — the upgrade renames the database `flowtrack` to `flowsphera`, but
+  the views that keep the summary tables filled still named the old database, so nothing recorded after the upgrade
+  reached them (the records themselves were kept). The collector now finds such views at its start (also after a
+  backup is restored), makes them again and sums up everything since the upgrade from the records — no data is lost.
+  Installations already on 2.0: `sudo flowsphera upgrade --force`.
+
 ## 2.0.0 — 2026-10-28
 
 **FlowSphera 2.0 — every name on the server is FlowSphera.** Up to 1.18 only the product's face had the new name;
