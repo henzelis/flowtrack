@@ -33,7 +33,7 @@ import licensing  # noqa: E402
 import rollups  # noqa: E402
 import snmp  # noqa: E402
 import topology  # noqa: E402
-from common import (web_query, COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, license_refresh, iface_addrs, is_private, listen_signature,  # noqa: E402
+from common import (web_query, BUILD, COMMUNITY, STATE_DIR, VERSION, CHError, ch, describe_listeners, edition, exporters_mtime, save_license, deactivate_license, license_checkin, license_refresh, iface_addrs, is_private, listen_signature,  # noqa: E402
                     listen_label, load_exporters, load_json, load_ui_exporter, open_listeners, save_ui_exporter, set_lang, tr,
                     trn, N_, get_lang, languages)
 
@@ -415,7 +415,7 @@ def api_meta(q):
     # (1.17.0) the first record in time order (min() under a WHERE read every record of the period)
     oldest = ch("SELECT toUnixTimestamp(ts) AS t FROM flows WHERE ts >= now() - toIntervalDay({d:UInt16}) ORDER BY ts LIMIT 1", {'d': view_days()}, fmt='JSON')
     return {'devices': devices, 'now': int(time.time()), 'oldest': int(oldest[0]['t']) if oldest else 0, 'listen': listen_info(),
-            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION,
+            'ranges': list(RANGES), 'geo_attribution': 'IP Geolocation by DB-IP (db-ip.com), CC BY 4.0', 'edition': edition_info(), 'version': VERSION, 'build': BUILD,
             'langs': languages(), 'networks': [{'net': x['net'], 'name': x['name']} for x in common.load_networks()],
             'l7': common.l7_names()}
 

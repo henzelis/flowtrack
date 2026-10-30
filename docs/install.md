@@ -40,13 +40,17 @@ Which version you run is shown at the bottom of every page (newer versions also 
 
 | Your version | How to upgrade |
 |---|---|
-| **2.0 or newer** | `sudo flowsphera upgrade` |
+| **2.0.0 build 2 or newer** | `sudo flowsphera upgrade` |
+| **2.0.0** (no build shown) | once: `sudo flowsphera upgrade --force` (this version could not see builds yet), from then on `sudo flowsphera upgrade` |
 | **1.3.4 – 1.18.x** | `sudo flowtrack upgrade` — it also moves the installation to the 2.0 names (`flowsphera`); `flowtrack` keeps working as a synonym until 3.0 |
 | **1.3.3 or older** (any, from 1.0.0 on) | once: `curl -fsSL https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`<br>(no `curl`: `wget -qO- https://raw.githubusercontent.com/telesphera/flowsphera/main/install.sh \| sudo bash -s -- --upgrade --yes`)<br>from then on: `sudo flowsphera upgrade` |
 
 The upgrade asks no questions: it installs the newest version, keeps settings, users, devices, the license and all
 collected data, and restarts the services (the collector pauses for a few seconds; exporters' templates are kept).
 If the newest version is already installed, `flowsphera upgrade` says so and changes nothing.
+
+Fixes may come as a new **build** of the same version — shown as «2.0.0 build 2» at the bottom of every page, in
+Settings → General and by `flowsphera version`; `flowsphera upgrade` installs a newer build like a newer version.
 
 Other commands on the server:
 

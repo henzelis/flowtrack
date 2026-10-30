@@ -850,6 +850,8 @@ fi
 # ------------------------------------------------------------------ done
 say ""
 FT_VERSION=$(cat "$PREFIX/app/VERSION" 2>/dev/null || echo dev)
+FT_BUILD=$(cat "$PREFIX/app/BUILD" 2>/dev/null | tr -dc 0-9)    # (2.0.0) fixes published as builds of the same version
+[ "${FT_BUILD:-1}" -gt 1 ] && FT_VERSION="$FT_VERSION $(t "build $FT_BUILD" "збірка $FT_BUILD")"
 say "${G}${B}$(t "FlowSphera $FT_VERSION is running." "FlowSphera $FT_VERSION працює.")${N}"
 say ""
 for ip in $(bind_ips "$WEB_BIND"); do say "  ${B}$PROTO://$ip:$WEB_PORT${N}"; done

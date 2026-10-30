@@ -1,9 +1,10 @@
 # Changelog
 
 FlowSphera follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH. The version is in `VERSION`, shown
-in Settings → General, at the bottom of every page, in the collector log and by the installer.
+in Settings → General, at the bottom of every page, in the collector log and by the installer. Fixes may also come as
+a new **build** of a version (`BUILD`, shown as «2.0.0 build 2»); `flowsphera upgrade` installs a newer build too.
 
-## Unreleased
+## 2.0.0 build 2 — 2026-10-30
 
 ### Fixed
 - **Pages showed 0 B after the upgrade to 2.0** — the upgrade renames the database `flowtrack` to `flowsphera`, but
@@ -13,6 +14,11 @@ in Settings → General, at the bottom of every page, in the collector log and b
   Installations already on 2.0: `sudo flowsphera upgrade --force`.
 - **Backups of 1.x stayed behind** when `/var/backups/flowsphera` was already there (left by an earlier 2.0 that was
   removed — its uninstall keeps the backups): the upgrade now moves them into it and links the old folder.
+
+### Added
+- **Builds**: fixes are published as builds of the same version — «2.0.0 build 2» at the bottom of every page, in
+  Settings → General, the report PDF, the collector log, `flowsphera version | status` and the backups list.
+  `flowsphera upgrade` installs a newer build like a newer version (and never goes back to an older one).
 
 ## 2.0.0 — 2026-10-28
 

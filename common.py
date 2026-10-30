@@ -31,6 +31,13 @@ try:                                  # the release number, one file at the top 
         VERSION = _f.read().strip()
 except OSError:
     VERSION = 'dev'
+# (2.0.0) the build of that release: fixes published without a new version number (VERSION stays 2.0.0 until the
+# copyright certificate) — `flowsphera upgrade` installs a newer build of the same version; build 1 = the release
+try:
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'BUILD')) as _f:
+        BUILD = int(_f.read().strip() or 1)
+except (OSError, ValueError):
+    BUILD = 1
 UI_EXPORTERS = os.path.join(STATE_DIR, 'exporters.json')
 
 

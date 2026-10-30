@@ -28,7 +28,7 @@ import ftcore  # noqa: E402
 import detect  # noqa: E402
 import ifcounters  # noqa: E402
 import rollups  # noqa: E402
-from common import (STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
+from common import (BUILD, STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, server_is_src,
                     service_name, PORT_NAMES, default_l7, load_port_names, reload_port_names)
 
@@ -850,7 +850,7 @@ class Receiver:
             log('ClickHouse not reachable, exiting')
             sys.exit(1)
         ed = edition()
-        log(f"FlowSphera {VERSION}, edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
+        log(f"FlowSphera {VERSION}, {f'build {BUILD}, ' if BUILD > 1 else ''}edition {ed['name']} ({ed['status']}): {ed['rps'] or 'unlimited'} records/s")
         self.retention_lock = threading.Lock()   # moving a big table from before 1.3.1 takes a while: receive meanwhile
         self.retention_ready = threading.Event()  # set after the first successful run (rollups' history waits for it)
         threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()

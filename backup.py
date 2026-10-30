@@ -53,7 +53,7 @@ def _load_env(path='/etc/flowsphera/env'):
 _load_env(os.path.join(os.environ.get('FT_CONFIG_DIR', '/etc/flowsphera'), 'env'))
 
 import common  # noqa: E402
-from common import CONFIG_DIR, STATE_DIR, VERSION, CHError, ch, set_lang, tr  # noqa: E402
+from common import BUILD, CONFIG_DIR, STATE_DIR, VERSION, CHError, ch, set_lang, tr  # noqa: E402
 
 DIR = os.environ.get('FT_BACKUP_DIR', '/var/backups/flowsphera')       # on the host
 CH_DIR = os.environ.get('FT_BACKUP_CH_DIR', '/backups')              # the same folder inside the ClickHouse container
@@ -723,7 +723,7 @@ def make(full=False, log=print):
         st = os.path.join(folder, 'settings.tar.gz')
         _settings_tar(st)
         os.chmod(st, 0o600)
-        m = {'format': 1, 'id': bid, 't': int(t0), 'kind': kind, 'base': base['id'] if kind == 'diff' else None, 'version': VERSION, 'db': DB,
+        m = {'format': 1, 'id': bid, 't': int(t0), 'kind': kind, 'base': base['id'] if kind == 'diff' else None, 'version': VERSION, 'build': BUILD, 'db': DB,
              'edition': _edition(), 'host': socket.gethostname(), 'took': round(time.time() - t0, 1),
              'tables': {k: [rows_before.get(k, 0), rows_after.get(k, 0)] for k in rows_after},
              'data_size': _du(os.path.join(folder, 'data')), 'settings_sha256': _sha256(st), 'settings_size': os.path.getsize(st),

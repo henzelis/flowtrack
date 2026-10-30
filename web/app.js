@@ -15,6 +15,8 @@ const T = (en, a) => {
 };
 // a text with a number: English has one and other ('{n} day', '{n} days', the latter is the dictionary key); a dictionary
 // gives the forms of its language by Intl.PluralRules ({"one": …, "few": …, "many": …, "other": …}) or one text for all
+// (2.0.0) the version with its build: fixes published as builds of the same release (build 1 = the release)
+const verText = (v, b) => v ? v + (b > 1 ? ' ' + T('build {n}', {n: b}) : '') : '';
 const PLURAL = (() => { try { return new Intl.PluralRules(LANG); } catch (e) { return new Intl.PluralRules('en'); } })();
 const Tn = (n, one, other, a) => {
   const t = Object.hasOwn(DICT, other) ? DICT[other] : n === 1 ? one : other;
@@ -3134,7 +3136,7 @@ async function editionPanel(returned){
   const refresh = async ret => { META = await fetch('api/meta').then(r => r.json()); editionBadge(); editionPanel(ret); };
   document.getElementById('reqCopy').onclick = e => copyText(ed.request, e.currentTarget);
   document.getElementById('reqSave').onclick = () => saveText(`flowsphera-request-${(ed.instance || '').replace(/-/g, '')}.txt`,
-    `# FlowSphera activation request\n# Instance ID: ${ed.instance}\n# FlowSphera ${META.version || ''}, ${new Date().toISOString().slice(0, 10)}\n${ed.request}\n`);
+    `# FlowSphera activation request\n# Instance ID: ${ed.instance}\n# FlowSphera ${verText(META.version, META.build)}, ${new Date().toISOString().slice(0, 10)}\n${ed.request}\n`);
   const file = document.getElementById('licFile');
   document.getElementById('licLoad').onclick = () => file.click();
   file.onchange = async () => { const f = file.files[0]; if (!f) return; document.getElementById('edKey').value = (await f.text()).trim(); file.value = ''; say(f.name); };
@@ -3467,7 +3469,7 @@ function vGeneral(){
   // (1.10.0) one even row of four cards (as on Backups), the mail server under it: no panel shorter than its neighbour
   const card = (ic, k, v, sub) => `<section class="glass panel kcard gcard s3"><span class="ico">${icon(ICO[ic] || ic, 22)}</span><span class="k">${k}</span><span class="v">${v}</span><span class="nat">${sub}</span></section>`;
   document.getElementById('setBody').innerHTML = `<div class="grid">
-    ${card('list', T('Version'), `FlowSphera ${esc(META.version || '—')}`, `<a href="https://github.com/telesphera/flowsphera" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
+    ${card('list', T('Version'), `FlowSphera ${esc(META.version || '—')}`, `${META.build > 1 ? esc(T('build {n}', {n: META.build})) + ' · ' : ''}<a href="https://github.com/telesphera/flowsphera" target="_blank" rel="noopener">${T('Source code')} ↗</a>`)}
     ${card('shield', T('Edition'), ed.status === 'active' ? 'Pro' : 'Community', `<button class="lnk" id="toLic">${T('License')} →</button>`)}
     ${card('globe', T('Language'), `<select id="langSel" aria-label="${T('Language')}">${langs().map(([v, l]) => `<option value="${v}" lang="${v}" ${LANG === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
       T('only in this browser'))}
@@ -3747,7 +3749,7 @@ function vBackups(){
     const rows = d.backups.slice(0, state.bkAll ? 999 : 8);
     const el = box('bkList', (d.backups.length ? `<div class="tw"><table class="compact"><thead><tr><th>${T('Time')}</th><th>${T('Type')}</th><th class="num">${T('Size')}</th><th>${T('Version')}</th><th>${T('Where')}</th><th></th><th></th></tr></thead><tbody>
       ${rows.map(m => `<tr data-id="${esc(m.id)}"><td class="mono">${when(m.t)}<div class="nat">${ago(m.t)}</div></td><td>${m.kind === 'full' ? `<b>${T('Full')}</b>` : T('Changes')}${m.encrypted ? ` <span title="${T('the copies are encrypted')}">🔒</span>` : ''}</td>
-        <td class="num mono">${fmtB(m.size)}</td><td class="mono">${esc(m.version)}</td><td>${[`<span class="pill ok">${T('here')}</span>`, ...on.map(([k, l]) => place(m, k, l))].join(' ')}</td>
+        <td class="num mono">${fmtB(m.size)}</td><td class="mono">${esc(verText(m.version, m.build))}</td><td>${[`<span class="pill ok">${T('here')}</span>`, ...on.map(([k, l]) => place(m, k, l))].join(' ')}</td>
         <td class="nat">${Math.round(m.took)} s</td><td style="white-space:nowrap"><button class="btn" data-a="restore">${T('Restore…')}</button> <button class="btn" data-a="verify" ${busy() ? 'disabled' : ''} title="${esc(m.verified && !m.verified.ok ? m.verified.problems.join('\n') : m.verified ? T('checked {when}', {when:when(m.verified.t)}) : T('Check that every file of the backup is in place'))}">${vf(m)}</button> <button class="btn danger" data-a="del" ${busy() ? 'disabled' : ''}>${T('Delete…')}</button></td></tr>`).join('')}</tbody></table></div>
       ${d.backups.length > 8 ? `<p style="margin:8px 0 0"><button class="btn" id="bkMore">${state.bkAll ? T('Show the last 8') : T('Show all ({n})', {n:d.backups.length})}</button></p>` : ''}
       <p class="note">${T('A backup of the changes needs the full one before it; the keeping rule deletes a full backup together with the changes after it. A failed copy is tried again with the next backup.')}</p>`
@@ -4586,7 +4588,7 @@ function renderShell(){
     + META.devices.map(d => `<option value="${esc(d.ip)}">${esc(d.name)}${d.vendor ? ' · ' + esc(d.vendor) : ''}</option>`).join('');
   ds.value = dfs.length > 1 ? '*' : dfs.length ? dfs[0].v : '';
   editionBadge();
-  const fv = document.getElementById('ftVer'); if (fv && META.version) fv.textContent = 'FlowSphera ' + META.version;
+  const fv = document.getElementById('ftVer'); if (fv && META.version) fv.textContent = 'FlowSphera ' + verText(META.version, META.build);
   const rs = document.getElementById('rangeSel');
   rs.querySelectorAll('option[data-x]').forEach(o => o.remove());
   if (isCustom()) rs.insertAdjacentHTML('beforeend', `<option data-x value="custom">${esc(rangeLabel())}</option>`);

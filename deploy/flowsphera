@@ -56,6 +56,9 @@ installer() {
 }
 
 version() { cat "$PREFIX/app/VERSION" 2>/dev/null || echo '?'; }
+# (2.0.0) the build of that version: fixes published without a new number (build 1 = the release; no file = 1)
+build() { b=$(cat "$PREFIX/app/BUILD" 2>/dev/null | tr -dc 0-9); echo "${b:-1}"; }
+shown() { if [ "$2" -gt 1 ] 2>/dev/null; then echo "$1 $(t "build $2" "збірка $2")"; else echo "$1"; fi; }
 
 case "${1:-}" in
   upgrade)
@@ -65,27 +68,29 @@ case "${1:-}" in
       a=$1; shift; n=$((n - 1))
       if [ "$a" = --force ]; then force=1; else set -- "$@" "$a"; fi
     done
-    cur=$(version); new=$(curl -fsSL "${URL%/install.sh}/VERSION?$(date +%s)" 2>/dev/null | tr -d '[:space:]')
-    if [ -n "$new" ] && [ "$new" = "$cur" ] && [ "$force" = 0 ] && [ $# = 0 ]; then
-      echo "$(t "FlowSphera $cur is the latest version." "FlowSphera $cur — найновіша версія.") $(t '(flowsphera upgrade --force installs it again)' '(flowsphera upgrade --force встановить її ще раз)')"
+    cur=$(version); cb=$(build); new=$(curl -fsSL "${URL%/install.sh}/VERSION?$(date +%s)" 2>/dev/null | tr -d '[:space:]')
+    nb=$([ -n "$new" ] && curl -fsSL "${URL%/install.sh}/BUILD?$(date +%s)" 2>/dev/null | tr -dc 0-9); nb=${nb:-1}
+    c=$(shown "$cur" "$cb"); p=$(shown "$new" "$nb")      # compared as version.build: 2.0.0.2 < 2.0.0.3 < 2.0.1.1
+    if [ -n "$new" ] && [ "$new.$nb" = "$cur.$cb" ] && [ "$force" = 0 ] && [ $# = 0 ]; then
+      echo "$(t "FlowSphera $c is the latest version." "FlowSphera $c — найновіша версія.") $(t '(flowsphera upgrade --force installs it again)' '(flowsphera upgrade --force встановить її ще раз)')"
       exit 0
     fi
     # never go back to an older version by accident (e.g. a build newer than the published one)
-    if [ -n "$new" ] && [ "$new" != "$cur" ] && [ "$(printf '%s\n%s\n' "$new" "$cur" | sort -V | tail -1)" = "$cur" ] && [ "$force" = 0 ]; then
-      echo "$(t "Installed FlowSphera $cur is newer than the published $new; nothing to do (--force installs $new)." "Встановлений FlowSphera $cur новіший за опублікований $new; нічого не роблю (--force встановить $new).")"
+    if [ -n "$new" ] && [ "$new.$nb" != "$cur.$cb" ] && [ "$(printf '%s\n%s\n' "$new.$nb" "$cur.$cb" | sort -V | tail -1)" = "$cur.$cb" ] && [ "$force" = 0 ]; then
+      echo "$(t "Installed FlowSphera $c is newer than the published $p; nothing to do (--force installs $p)." "Встановлений FlowSphera $c новіший за опублікований $p; нічого не роблю (--force встановить $p).")"
       exit 0
     fi
-    [ -n "$new" ] && [ "$new" != "$cur" ] && echo "FlowSphera $cur → $new"
+    [ -n "$new" ] && [ "$new.$nb" != "$cur.$cb" ] && echo "FlowSphera $c → $p"
     installer --upgrade --yes "$@" ;;
   reconfigure) root "$@"; installer ;;
   uninstall) root "$@"; installer --uninstall ;;
   license) shift; exec /usr/local/bin/flowsphera-license "$@" ;;
   backup|restore) root "$@"; exec "$PREFIX/venv/bin/python" "$PREFIX/app/backup.py" "$@" ;;
   status)
-    echo "FlowSphera $(version)"
+    echo "FlowSphera $(shown "$(version)" "$(build)")"
     for u in flowsphera-collector flowsphera-web; do printf '  %-22s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null)"; done
     [ -x /usr/local/bin/flowsphera-license ] && /usr/local/bin/flowsphera-license status | sed 's/^/  /' ;;
-  version|--version|-v) version ;;
+  version|--version|-v) shown "$(version)" "$(build)" ;;
   ''|help|-h|--help) usage ;;
   *) echo "$(t 'Unknown command:' 'Невідома команда:') $1" >&2; usage >&2; exit 2 ;;
 esac

@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import detect
 import notify
-from common import N_, STATE_DIR, get_lang, known_lang, set_lang, tr, trn
+from common import BUILD, N_, STATE_DIR, get_lang, known_lang, set_lang, tr, trn
 
 CONFIG = os.path.join(STATE_DIR, 'reports.json')
 STATE = os.path.join(STATE_DIR, 'reports_state.json')
@@ -830,7 +830,7 @@ def render(r, data, t0, t1, version='', now=None):
         c.saveState()
         c.setFont('FT', 7)
         c.setFillColor(C(INK3))
-        c.drawString(16 * mm, 9 * mm, f"FlowSphera {version} · {tr('made {when}', when=made)}".strip())
+        c.drawString(16 * mm, 9 * mm, f"FlowSphera {version}{' ' + tr('build {n}', n=BUILD) if BUILD > 1 and version else ''} · {tr('made {when}', when=made)}".strip())
         c.drawRightString(A4[0] - 16 * mm, 9 * mm, f"{plabel} · {tr('page {n}', n=doc.page)}")
         c.restoreState()
 
