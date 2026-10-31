@@ -4,6 +4,21 @@ FlowSphera follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH.
 in Settings → General, at the bottom of every page, in the collector log and by the installer. Fixes may also come as
 a new **build** of a version (`BUILD`, shown as «2.0.0 build 2»); `flowsphera upgrade` installs a newer build too.
 
+## 2.0.0 build 3 — unreleased
+
+### Fixed
+- **After a power cut the database could stay offline** — ClickHouse sets aside the parts it had not finished
+  writing to the disk when the power went, but refused to open a table with more than 100 of them, and the collector
+  waited for it until someone repaired it by hand (seen: 18 hours without records). Such parts are now set aside
+  however many there are, and new parts count only once they are on the disk (fsync after inserts and merges), so
+  fewer are lost at all.
+
+### Added
+- **Event «Database recovered after an unclean stop»** — on the Events page and on every notification channel
+  (Telegram, e-mail, webhook, SIEM): when the server stopped, which tables lost parts, whether the newest records
+  are missing, the time without records, and from when the totals for long periods were summed again from the
+  records (they are, automatically, so long and short periods agree). Parts set aside are removed after 30 days.
+
 ## 2.0.0 build 2 — 2026-10-30
 
 ### Fixed

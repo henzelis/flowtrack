@@ -1973,5 +1973,15 @@
  "downloaded and uploaded, hour by hour": "завантажено та вивантажено, по годинах",
  "{n} of them new ({bytes})": {"one": "з них {n} нова ({bytes})", "few": "з них {n} нові ({bytes})", "many": "з них {n} нових ({bytes})", "other": "з них {n} нової ({bytes})"},
  "{n} pairs talked in this period": {"one": "{n} пара спілкувалася за цей період", "few": "{n} пари спілкувалися за цей період", "many": "{n} пар спілкувалися за цей період", "other": "{n} пари спілкувалися за цей період"},
- "build {n}": "збірка {n}"
+ "build {n}": "збірка {n}",
+ "Database recovered after an unclean stop": "Базу даних відновлено після неакуратного вимкнення",
+ "after a power cut or a hard reset the database set aside the parts that had not reached the disk and started by itself: when, what is missing, what was summed again": "після відключення живлення чи жорсткого перезавантаження база даних відклала частини, що не встигли записатися на диск, і запустилася сама: коли, чого бракує, що перераховано",
+ "The server stopped without shutting down (most often a power cut){when}. At the next start the database found {n} parts that had not been fully written to the disk — {tables} — and set them aside, so it started by itself.": "Сервер зупинився без штатного вимкнення (найчастіше — відключення живлення){when}. Під час наступного запуску база даних знайшла {n} частин, що не встигли повністю записатися на диск, — {tables} — і відклала їх, тож запустилася сама.",
+ " after {t}": " після {t}",
+ " The newest records written just before the stop were among them and are missing.": " Серед них були найновіші записи, зроблені перед самою зупинкою, — їх немає.",
+ " The stored records are complete up to the stop.": " Збережені записи повні аж до зупинки.",
+ " No records were received from {a} to {b} ({span}) while the server was off.": " З {a} до {b} ({span}), поки сервер був вимкнений, записи не надходили.",
+ " The totals for long periods are summed again from the records since {t}.": " Підсумки для довгих періодів перераховано із записів, починаючи з {t}.",
+ " A UPS for the server prevents this.": " Щоб цього уникнути, підключіть сервер до ДБЖ.",
+ "{n} days": {"one": "{n} день", "few": "{n} дні", "many": "{n} днів", "other": "{n} дня"}
 }

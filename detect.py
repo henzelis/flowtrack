@@ -69,6 +69,8 @@ KINDS = {
     'malware_contact': {'on': True, 'sev': 'crit'},
     'listed_contact': {'on': True, 'sev': 'warn'},
     'listed_inbound': {'on': True, 'sev': 'info'},
+    # (2.0.0 build 3) ClickHouse set damaged parts aside at its start after an unclean stop (recovery.py)
+    'db_recovered': {'on': True, 'sev': 'warn'},
     # computed by the API from the last day of flows (api_alerts)
     'sustained_upload': {'on': True, 'sev': 'warn'},
     'burst':        {'on': True, 'sev': 'info'},
@@ -79,7 +81,7 @@ NAMES = {'port_scan': N_('Port scan'), 'brute_force': N_('Password guessing'), '
          'lateral_scan': N_('Scan inside the network'), 'sustained_upload': N_('Sustained upload'), 'burst': N_('Traffic burst'),
          'new_country': N_('New destination'), 'malware_contact': N_('Contact with malware infrastructure'),
          'listed_contact': N_('Contact with a listed address'), 'listed_inbound': N_('Listed addresses calling us'),
-         'link_load': N_('Link near capacity')}
+         'link_load': N_('Link near capacity'), 'db_recovered': N_('Database recovered after an unclean stop')}
 LIMITS = {'ports': (2, 65535), 'services': (2, 100), 'hosts': (2, 100000), 'sessions': (2, 10 ** 7), 'factor': (2, 1000),
           'min_sessions': (1, 10 ** 8), 'min_mbps': (1, 10 ** 6), 'refl_mbps': (1, 10 ** 6), 'minutes': (1, 10), 'pct': (10, 100), 'span': (5, 60),
           'hosts_busy': (2, 100000)}
@@ -1003,6 +1005,38 @@ def _bytes(n):
     return ''
 
 
+def _utc(t):
+    return time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(int(t)))
+
+
+def _span(sec):
+    sec = max(0, int(sec))
+    if sec < 3600:
+        return trn(max(1, sec // 60), '{n} minute', '{n} minutes')
+    if sec < 2 * 86400:
+        return trn(round(sec / 3600), '{n} hour', '{n} hours')
+    return trn(round(sec / 86400), '{n} day', '{n} days')
+
+
+def _recovered(i):
+    """(2.0.0 build 3) cause and consequences of a recovery (recovery.summary)"""
+    tables = ', '.join(f'{t} ({n})' for t, n in list(i.get('tables', {}).items())[:6])
+    stopped, started = int(i.get('stopped') or 0), int(i.get('started') or 0)
+    text = tr('The server stopped without shutting down (most often a power cut){when}. At the next start the database found '
+              '{n} parts that had not been fully written to the disk — {tables} — and set them aside, so it started by itself.',
+              when=tr(' after {t}', t=_utc(stopped)) if stopped else '', n=f"{int(i.get('parts', 0)):,}", tables=tables)
+    if int(i.get('inserts', 0)):
+        text += tr(' The newest records written just before the stop were among them and are missing.')
+    else:
+        text += tr(' The stored records are complete up to the stop.')
+    if stopped and started > stopped:
+        text += tr(' No records were received from {a} to {b} ({span}) while the server was off.',
+                   a=_utc(stopped), b=_utc(started), span=_span(started - stopped))
+    if int(i.get('since', 0)):
+        text += tr(' The totals for long periods are summed again from the records since {t}.', t=_utc(i['since']))
+    return text + tr(' A UPS for the server prevents this.')
+
+
 def _describe(r):
     i, kind, port = r['info'], r['kind'], int(r['port'])
     svc = f"{r['dst']}:{port}" if r['dst'] else str(port)
@@ -1032,6 +1066,8 @@ def _describe(r):
         return (tr('Aggressive client'),
                 tr('{who}: {sessions} sessions to {svc}, up to {peak} in 10 min.', **many) if int(r['hits']) > 1
                 else tr('{who}: {sessions} sessions to {svc} in 10 min.', **many))
+    if kind == 'db_recovered':
+        return (tr('Database recovered after an unclean stop'), _recovered(i))
     if kind == 'link_load':
         kw = dict(device=i.get('device', r.get('exporter', '')), name=i.get('name', ''), mbps=f"{i.get('mbps', 0):g}", cap=f"{i.get('cap', 0):g}",
                   pct=f"{i.get('pct', 0):g}", over=i.get('over', 85), minutes=i.get('minutes', 15))

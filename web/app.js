@@ -2542,6 +2542,7 @@ const EV_KINDS = () => ({
   lateral_scan:[T('Scan inside the network'), T('a host calls many hosts or ports of the local network without answer'), {hosts:T('hosts'), ports:T('ports')}],
   link_load:[T('Link near capacity'), T('an interface stays above this share of its capacity — your figures in Settings → Devices → Interfaces, else its speed — in every 5 minutes of the span, incoming or outgoing'),
     {pct:T('% of capacity'), span:T('minutes')}],
+  db_recovered:[T('Database recovered after an unclean stop'), T('after a power cut or a hard reset the database set aside the parts that had not reached the disk and started by itself: when, what is missing, what was summed again'), {}],
   malware_contact:[T('Contact with malware infrastructure'), T('a host of ours opens a connection to a botnet controller or a malware host (abuse.ch lists)'), {}],
   listed_contact:[T('Contact with a listed address'), T('a host of ours opens a connection to an address on another enabled reputation list'), {}],
   listed_inbound:[T('Listed addresses calling us'), T('one summary a day: how many listed addresses called our services, by list'), {}],

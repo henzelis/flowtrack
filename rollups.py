@@ -206,14 +206,26 @@ def _relink(st, log):
     bad = [name for name in ROLLUPS if f'cutover:{name}' in st and (f'{name}_mv' not in deps or to.get(f'{name}_mv') != f'{db}.{name}')]
     if not bad:
         return st
-    now = int(time.time())
+    since_of = {}
     for name in bad:
-        r = ROLLUPS[name]
-        cut = (now // r['bucket'] + 1) * r['bucket']
         last = ch(f'SELECT toUnixTimestamp(max(ts)) AS t, count() AS n FROM {name}', fmt='JSON')[0]
         # the newest bucket may hold only part of its records, and records that came late after the view stopped belong
         # to the buckets before it (seen on the Optiplex: 0.003 % of the hour of the rename): LATE back from it
-        since = 0 if st.get(f'ready_from:{name}') or not int(last['n']) else int(last['t']) // r['bucket'] * r['bucket'] - LATE
+        since_of[name] = int(last['t']) - LATE if int(last['n']) else 0
+    return remake(since_of, log, {name: f"its view was not filling it ({to.get(f'{name}_mv') or 'missing'})" for name in bad})
+
+
+def remake(since_of, log, why):
+    """(2.0.0 build 3) Sum tables again from the records: {name: unix time} from that time's bucket on (0 = the whole
+    history). The view is made again from the next bucket, the table's rows from `since` on are deleted and backfill()
+    sums [since, cutover) again from the records (`since:`), so no record is counted twice or missed while the view is
+    off. A table whose history was still being filled is filled again whole. why: {name: reason} for the log.
+    Used by _relink (views of another database) and recovery.py (parts lost after an unclean stop). -> the state."""
+    st, now = _get_state(), int(time.time())
+    for name, since in since_of.items():
+        r = ROLLUPS[name]
+        cut = (now // r['bucket'] + 1) * r['bucket']
+        since = 0 if st.get(f'ready_from:{name}') or since <= 0 else since // r['bucket'] * r['bucket']
         ch(f'DROP VIEW IF EXISTS {name}_mv')
         if since:
             ch(f'ALTER TABLE {name} DELETE WHERE ts >= toDateTime({since})', timeout=3600, settings={'mutations_sync': 2})
@@ -222,7 +234,7 @@ def _relink(st, log):
         ch(f'CREATE MATERIALIZED VIEW {name}_mv TO {name} AS ' + _select(r, f'ts >= toDateTime({cut})'))
         for k, v in (('cutover', cut), ('ready_from', cut), ('since', since), ('late', 0)):
             _set(f'{k}:{name}', v)
-        log(f"rollups: {name}: its view was not filling it ({to.get(f'{name}_mv') or 'missing'}), made again; "
+        log(f"rollups: {name}: {why[name]}, made again; "
             + (f"records since {time.strftime('%Y-%m-%d %H:%M', time.gmtime(since))} UTC are summed again" if since else 'its history is filled again'))
     return _get_state()
 

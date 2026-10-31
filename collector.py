@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ftcore  # noqa: E402
 import detect  # noqa: E402
 import ifcounters  # noqa: E402
+import recovery  # noqa: E402
 import rollups  # noqa: E402
 from common import (BUILD, STATE_DIR, VERSION, CHError, Geo, apply_schema, ch, classify_l7, describe_listeners, edition,  # noqa: E402
                     exporters_mtime, flows_keep_days, is_private, license_checkin, listen_label, listen_signature, load_exporters, open_listeners, server_is_src,
@@ -747,11 +748,16 @@ class Receiver:
         and must not expire before the records they sum up)."""
         for attempt in range(30):
             try:
-                rollups.ensure(log)
-                self.retention_ready.wait()
-                if not rollups.reorient_internal(log):    # 1.7.0: inside traffic stored client -> server
-                    return
-                rollups.backfill(log)
+                with self.rollup_lock:
+                    rollups.ensure(log)
+                    try:          # (2.0.0 build 3) parts ClickHouse set aside after an unclean stop: sum again, tell
+                        self.recovery.check()
+                    except (CHError, OSError) as ex:
+                        log(f'WARN recovery check: {str(ex)[:200]}')
+                    self.retention_ready.wait()
+                    if not rollups.reorient_internal(log):    # 1.7.0: inside traffic stored client -> server
+                        return
+                    rollups.backfill(log)
                 return
             except (CHError, OSError) as ex:
                 log(f'WARN rollups: {str(ex)[:200]} — trying again in a minute')
@@ -855,7 +861,10 @@ class Receiver:
         self.retention_ready = threading.Event()  # set after the first successful run (rollups' history waits for it)
         threading.Thread(target=self.apply_retention, name='retention', daemon=True).start()
         threading.Thread(target=self.license_checkins, name='license-checkin', daemon=True).start()
+        self.rollup_lock = threading.Lock()      # (2.0.0 build 3) rollups' own thread and recovery's: one at a time
+        self.recovery = recovery.Recovery(log)
         threading.Thread(target=self.rollups, name='rollups', daemon=True).start()
+        threading.Thread(target=self.recovery.watch, args=(self.rollup_lock,), name='recovery', daemon=True).start()
         threading.Thread(target=self.port_names, name='port-names', daemon=True).start()
         threading.Thread(target=detect.Detector(log).run, name='detect', daemon=True).start()   # scans, floods ... (detect.py)
         ifcounters.start(log)          # (1.14.0) interface counters over SNMP every minute (ifcounters.py)
