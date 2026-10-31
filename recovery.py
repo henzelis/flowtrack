@@ -5,8 +5,8 @@ lost with the power. At the next start such parts are empty or cut short: ClickH
 detached/ folder (reason broken-on-start) and goes on — unless more than max_suspicious_broken_parts of one table are
 broken, then the table stays offline and the collector waits for it for ever (the Optiplex, 2026-10-30: 106 broken
 parts of flows, 18 hours without records). deploy/clickhouse-flowsphera.xml now lets any number of broken parts be
-set aside, durable() has the parts of flows and the state written to the disk before they count (DURABLE), and this
-module tells the people what happened:
+set aside (with FT_CH_FSYNC=1 durable() has the parts of flows and the state written to the disk before they count),
+and this module tells the people what happened:
 
 - once per start of ClickHouse it looks for parts set aside since the last look (system.detached_parts);
 - the rollups that lost parts — all of them when the records did — are summed again from the records from the first
@@ -27,8 +27,11 @@ import rollups
 from common import STATE_DIR, CHError, ch, sql_str
 
 STATE = os.path.join(STATE_DIR, 'recovery.json')
-# the tables nothing can sum again: their parts are written to the disk (fsync) before they count. The rollups are not
-# (16 inserts at once made every insert 10x slower in the Lab): after a stop they are summed again from flows
+# (FT_CH_FSYNC=1 in the env) the tables nothing can sum again get their parts written to the disk (fsync) before they
+# count. Off by default (Yegor, 2026-10-31): in the Lab it made inserts of flows 10x slower (868 vs 79 ms, p99 8 s at
+# 5,000 records/s) and it saves only the last seconds before a power cut — the collector loses what it holds then
+# anyway, and the database recovers by itself without it
+FSYNC_ON = os.environ.get('FT_CH_FSYNC', '0') == '1'
 DURABLE = ('flows', 'agg_state', 'events')
 FSYNC = {'fsync_after_insert': 1, 'fsync_part_directory': 1, 'min_rows_to_fsync_after_merge': 1}
 KEEP_DAYS = 30
@@ -52,13 +55,18 @@ def _save(st):
     os.replace(tmp, STATE)
 
 
-def durable():
-    """fsync for the DURABLE tables (the collector at its start; a setting of the table, kept in its metadata)"""
+def durable(on=None):
+    """fsync of the DURABLE tables as FT_CH_FSYNC says (the collector at its start; a setting of the table, kept in its
+    metadata): switched on, or off again"""
+    v = int(FSYNC_ON if on is None else on)
+    want = {k: v for k in FSYNC}
     have = {r['name']: r['q'] for r in ch("SELECT name, create_table_query AS q FROM system.tables WHERE database = currentDatabase() "
                                           "AND name IN {t:Array(String)}", {'t': list(DURABLE)}, fmt='JSON')}
     for t, q in have.items():
-        if not all(f'{k} = {v}' in q for k, v in FSYNC.items()):
-            ch(f"ALTER TABLE {t} MODIFY SETTING {', '.join(f'{k} = {v}' for k, v in FSYNC.items())}")
+        # a table never switched on has none of them: off already
+        if all(f'{k} = {x}' in q for k, x in want.items()) or (not v and not any(f'{k} = 1' in q for k in FSYNC)):
+            continue
+        ch(f"ALTER TABLE {t} MODIFY SETTING {', '.join(f'{k} = {x}' for k, x in want.items())}")
 
 
 def ch_started():

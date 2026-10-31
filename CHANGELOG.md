@@ -10,8 +10,9 @@ a new **build** of a version (`BUILD`, shown as «2.0.0 build 2»); `flowsphera 
 - **After a power cut the database could stay offline** — ClickHouse sets aside the parts it had not finished
   writing to the disk when the power went, but refused to open a table with more than 100 of them, and the collector
   waited for it until someone repaired it by hand (seen: 18 hours without records). Such parts are now set aside
-  however many there are, and new parts count only once they are on the disk (fsync after inserts and merges), so
-  fewer are lost at all.
+  however many there are, so the database always comes up by itself. `FT_CH_FSYNC=1` in `/etc/flowsphera/env`
+  also has the records written to the disk before they count (fewer lost at a power cut, inserts about 10× slower;
+  off by default).
 
 ### Added
 - **Event «Database recovered after an unclean stop»** — on the Events page and on every notification channel

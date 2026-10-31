@@ -182,22 +182,32 @@ class Config(unittest.TestCase):
         self.assertGreaterEqual(int(mt.findtext('max_suspicious_broken_parts')), 100000)
         self.assertIsNone(mt.find('fsync_after_insert'))        # for every table: inserts 10x slower (Lab #55)
 
-    def test_durable_tables_fsync_once(self):
+    def durable(self, on, tables):
         calls, old = [], recovery.ch
-        set_q = 'SETTINGS index_granularity = 8192, fsync_after_insert = 1, fsync_part_directory = 1, min_rows_to_fsync_after_merge = 1'
 
         def ch(q, params=None, fmt=None, **kw):
             calls.append(q)
-            if q.startswith('SELECT name'):
-                return [{'name': 'flows', 'q': 'CREATE TABLE flowsphera.flows (...) SETTINGS index_granularity = 8192'},
-                        {'name': 'events', 'q': 'CREATE TABLE flowsphera.events (...) ' + set_q}]
-            return []
+            return [{'name': n, 'q': f'CREATE TABLE flowsphera.{n} (...) SETTINGS index_granularity = 8192{x}'} for n, x in tables.items()] if q.startswith('SELECT name') else []
         recovery.ch = ch
         try:
-            recovery.durable()
+            recovery.durable(on)
         finally:
             recovery.ch = old
-        self.assertEqual(calls[1:], ['ALTER TABLE flows MODIFY SETTING fsync_after_insert = 1, fsync_part_directory = 1, min_rows_to_fsync_after_merge = 1'])
+        return calls[1:]
+
+    ON = ', fsync_after_insert = 1, fsync_part_directory = 1, min_rows_to_fsync_after_merge = 1'
+
+    def test_off_by_default_nothing_changes(self):
+        self.assertFalse(recovery.FSYNC_ON)
+        self.assertEqual(self.durable(None, {'flows': '', 'events': ''}), [])
+
+    def test_switched_on_once(self):
+        self.assertEqual(self.durable(True, {'flows': '', 'events': self.ON}),
+                         ['ALTER TABLE flows MODIFY SETTING fsync_after_insert = 1, fsync_part_directory = 1, min_rows_to_fsync_after_merge = 1'])
+
+    def test_switched_off_again(self):
+        self.assertEqual(self.durable(False, {'flows': self.ON, 'events': ''}),
+                         ['ALTER TABLE flows MODIFY SETTING fsync_after_insert = 0, fsync_part_directory = 0, min_rows_to_fsync_after_merge = 0'])
 
 
 if __name__ == '__main__':

@@ -17,6 +17,7 @@
 | `FT_WEB_BIND`, `FT_WEB_PORT` | interface of the default route, `3030` | web UI and API, same syntax — e.g. NetFlow on the external interface, the web UI only on the internal one |
 | `FT_TLS_CERT`, `FT_TLS_KEY` | `/etc/flowsphera/tls/*.pem` | HTTPS certificate and key; empty = plain HTTP |
 | `FT_CH_URL`, `FT_CH_USER`, `FT_CH_PASSWORD`, `FT_CH_DB` | | ClickHouse connection |
+| `FT_CH_FSYNC` | `0` | `1` = the parts of flows, events and the rollups' state are written to the disk before they count (fsync): fewer records lost at a power cut, but inserts about 10× slower (measured 868 vs 79 ms at 5,000 records/s). Without it the database recovers by itself after a power cut too and reports it as an event (2.0.0 build 3); a UPS is the real cure |
 | `FT_BACKUP_DIR` | `/var/backups/flowsphera` | where backups are kept on the server; change it with `sudo flowsphera upgrade --force --backup-dir DIR` (ClickHouse sees it as `/backups`) |
 
 Devices can be described in `/etc/flowsphera/exporters.json` or from the UI (*Settings → Devices → Connect
