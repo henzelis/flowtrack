@@ -4,7 +4,7 @@ FlowSphera follows [semantic versioning](https://semver.org): MAJOR.MINOR.PATCH.
 in Settings → General, at the bottom of every page, in the collector log and by the installer. Fixes may also come as
 a new **build** of a version (`BUILD`, shown as «2.0.0 build 2»); `flowsphera upgrade` installs a newer build too.
 
-## 2.0.0 build 3 — unreleased
+## 2.0.0 build 3 — 2026-10-31
 
 ### Fixed
 - **After a power cut the database could stay offline** — ClickHouse sets aside the parts it had not finished

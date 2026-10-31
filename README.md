@@ -233,6 +233,10 @@ on the other days. Copies go to a folder on the server and, if you like, to S3-c
 encrypted with your passphrase (AES-256-GCM). One click checks that a backup is whole; another restores it — on the
 same server or on a brand-new one after a disk failure.
 
+A power cut does not take the database down either: after an unclean stop FlowSphera opens it by itself, sums the
+long-period totals again from the records and tells you in Events and on your notification channels what happened —
+when the server stopped, what is missing, what was summed again.
+
 <p align="center"><img src="docs/media/en/backups.webp" alt="Settings → Backups: a week of verified, encrypted backups kept here and on S3" width="100%"></p>
 
 ### Fast on a busy network, over days
