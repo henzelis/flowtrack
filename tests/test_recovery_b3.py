@@ -176,11 +176,28 @@ class Remake(unittest.TestCase):
 
 
 class Config(unittest.TestCase):
-    def test_clickhouse_writes_to_disk_and_sets_any_number_aside(self):
+    def test_clickhouse_sets_any_number_aside(self):
         mt = ET.parse(os.path.join(ROOT, 'deploy', 'clickhouse-flowsphera.xml')).getroot().find('merge_tree')
         self.assertIsNotNone(mt)
-        self.assertEqual((mt.findtext('fsync_after_insert'), mt.findtext('fsync_part_directory')), ('1', '1'))
         self.assertGreaterEqual(int(mt.findtext('max_suspicious_broken_parts')), 100000)
+        self.assertIsNone(mt.find('fsync_after_insert'))        # for every table: inserts 10x slower (Lab #55)
+
+    def test_durable_tables_fsync_once(self):
+        calls, old = [], recovery.ch
+        set_q = 'SETTINGS index_granularity = 8192, fsync_after_insert = 1, fsync_part_directory = 1, min_rows_to_fsync_after_merge = 1'
+
+        def ch(q, params=None, fmt=None, **kw):
+            calls.append(q)
+            if q.startswith('SELECT name'):
+                return [{'name': 'flows', 'q': 'CREATE TABLE flowsphera.flows (...) SETTINGS index_granularity = 8192'},
+                        {'name': 'events', 'q': 'CREATE TABLE flowsphera.events (...) ' + set_q}]
+            return []
+        recovery.ch = ch
+        try:
+            recovery.durable()
+        finally:
+            recovery.ch = old
+        self.assertEqual(calls[1:], ['ALTER TABLE flows MODIFY SETTING fsync_after_insert = 1, fsync_part_directory = 1, min_rows_to_fsync_after_merge = 1'])
 
 
 if __name__ == '__main__':

@@ -847,6 +847,7 @@ class Receiver:
             try:
                 apply_schema(SCHEMA)
                 rollups.widen_dir()
+                recovery.durable()      # (2.0.0 build 3) flows / state / events on the disk before a part counts
                 break
             except (CHError, OSError) as ex:
                 log(f'waiting for ClickHouse ({ex.__class__.__name__}) ...')
